@@ -504,3 +504,23 @@ def test_walk_error_skip_path_drops_extended_prefix(tmp_path, monkeypatch):
     list(repos.iter_source_files(tmp_path / "r", (), skipped))
     shown = str(skipped[0][0])
     assert "?" not in shown and shown.replace("\\", "/").endswith("r/locked/sub")
+
+
+@pytest.mark.parametrize("args", [["--level", "landscape"],
+                                  ["--level", "application", "--scope", "claims-online"],
+                                  ["--level", "flow", "--scope", "CLMD100"],
+                                  ["--level", "flow", "--scope", "CLMI"],
+                                  ["--level", "repomap"]])
+def test_summary_line_adds_up_and_keeps_its_format(tmp_path, capsys, args):
+    """Ruling 10: the links total equals its parts. Levels without job-structure lines keep the
+    exact old wording (no extra clause)."""
+    import re
+    w = _estate(tmp_path)
+    assert main(["draw", "--workspace", str(w), "--style", "b"] + args) == 0
+    out = capsys.readouterr().out
+    m = re.search(r"^Summary: \d+ nodes, (\d+) links: (\d+) confirmed, (\d+) partly known, "
+                  r"(\d+) loose ends$", out, re.M)
+    assert m, out
+    total, c, p, lo = (int(x) for x in m.groups())
+    assert total == c + p + lo
+    assert "job-structure" not in out

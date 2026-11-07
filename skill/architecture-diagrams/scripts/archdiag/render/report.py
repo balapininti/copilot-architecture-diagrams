@@ -286,6 +286,9 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
         count[CONFIRMED], count[PARTIAL], count[LOOSE])
     if len(edges) != len(links):
         head += " (%d rows from %d resolver edges incl. copies)" % (len(links), len(edges))
+    struct = sum(1 for e in view.edges if e.status == STRUCTURAL)
+    if struct:  # Ruling 10: named apart, never in the link counts
+        head += "; %d job-structure line%s" % (struct, "" if struct == 1 else "s")
     gd = view.level == "gitdiagram"
     o: List[str] = ["# Links: %s" % view.title, "", head, ""]
     if gd:

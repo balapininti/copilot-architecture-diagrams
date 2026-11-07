@@ -19,6 +19,7 @@ from .repos import discover_repos
 from .scan import scan_workspace
 from .store import cache_is_current, fingerprint, load_inventory, load_resolved, save_json
 from .summary import _env_pairs, build_summary, count_unanalyzed, list_items
+from .views.common import STRUCTURAL
 
 OUT_DIR_NAME = "architecture-diagrams"
 CLI_LEVELS = ("landscape", "application", "flow", "repomap", "gitdiagram")
@@ -263,7 +264,6 @@ def _is_job(r: Resolved, scope: str) -> bool:
 
 
 def _top_issues(view, r: Resolved) -> List[str]:
-    from .views.common import STRUCTURAL
     names = {n.id: n.label for n in view.nodes}
     out = []
     # the Scheduler's grey "starts" line is structure, not an issue (Ruling 2)
@@ -368,8 +368,14 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     print("Wrote:")
     for p in written:
         print("  %s" % p)
-    print("Summary: %d nodes, %d links: %d confirmed, %d partly known, %d loose ends"
-          % (len(view.nodes), len(view.edges), st[CONFIRMED], st[PARTIAL], st[LOOSE]))
+    # Ruling 10: the total adds up; job-structure ("starts") lines are not links
+    struct = sum(1 for e in view.edges if e.status == STRUCTURAL)
+    summary = ("Summary: %d nodes, %d links: %d confirmed, %d partly known, %d loose ends"
+               % (len(view.nodes), len(view.edges) - struct, st[CONFIRMED], st[PARTIAL],
+                  st[LOOSE]))
+    if struct:
+        summary += "; %d job-structure line%s" % (struct, "" if struct == 1 else "s")
+    print(summary)
     print("Top issues:")
     issues = _top_issues(view, r)
     for line in issues or ["- none"]:

@@ -160,3 +160,23 @@ def test_top_issues_leave_out_the_scheduler_starts_line(tmp_path, capsys):
     issues = out[out.index("Top issues:"):]
     assert "structural" not in issues
     assert "Scheduler ->" not in issues
+
+
+def test_summary_counts_starts_lines_apart_from_links(tmp_path, capsys):
+    """Ruling 10: the grey Scheduler "starts" line is not a link; the total adds up and the
+    line is named in its own clause, in stdout and at the top of the links report."""
+    w = tmp_path / "estate"
+    shutil.copytree(str(ESTATE), str(w))
+    assert main(["draw", "--workspace", str(w), "--level", "gitdiagram",
+                 "--scope", "claims-batch"]) == 0
+    out = capsys.readouterr().out
+    assert ("Summary: 11 nodes, 17 links: 13 confirmed, 2 partly known, 2 loose ends; "
+            "1 job-structure line\n") in out
+    rep = (w / "architecture-diagrams" / "gitdiagram-claims-batch-links.md").read_text("utf-8")
+    assert rep.splitlines()[2].endswith("; 1 job-structure line")
+    # claims-api has no Scheduler: no clause
+    assert main(["draw", "--workspace", str(w), "--level", "gitdiagram",
+                 "--scope", "claims-api"]) == 0
+    out = capsys.readouterr().out
+    assert "job-structure" not in out
+    assert "Summary: 12 nodes, 13 links: 7 confirmed, 5 partly known, 1 loose ends\n" in out
