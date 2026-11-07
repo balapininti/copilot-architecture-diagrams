@@ -22,7 +22,7 @@ import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, wrap, FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
+from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
                                     esc, gd_details, group_colors, legend, legend_width, line_style,
                                     link_wrap, loose_dot, node_href, note_lines, num, overview_block, path_d,

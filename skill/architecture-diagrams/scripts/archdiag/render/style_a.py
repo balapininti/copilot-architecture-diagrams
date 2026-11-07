@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, wrap, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
+from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
                                     PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, gd_details,
                                     group_colors,
                                     group_icon, legend, legend_width, line_attrs, line_style,
@@ -331,6 +331,16 @@ def _geom(x: float, y: float, w: float, h: float) -> str:
 def _drawio(view: ViewGraph, L: Layout) -> str:
     colors = _group_colors(view)
     cells = ['<mxCell id="0"/>', '<mxCell id="1" parent="0"/>']
+    ov = " ".join(str(view.overview or "").split())
+    dy = 0.0  # the picture moves down by the overview band's height
+    if ov:
+        wrapped = wrap(ov, max(200.0, L.width - 64), OVERVIEW_SIZE)
+        oh = 14 + OVERVIEW_LINE * len(wrapped)
+        dy = oh + 16
+        cells.append('<mxCell id="overview" value="%s" style="text;html=0;whiteSpace=wrap;'
+                     'align=left;verticalAlign=middle;fontSize=12;fontColor=#334155;'
+                     'fillColor=#f8fafc;strokeColor=#e2e8f0;spacingLeft=10;" vertex="1" '
+                     'parent="1">%s</mxCell>' % (esc(ov), _geom(0, 0, max(240.0, L.width), oh)))
     group_cell: Dict[str, Tuple[str, Box]] = {}
     for i, g in enumerate(view.groups):
         gb = L.groups.get(g.id)
@@ -344,15 +354,7 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                      'strokeColor=%s;fontColor=%s;fontStyle=1;align=left;verticalAlign=top;'
                      'spacingLeft=10;spacingTop=2;" vertex="1" parent="1">%s</mxCell>'
                      % (cid, esc(group_title(g.id, g.label)), tint(c, 0.08), c, shade(c),
-                        _geom(gb.x, gb.y, gb.w, gb.h)))
-    ov = " ".join(str(view.overview or "").split())
-    if ov:  # the overview paragraph, wrapped, above the picture
-        wrapped = wrap(ov, max(200.0, L.width - 64), OVERVIEW_SIZE)
-        oh = 14 + OVERVIEW_LINE * len(wrapped)
-        cells.append('<mxCell id="overview" value="%s" style="text;html=0;whiteSpace=wrap;'
-                     'align=left;verticalAlign=middle;fontSize=12;fontColor=#334155;'
-                     'fillColor=#f8fafc;strokeColor=#e2e8f0;spacingLeft=10;" vertex="1" '
-                     'parent="1">%s</mxCell>' % (esc(ov), _geom(0, -oh - 16, max(240.0, L.width), oh)))
+                        _geom(gb.x, gb.y + dy, gb.w, gb.h)))
     node_cell: Dict[str, str] = {}
     for i, n in enumerate(view.nodes):
         b = L.boxes.get(n.id) or Box(0, 0, MIN_W, MIN_H)
@@ -364,22 +366,27 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
             px, py = gb.x, gb.y
         lines = [n.label, n.sublabel] + list(n.detail_lines)
         url = node_href(view, n)
-        cells.append('<mxCell id="%s" value="%s" style="%s"%s vertex="1" parent="%s">%s</mxCell>'
-                     % (cid, _value(lines), _vertex_style(n, _node_color(n, colors)),
-                        ' link="%s"' % esc(url) if url else "", parent,
-                        _geom(b.x - px, b.y - py, b.w, b.h)))
+        shift = dy if parent == "1" else 0.0
+        cell = ('<mxCell id="%s" value="%s" style="%s" vertex="1" parent="%s">%s</mxCell>'
+                % (cid, _value(lines), _vertex_style(n, _node_color(n, colors)), parent,
+                   _geom(b.x - px, b.y - py + shift, b.w, b.h)))
+        if url:  # draw.io reads a link from a UserObject wrapper, not from the mxCell
+            cell = ('<UserObject label="%s" link="%s" id="%s">%s</UserObject>'
+                    % (_value(lines), esc(url), cid,
+                       cell.replace(' id="%s" value="%s"' % (cid, _value(lines)), "", 1)))
+        cells.append(cell)
     for i, e in enumerate(view.edges):
         style = _EDGE_STYLE[line_style(e.status, e.kind)]
         route = L.routes[i] if i < len(L.routes) else []
         pts = ""
         if len(route) > 2:
             pts = '<Array as="points">%s</Array>' % "".join(
-                '<mxPoint x="%s" y="%s"/>' % (num(x), num(y)) for x, y in route[1:-1])
+                '<mxPoint x="%s" y="%s"/>' % (num(x), num(y + dy)) for x, y in route[1:-1])
         ends = ""
         if route:
             ends = ('<mxPoint x="%s" y="%s" as="sourcePoint"/><mxPoint x="%s" y="%s" '
-                    'as="targetPoint"/>' % (num(route[0][0]), num(route[0][1]),
-                                            num(route[-1][0]), num(route[-1][1])))
+                    'as="targetPoint"/>' % (num(route[0][0]), num(route[0][1] + dy),
+                                            num(route[-1][0]), num(route[-1][1] + dy)))
         cells.append('<mxCell id="e%d" value="%s" style="edgeStyle=none;rounded=0;html=0;'
                      'labelBackgroundColor=#ffffff;fontSize=10;%s" edge="1" parent="1" '
                      'source="%s" target="%s"><mxGeometry relative="1" as="geometry">%s%s'
@@ -387,8 +394,8 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                      % (i, esc(_plain_edge_text(e)), style, node_cell[e.src], node_cell[e.dst], ends,
                         pts))
     present = {line_style(e.status, e.kind) for e in view.edges}  # the legend, as in the SVG
-    cx, cy = 20.0, L.height + 24
-    page_w, page_h = L.width, L.height
+    cx, cy = 20.0, L.height + 24 + dy
+    page_w, page_h = L.width, L.height + dy
     for key, label in _LEGEND:
         if key not in present:
             continue

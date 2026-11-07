@@ -29,11 +29,21 @@ def test_drawio_cells_have_links():
     v = _view()
     xml = style_a.render(v)["drawio"]
     root = ET.fromstring(xml)
-    links = [c.get("link") for c in root.iter("mxCell") if c.get("vertex") and c.get("link")]
+    links = [u.get("link") for u in root.iter("UserObject")]
+    for u in root.iter("UserObject"):  # the wrapper holds the label and id; one vertex inside
+        cell = u.find("mxCell")
+        assert cell is not None and cell.get("vertex") == "1" and u.get("id") and u.get("label")
     assert len(_linked(v)) >= 3
     for n in _linked(v):
         assert href(v.repo_path, n.link) in links
     assert OVERVIEW in " ".join(c.get("value") or "" for c in root.iter("mxCell"))
+    cells = {c.get("id"): c for c in root.iter("mxCell")}
+    ov = cells["overview"].find("mxGeometry")
+    assert float(ov.get("y")) >= 0
+    for c in root.iter("mxCell"):  # edges still point at ids that exist (wrapper ids included)
+        for k in ("source", "target"):
+            if c.get(k):
+                assert c.get(k) in cells or c.get(k) in {u.get("id") for u in root.iter("UserObject")}
 
 
 def test_mermaid_click_lines():

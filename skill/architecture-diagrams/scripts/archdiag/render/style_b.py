@@ -388,6 +388,10 @@ def _node_mermaid(i: int, n: VNode) -> str:
     return 'n%d["%s"]' % (i, label)
 
 
+# Clickable boxes: the ``click`` lines work in the VS Code Mermaid preview and mermaid.live.
+# GitHub and Azure DevOps render Mermaid in strict mode, so boxes are not clickable there.
+# (Excalidraw resolves relative links against the app, not the file, so they rarely open.)
+# The SVG (browser / VS Code) and draw.io outputs are the clickable ones.
 def _mermaid(view: ViewGraph) -> str:
     index = {n.id: i for i, n in enumerate(view.nodes)}
     lines = ["flowchart LR"]
@@ -448,8 +452,10 @@ def _markdown(view: ViewGraph, azure: bool = False) -> str:
     styles = {line_style(e.status, e.kind) for e in view.edges}
     fence = ("::: mermaid", ":::") if azure else ("```mermaid", "```")
     ov = " ".join(str(view.overview or "").split())
-    out = ["# %s" % " ".join(view.title.split()), ""] + ([ov, ""] if ov else []) + [fence[0], _mermaid(view), fence[1], "",
-           "## Legend", ""]
+    out = ["# %s" % " ".join(view.title.split()), ""]
+    if ov:
+        out += [ov, ""]
+    out += [fence[0], _mermaid(view), fence[1], "", "## Legend", ""]
     for key, label in _MD_LEGEND:
         if key in styles:
             out.append("- %s" % label)
