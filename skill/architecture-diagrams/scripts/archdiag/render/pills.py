@@ -172,7 +172,7 @@ Rect = Tuple[float, float, float, float]
 LINE_PAD = 1.5      # a pill keeps this far off any other line
 KEY_R = 8.0         # a marker's radius (circle for a step, rounded square otherwise)
 KEY_SIZE, KEY_LINE = 11.0, 20.0
-MARK_STEP = 4.0     # markers are tried every this many px along their line
+MARK_STEP = 1.0     # markers are tried every this many px along their line
 
 
 def _mark_spots(route: List[Tuple[float, float]]) -> List[float]:
@@ -296,6 +296,9 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                                              or [L.label_at[i]])]
         for max_w, at in tries:
             p = Pill(i, s, at, styles[i], max_w, e.number)
+            hits = float(lines.others(_line_rect(p), i))
+            if best_cost is not None and hits > best_cost[1]:
+                continue
             cost = score(p)
             if best_cost is None or (cost[1], cost[0]) < (best_cost[1], best_cost[0]):
                 best, best_cost = p, cost
@@ -304,16 +307,22 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
         if best_cost != (0.0, 0.0) and len(route) >= 2:
             # nowhere free: a marker on a free stretch of the line, the label in the key
             mark_best, mark_cost = None, None
+            m = Pill(i, s, (0.0, 0.0), styles[i], PILL_MAX_W, e.number)
             for t in _mark_spots(route):
-                m = Pill(i, s, (0.0, 0.0), styles[i], PILL_MAX_W, e.number)
+                m = Pill(i, s, (0.0, 0.0), styles[i], PILL_MAX_W, e.number) \
+                    if m is mark_best else m
                 m.as_marker(seg_at(route, t)[0])
-                cost = score(m)
+                hits = float(lines.others(_line_rect(m), i))
+                if mark_cost is not None and hits > mark_cost[1]:
+                    continue
+                r = (m.x - 3, m.y - 3, m.w + 6, m.h + 6)
+                cost = (sum(_overlap(r, o) for o in obstacles), hits)
                 if mark_cost is None or (cost[1], cost[0]) < (mark_cost[1], mark_cost[0]):
                     mark_best, mark_cost = m, cost
                 if cost == (0.0, 0.0):
                     break
-            if mark_cost is not None and (mark_cost[1], mark_cost[0]) < (best_cost[1],
-                                                                         best_cost[0]):
+            # a pill over another line is never kept: the marker is, crowded or not
+            if mark_best is not None and (best_cost[1] > 0 or mark_cost[0] < best_cost[0]):
                 best = mark_best
         pills.append(best)
         obstacles.append((best.x, best.y, best.w, best.h))

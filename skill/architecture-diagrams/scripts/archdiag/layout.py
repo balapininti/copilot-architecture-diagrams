@@ -56,7 +56,7 @@ MAZE_NEAR = 8.5        # ...within this many px of it, across or along
 MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
 BAND_WIDTH = 1940.0    # layered: a picture wider than this (plus margins: 2000px) wraps its
                        # layers into bands stacked top to bottom
-BEND_GAP = 12.0        # layered: least gap between two lines bending in one column gap
+BEND_GAP = 10.0        # layered: least gap between two lines bending in one column gap
 CHANNEL_PAD = 16.0     # layered: room above and below the lines in a channel between bands
 SPINE_GAP = 14.0       # layered: gap between lines going down the left of the picture
 FAN_OUT = 4            # layered: most lines on one box side before some use the top/bottom
@@ -136,7 +136,11 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
     else:
-        boxes, routes = layered(view, sizes, wrap=True)
+        boxes, routes = layered(view, sizes)
+        right = max([b.right for b in boxes.values()] or [0.0])
+        left = min([b.x for b in boxes.values()] or [0.0])
+        if right - left > BAND_WIDTH:  # too wide for a page: wrap the layers into bands
+            boxes, routes = layered(view, sizes, wrap=True)
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
     return _finish(boxes, groups, routes)
@@ -641,6 +645,11 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
             if near:
                 gap = gap / 2
             room[side] = max(0, min(FAN_MAX, int((gap - FAN_CLEAR) / TURN_GAP)))
+        g = group_of[i]
+        if g is not None and all(
+                layer[m] >= layer[i] and (layer[m] > layer[i] or box_y[m] >= top_y)
+                for m in ids if group_of[m] == g):
+            room["top"] = 0  # its group's title sits over it: no lines through the title
         picked: Dict[str, Dict[str, List[Tuple[float, int]]]] = {
             "top": {"in": [], "out": []}, "bottom": {"in": [], "out": []}}
         for d, ports in (("out", out_ports[i]), ("in", in_ports[i])):
