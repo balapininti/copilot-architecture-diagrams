@@ -48,6 +48,8 @@ class ScanContext:
         default_factory=dict)
     # z/OS Connect OpenAPI 3: (repo, project prefix) -> first servers[].url of openapi.yaml/json
     zc_servers: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    # OpenAPI documents of any kind: repo -> every servers[].url (its own address, Ruling 38)
+    api_servers: Dict[str, List[str]] = field(default_factory=dict)
     # COBOL copybooks (pass 2): NAME -> the Refs their own text makes (CALL, SQL, CICS, MQ,
     # nested COPY), with src "copybook:NAME"; attributed to every program that COPYs them
     copybook_refs: Dict[str, List[Ref]] = field(default_factory=dict)
@@ -181,24 +183,55 @@ def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
 _URL_HOST = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/\s'\"]*@)?(\[[^\]]*\]|[^/:?#\s'\"]+)")
 
 
+# Spring keys that name the service itself (Ruling 38), after relaxed binding (lower case,
+# no '-' or '_'): a URL host in any of them, or a bare host in an address/hostname key, is
+# the repo's own address. Every other key (partner.url, *.base-url, *.endpoint, ...) is a
+# service the repo CALLS, so its host is never counted; when unsure, don't count it.
+_OWN_KEY_PREFIXES = ("server.", "spring.application.")
+_OWN_ADDRESS_KEYS = frozenset(["server.address", "management.server.address",
+                               "eureka.instance.hostname"])
+_BARE_HOST = re.compile(
+    r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::\d+)?$")
+
+
+def _own_key(key: str) -> Optional[str]:
+    """The relaxed-binding form of a Spring key that names the service itself, else None."""
+    k = re.sub(r"[-_]", "", str(key).lower())
+    if k in _OWN_ADDRESS_KEYS or k.startswith(_OWN_KEY_PREFIXES):
+        return k
+    return None
+
+
+def _value_hosts(value: str, bare: bool) -> List[str]:
+    v = str(value).strip()
+    hosts = [m.group(1).lower() for m in _URL_HOST.finditer(v)]
+    if not hosts and bare:
+        m = _BARE_HOST.match(v)
+        if m:
+            hosts.append(m.group(1).lower())
+    return hosts
+
+
 def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
-    """Per repo, the hosts that its config names in URLs (Ruling 36)."""
-    vals: Dict[str, List[str]] = {}
-    for repo, props in ctx.props.items():
-        vals.setdefault(repo, []).extend(props.values())
-    for table in (ctx.props_src, ctx.props_prof):
-        for repo, entries in table.items():
-            vals.setdefault(repo, []).extend(v for _rel, v in entries.values())
-    for repo, env in ctx.ts_env.items():
-        vals.setdefault(repo, []).extend(env.values())
+    """Per repo, the hosts its config names as its OWN address (Rulings 36 and 38): hosts
+    in Spring keys that name the service (server.*, spring.application.*,
+    management.server.address, eureka.instance.hostname) and servers[].url of its OpenAPI
+    documents. Client base URLs and Angular environment values are outbound: never counted."""
+    found: Dict[str, Set[str]] = {}
+    for repo in set(ctx.props) | set(ctx.props_src) | set(ctx.props_prof):
+        entries = list(ctx.props.get(repo, {}).items())
+        for table in (ctx.props_src, ctx.props_prof):
+            entries.extend((k, v) for k, (_rel, v) in table.get(repo, {}).items())
+        for k, v in entries:
+            own = _own_key(k)
+            if own is not None:
+                found.setdefault(repo, set()).update(_value_hosts(v, own in _OWN_ADDRESS_KEYS))
     for (repo, _prefix), url in ctx.zc_servers.items():
-        vals.setdefault(repo, []).append(url)
-    out: Dict[str, List[str]] = {}
-    for repo, vs in vals.items():
-        hosts = sorted(set(m.group(1).lower() for v in vs for m in _URL_HOST.finditer(str(v))))
-        if hosts:
-            out[repo] = hosts
-    return out
+        found.setdefault(repo, set()).update(_value_hosts(url, False))
+    for repo, urls in ctx.api_servers.items():
+        for url in urls:
+            found.setdefault(repo, set()).update(_value_hosts(url, False))
+    return {repo: sorted(hs) for repo, hs in found.items() if hs}
 
 
 # extensions of source the scanners read (by extension only: a cheap check)

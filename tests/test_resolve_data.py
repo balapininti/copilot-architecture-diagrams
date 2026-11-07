@@ -563,7 +563,91 @@ def test_scan_collects_config_hosts_per_repo(tmp_path):
         p.write_text(text)
     inv = scan_workspace(tmp_path, Config())
     assert "claims.internal" in inv.config_hosts["svc"]
-    assert inv.config_hosts["web"] == ["web.example"]
+    assert "zcee.internal" in inv.config_hosts["svc"]
+    # Ruling 38: an Angular apiBase is a host the web app CALLS, not its own address
+    assert "web" not in inv.config_hosts
+
+
+def _write_estate(root, files):
+    for repo, rel, text in files:
+        r = root / repo
+        r.mkdir(exist_ok=True)
+        (r / ".archdiag-repo").write_text("")
+        p = r / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+
+_REPO_JAVA = ("package x;\n"
+              "import org.springframework.web.bind.annotation.*;\n"
+              "import org.springframework.web.client.RestTemplate;\n"
+              "@RestController\n"
+              "public class Repo {\n"
+              "  private RestTemplate rest;\n"
+              "  @GetMapping(\"/health\")\n"
+              "  public String h() { return \"ok\"; }\n"
+              "  public void q() { rest.getForObject(\"%s/health\", String.class); }\n"
+              "}\n")
+
+
+def _health_link(tmp_path, props, url, extra=()):
+    _write_estate(tmp_path, [("repob", "src/main/resources/application.properties", props),
+                             ("repob", "src/main/java/x/Repo.java", _REPO_JAVA % url)]
+                  + list(extra))
+    r = resolve(scan_workspace(tmp_path, Config()), Config())
+    return edge("class:repob/Repo", "http", "endpoint:GET /health", r)
+
+
+def test_own_outbound_base_url_does_not_tie_the_host(tmp_path):
+    # Ruling 38 (probe ws1h): partner.base-url is a service repob CALLS; a call to it that
+    # happens to share a path with repob's own endpoint is not a call to repob
+    e = _health_link(tmp_path, "partner.base-url=https://partner.example.com\n",
+                     "https://partner.example.com")
+    assert e.status == "partial"
+    assert e.reason == ("matched on path only; host partner.example.com isn't tied to a "
+                        "scanned repo")
+
+
+def test_target_repos_server_address_ties_the_host(tmp_path):
+    e = _health_link(tmp_path, "server.address=repob.internal\nserver.port=8443\n",
+                     "https://repob.internal:8443")
+    assert e.status == "confirmed" and e.reason is None
+
+
+def test_scan_counts_only_the_repos_own_address_keys(tmp_path):
+    _write_estate(tmp_path, [
+        ("svc", "src/main/resources/application.yml",
+         "server:\n  address: 10.1.2.3\n"
+         "management:\n  server:\n    address: mgmt.svc.internal\n"
+         "eureka:\n  instance:\n    hostname: svc.eureka.internal\n"
+         "spring:\n  application:\n    url: https://app.svc.internal/x\n"
+         "partner:\n  url: https://partner.example.com\n"
+         "rates:\n  base-url: https://rates.example.com\n"
+         "queue:\n  endpoint: https://mq.example.com\n"
+         "zos:\n  server:\n    address: zcee.internal\n"),
+        ("svc", "src/main/resources/application-dev.properties",
+         "server.public-url=https://dev.svc.internal\nclient.url=https://dev.partner\n")])
+    inv = scan_workspace(tmp_path, Config())
+    assert inv.config_hosts["svc"] == sorted([
+        "10.1.2.3", "mgmt.svc.internal", "svc.eureka.internal", "app.svc.internal",
+        "dev.svc.internal"])
+
+
+def test_openapi_servers_tie_the_host(tmp_path):
+    e = _health_link(tmp_path, "", "https://api.repob.example",
+                     [("repob", "src/main/resources/static/openapi.yaml",
+                       "openapi: 3.0.0\nservers:\n  - url: https://dev.repob.example\n"
+                       "  - url: https://api.repob.example/v1\npaths: {}\n")])
+    assert e.status == "confirmed"
+
+
+def test_angular_api_base_does_not_tie_the_host(tmp_path):
+    # the web repo's environment.ts names the API's host, but as a host it CALLS
+    _write_estate(tmp_path, [
+        ("web", "src/environments/environment.ts",
+         "export const environment = { apiBase: 'https://api.example' };\n")])
+    inv = scan_workspace(tmp_path, Config())
+    assert "web" not in inv.config_hosts
 
 
 def test_http_target_not_worked_out():

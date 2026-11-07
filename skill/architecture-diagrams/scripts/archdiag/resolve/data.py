@@ -530,7 +530,8 @@ class _Data:
 
     def host_reason(self, host: Optional[str], node: Node) -> Optional[str]:
         """Why an absolute-URL match on the path alone is not certain (Ruling 36): the host
-        must be named in the config of the endpoint's own repo (or be the local machine)."""
+        must be the endpoint's own repo's address (Ruling 38: server.*, spring.application.*,
+        OpenAPI servers; never a client base URL) or the local machine."""
         if host is None or host in LOCAL_HOSTS:
             return None
         if host in (self.inv.config_hosts or {}).get(node.repo or "", []):

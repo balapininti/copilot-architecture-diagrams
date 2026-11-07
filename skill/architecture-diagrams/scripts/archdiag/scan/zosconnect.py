@@ -192,11 +192,13 @@ def _project_prefix(rel: str, marker: str) -> Optional[str]:
 _OAS3_DOCS = ("openapi.yaml", "openapi.yml", "openapi.json", "swagger.json")
 
 
-def _servers_url(text: str) -> Optional[str]:
-    """First ``servers[].url`` of an OpenAPI document (YAML or JSON)."""
-    m = re.search(r'"servers"\s*:\s*\[\s*\{[^}]*?"url"\s*:\s*"([^"]*)"', text)
+def _servers_urls(text: str) -> List[str]:
+    """Every ``servers[].url`` of an OpenAPI document (YAML or JSON), in order."""
+    m = re.search(r'"servers"\s*:\s*\[(.*?)\]', text, re.S)
     if m:
-        return m.group(1).strip() or None
+        return [u.strip() for u in re.findall(r'"url"\s*:\s*"([^"]*)"', m.group(1))
+                if u.strip()]
+    out: List[str] = []
     lines = text.split("\n")
     for i, raw in enumerate(lines):
         if re.match(r"^servers\s*:", raw):
@@ -205,9 +207,17 @@ def _servers_url(text: str) -> Optional[str]:
                     break  # next top-level key
                 u = re.match(r"^\s*-?\s*url\s*:\s*(.+)$", nxt)
                 if u:
-                    return _yaml_scalar(u.group(1)) or None
+                    v = _yaml_scalar(u.group(1))
+                    if v:
+                        out.append(v)
             break
-    return None
+    return out
+
+
+def _servers_url(text: str) -> Optional[str]:
+    """First ``servers[].url`` of an OpenAPI document (YAML or JSON)."""
+    urls = _servers_urls(text)
+    return urls[0] if urls else None
 
 
 # ------------------------------------------------------------------ pass 1
@@ -225,9 +235,13 @@ def collect_zosconnect(repo: str, rel: str, text: str, ftype: Optional[str],
     low = base.lower()
     if low in _OAS3_DOCS:
         prefix = _project_prefix(rel, "api")
-        url = _servers_url(text) if prefix is not None else None
-        if url:
-            ctx.zc_servers[(repo, prefix)] = url
+        urls = _servers_urls(text)
+        if urls and prefix is not None:
+            ctx.zc_servers[(repo, prefix)] = urls[0]
+        parts = rel.lower().split("/")
+        if urls and "test" not in parts[:-1] and "tests" not in parts[:-1]:
+            # the repo's own API definition: where it is served (Ruling 38)
+            ctx.api_servers.setdefault(repo, []).extend(urls)
         return
     if ftype != "zosconnect":
         return

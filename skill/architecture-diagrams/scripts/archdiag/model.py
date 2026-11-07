@@ -63,8 +63,9 @@ class Inventory:
     # files that could not be read or scanned: {"repo", "path", "reason"} (size, unreadable
     # archive, read error); directory/extension skip lists are intentional and not listed
     skipped: List[Dict[str, str]] = field(default_factory=list)
-    # host names (lower case, no port) named as URLs in each repo's config: application*
-    # yml/properties, environment*.ts and z/OS Connect OpenAPI servers (Ruling 36)
+    # host names (lower case, no port) each repo's config names as its OWN address: Spring
+    # server.* / spring.application.* / management.server.address / eureka.instance.hostname
+    # and OpenAPI servers[].url; never client base URLs or environment*.ts (Rulings 36, 38)
     config_hosts: Dict[str, List[str]] = field(default_factory=dict)
     # source the scan left out on purpose but that looks like it matters: {"repo" ("" for
     # a workspace folder), "path", "reason"}: default-skipped folders holding source,
