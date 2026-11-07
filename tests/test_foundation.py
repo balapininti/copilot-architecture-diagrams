@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from stdlib39 import STDLIB_39
+
 from archdiag.cli import main
 from archdiag.config import load_config
 from archdiag.model import Edge, Evidence, Inventory, Node, Ref, Repo, Resolved
@@ -15,13 +17,6 @@ from archdiag.textio import classify, read_source
 import dataclasses
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "skill" / "architecture-diagrams" / "scripts"
-
-STDLIB_39 = {
-    "__future__", "argparse", "ast", "bisect", "collections", "contextlib", "copy", "dataclasses",
-    "datetime", "difflib", "enum", "fnmatch", "functools", "hashlib", "heapq", "html", "io",
-    "itertools", "json", "math", "os", "pathlib", "random", "re", "shutil", "string",
-    "stat", "sys", "textwrap", "time", "traceback", "typing", "unicodedata", "urllib", "xml", "zipfile",
-}
 
 
 def test_single_repo_when_workspace_is_git(tmp_path):
@@ -81,8 +76,15 @@ def test_classify_by_extension_and_proc_sniff():
     assert classify("p/A", "SUB CSECT\n") == "asm"
 
 
+def test_stdlib_list_is_the_fixed_3_9_one():
+    assert len(STDLIB_39) > 200
+    assert {"os", "json", "dataclasses", "zoneinfo", "graphlib", "asyncore", "distutils"} <= STDLIB_39
+    assert not {"tomllib", "annotationlib", "compression", "_colorize", "yaml", "setuptools"} & STDLIB_39
+    assert all(n == n.strip() and "." not in n for n in STDLIB_39)
+
+
 def test_runtime_imports_are_stdlib_only():
-    files = list((SCRIPTS / "archdiag").rglob("*.py"))
+    files = list((SCRIPTS / "archdiag").rglob("*.py")) + [SCRIPTS / "run.py"]
     assert files
     for f in files:
         tree = ast.parse(f.read_text(encoding="utf-8"), feature_version=(3, 9))

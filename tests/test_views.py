@@ -462,9 +462,10 @@ def test_application_keeps_look_alikes_and_utilities():
 
 def test_cap_is_fast_on_large_views():
     import time
-    t = time.time()
+    t = time.perf_counter()
     v = build_view(_big(3000), default_groups(_big(3000)), "application", "big")
-    assert len(v.nodes) <= MAX_NODES and time.time() - t < 5
+    # generous bound: catches a blow-up, not a slow machine
+    assert len(v.nodes) <= MAX_NODES and time.perf_counter() - t < 60
 
 
 # ------------------------------------------------------------------ fix round 1

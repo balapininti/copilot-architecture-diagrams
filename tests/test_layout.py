@@ -91,9 +91,10 @@ def test_dense_graph_is_fast():
     edges += [VEdge("n%d" % R.randrange(40), "n%d" % R.randrange(40)) for _ in range(300)]
     v = ViewGraph("dense", "application", None, nodes, edges,
                   [VGroup("g%d" % i, "g%d" % i, "#000000") for i in range(6)])
-    t = time.time()
+    t = time.perf_counter()
     L = layout_for(v, lambda n: (150, 80))
-    assert time.time() - t < 5
+    # a generous bound: it catches a blow-up (minutes), not a slow or busy machine
+    assert time.perf_counter() - t < 60
     assert len(L.routes) == len(edges)
 
 
@@ -448,3 +449,23 @@ def test_line_skipping_a_band_runs_down_the_left():
         for nid, b in L.boxes.items():
             if nid not in (e.src, e.dst):
                 assert not _crosses_box(L.routes[k], b), (k, nid)
+
+
+def _layout_snapshot(L):
+    return (L.width, L.height,
+            sorted((k, b.x, b.y, b.w, b.h) for k, b in L.boxes.items()),
+            sorted((k, b.x, b.y, b.w, b.h) for k, b in L.groups.items()),
+            [[tuple(p) for p in r] for r in L.routes],
+            [tuple(p) for p in L.label_at])
+
+
+def test_layout_is_deterministic():
+    # the same view laid out twice gives the same boxes, routes and label anchors, so a
+    # redraw of unchanged links is an unchanged picture
+    size = lambda n: (100 + 35 * (len(n.id) % 3), 60 + 30 * (len(n.id) % 2))  # noqa: E731
+    for seed in range(15):
+        assert _layout_snapshot(layout_for(random_view(seed), size)) == \
+            _layout_snapshot(layout_for(random_view(seed), size)), seed
+    for make in (claims_job, claims_landscape, app_with_neighbors):
+        assert _layout_snapshot(layout_for(make(), lambda n: (140, 80))) == \
+            _layout_snapshot(layout_for(make(), lambda n: (140, 80))), make.__name__

@@ -84,20 +84,41 @@ def test_every_edge_has_evidence():
     assert not bare, "edges without evidence: %s" % bare
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _line_is_real(v) -> bool:
+    """Does line ``v.line`` of the fixture file hold the text the evidence quotes?"""
+    f = ESTATE / v.repo / v.path
+    if v.line < 1 or not f.is_file():
+        return False
+    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    return v.line <= len(lines) and _norm(v.text)[:20] in _norm(lines[v.line - 1])
+
+
+MIN_CHECKED = 30  # the estate has 38 confirmed edges between two nodes defined in the code
+
+
 def test_confirmed_edges_carry_evidence_for_both_ends():
     # spec §7.3: every link stores both ends' file and line. Checked where both ends are
     # nodes defined in the code (resolver-made dataset, utility and missing nodes have none).
+    # Destination: the edge cites the line the node is defined on. Source: the edge cites a
+    # line (not just a file) of the source's own file, and that line really holds the quote.
     r = resolved()
-    short = []
+    short, checked = [], 0
     for e in r.edges:  # type: ignore[attr-defined]
         if e.status != "confirmed":
             continue
         s, d = r.nodes.get(e.src), r.nodes.get(e.dst)
         if s is None or d is None or not s.evidence or not d.evidence:
             continue
+        checked += 1
         got = set((v.repo, v.path, v.line) for v in e.evidence)
         dst_ok = any((v.repo, v.path, v.line) in got for v in d.evidence)
-        src_ok = bool(_files(s.evidence) & _files(e.evidence))
+        src_files = _files(s.evidence)
+        src_ok = any((v.repo, v.path) in src_files and _line_is_real(v) for v in e.evidence)
         if not (src_ok and dst_ok):
             short.append((e.src, e.op, e.dst, src_ok, dst_ok))
     assert not short, "confirmed edges missing an end's evidence (src_ok, dst_ok): %s" % short
+    assert checked >= MIN_CHECKED, "only %d edges checked: the test went vacuous" % checked
