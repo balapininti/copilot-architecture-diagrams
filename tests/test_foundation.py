@@ -79,6 +79,9 @@ def test_classify_by_extension_and_proc_sniff():
 def test_stdlib_list_is_the_fixed_3_9_one():
     assert len(STDLIB_39) > 200
     assert {"os", "json", "dataclasses", "zoneinfo", "graphlib", "asyncore", "distutils"} <= STDLIB_39
+    # E10: 3.9 public modules missing from the macOS build (Windows/Linux only, or removed
+    # since 3.13) are listed too
+    assert {"msilib", "spwd", "ossaudiodev", "xxlimited"} <= STDLIB_39
     assert not {"tomllib", "annotationlib", "compression", "_colorize", "yaml", "setuptools"} & STDLIB_39
     assert all(n == n.strip() and "." not in n for n in STDLIB_39)
 

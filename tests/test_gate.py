@@ -93,8 +93,20 @@ def _line_is_real(v) -> bool:
     f = ESTATE / v.repo / v.path
     if v.line < 1 or not f.is_file():
         return False
+    quote = _norm(v.text)[:20]
+    if len(quote) < 3:  # an empty quote is in every line: it proves nothing (E10)
+        return False
     lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
-    return v.line <= len(lines) and _norm(v.text)[:20] in _norm(lines[v.line - 1])
+    return v.line <= len(lines) and quote in _norm(lines[v.line - 1])
+
+
+def test_line_check_needs_quoted_text():
+    """E10: evidence with no (or a 1-2 character) quote does not count as a real line:
+    an empty quote is a substring of every line."""
+    from archdiag.model import Evidence
+    base = dict(repo="claims-online", path="cobol/CLMO100.cbl", line=1)
+    assert not _line_is_real(Evidence(text="", **base))
+    assert not _line_is_real(Evidence(text=" a ", **base))
 
 
 MIN_CHECKED = 30  # the estate has 38 confirmed edges between two nodes defined in the code
