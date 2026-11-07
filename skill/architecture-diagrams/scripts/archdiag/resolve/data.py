@@ -455,6 +455,8 @@ class _Data:
                 continue
             self.triggered.add(q.id)
             base = BRIDGE_REASON if bridge else None
+            note = q.attrs.get("bridge_note") if bridge else None  # e.g. a case-only match
+            base = join(base, note) if note else base
             evid = list(q.evidence)
             if not process:
                 reason = join(base, "the queue names no PROCESS")
@@ -481,7 +483,7 @@ class _Data:
                 # IBM's bridge monitor: the program comes from each message, not from code
                 self.nodes[tid] = Node(tid, "transaction", applicid, None, [], {"system": True})
                 self.edges.append(Edge(q.id, "triggers", tid, PARTIAL,
-                                       join(BRIDGE_REASON, "the program is named in each "
+                                       join(BRIDGE_REASON, note, "the program is named in each "
                                             "message, not in these repos"), evid))
             elif tx is None:
                 # a fully worked-out name that nothing defines: only one side found
@@ -489,7 +491,8 @@ class _Data:
                                                                  applicid), LOOSE, base, evid))
             else:
                 amb = _defs_reason(tx)
-                self.edges.append(Edge(q.id, "triggers", tid, PARTIAL if amb else CONFIRMED,
+                self.edges.append(Edge(q.id, "triggers", tid,
+                                       PARTIAL if amb or note else CONFIRMED,
                                        join(base, amb), evid + list(tx.evidence)))
 
     def queue_gaps(self) -> None:

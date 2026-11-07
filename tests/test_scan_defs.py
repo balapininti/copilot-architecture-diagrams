@@ -490,3 +490,51 @@ def test_oas3_base_url_kept_out_of_id(tmp_path):
     (op / "operation.yaml").write_text('zasset: "a"\n')
     inv = scan_workspace(tmp_path, Config())
     assert inv.nodes["zosapi:GET /claims"].attrs["base_url"] == "https://zos.example.com/claimsapi"
+
+
+# ------------------------------------------------------------------ Batch A fixes (A13, A14)
+
+def test_mqsc_comment_lines_inside_a_continuation_are_skipped():
+    by = _mq("DEFINE QLOCAL(CLM.A) +\n* the process comes next\n  PROCESS(P1) -\n"
+             "*  and the trigger\n  TRIGGER\nDEFINE QLOCAL(CLM.B)\n")
+    assert by["queue:CLM.A"].attrs["process"] == "P1"
+    assert by["queue:CLM.A"].attrs["trigger"] is True
+    assert "queue:CLM.B" in by and len(by) == 2
+
+
+def test_ckbr_start_found_however_long_the_exec_block():
+    opts = "".join("                LENGTH(22)\n" for _ in range(40))
+    cob = ("       PROCEDURE DIVISION.\n           EXEC CICS START\n" + opts +
+           "                TRANSID('CKBR')\n" + opts +
+           "                FROM('Q=CLM.BRQ') END-EXEC.\n")
+    by = _mq("DEFINE QLOCAL(CLM.BRQ)\n", [("cobol/S.cbl", cob)])
+    assert by["queue:CLM.BRQ"].attrs["bridge"] is True
+
+
+def test_ckbr_queue_names_keep_their_case():
+    cob = ("       PROCEDURE DIVISION.\n"
+           "           EXEC CICS START TRANSID('CKBR') FROM('Q=clm.brq') END-EXEC.\n")
+    by = _mq("DEFINE QLOCAL('clm.brq')\nDEFINE QLOCAL(CLM.BRQ)\nDEFINE QLOCAL(OTHER)\n",
+             [("cobol/S.cbl", cob)])
+    exact, folded = by["queue:clm.brq"].attrs, by["queue:CLM.BRQ"].attrs
+    assert exact["bridge"] is True and not exact.get("bridge_note")
+    # a match only when case is ignored is kept, but says so (MQ names are case-sensitive)
+    assert folded["bridge"] is True and "case" in folded["bridge_note"]
+    assert by["queue:OTHER"].attrs["bridge"] is False
+
+
+def test_bridge_note_reaches_the_resolved_edge(tmp_path):
+    from archdiag.config import Config
+    from archdiag.resolve import resolve
+    from archdiag.scan import scan_workspace
+    root = tmp_path / "r"
+    (root / "cobol").mkdir(parents=True)
+    (root / ".archdiag-repo").write_text("")
+    (root / "q.mqsc").write_text("DEFINE QLOCAL(CLM.BRQ) PROCESS(BRP)\n"
+                                 "DEFINE PROCESS(BRP) APPLICID(CLMX)\n")
+    (root / "cobol" / "S.cbl").write_text(
+        "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. S.\n       PROCEDURE DIVISION.\n"
+        "           EXEC CICS START TRANSID('CKBR') FROM('Q=clm.brq') END-EXEC.\n")
+    r = resolve(scan_workspace(tmp_path, Config()), Config())
+    trig = [e for e in r.edges if e.src == "queue:CLM.BRQ" and e.op == "triggers"]
+    assert trig and all("case" in (e.reason or "") for e in trig)

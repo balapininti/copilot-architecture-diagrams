@@ -44,9 +44,9 @@ def _commands(text: str) -> List[Tuple[int, str]]:
         # meaningful information; columns 73 through 80 are ignored."
         # https://publibfp.boulder.ibm.com/epubs/html/csqzaj06/csqzaj060f.htm
         line = drop_sequence_area(raw).rstrip()
+        if not line.strip() or line.lstrip()[:1] == "*":
+            continue  # comment and blank lines are ignored, inside a continuation too
         if cont is None:
-            if not line.strip() or line.lstrip()[:1] == "*":
-                continue
             first = no
         elif cont == "+":
             line = line.lstrip()
@@ -130,7 +130,7 @@ def collect_mq(repo: str, rel: str, text: str, ftype: Optional[str],
             continue
         q = _CKBR_Q.search(stmt)
         if q:
-            ctx.ckbr_queues.add(q.group(1).upper())
+            ctx.ckbr_queues.add(q.group(1))  # MQ names are case-sensitive: kept as written
             continue
         f = _CKBR_FROM.search(stmt)
         if f is None or f.group(1):  # no FROM, or a literal FROM without Q=
@@ -149,7 +149,7 @@ def _ckbr_statements(text: str, ftype: Optional[str]) -> List[str]:
         if cobol and len(raw) > 6 and raw[6] in "*/":
             continue
         start = end = i
-        for j in range(i, max(-1, i - 30), -1):
+        for j in range(i, -1, -1):  # back to the EXEC CICS that opens this statement
             up = lines[j].upper()
             if j < i and "END-EXEC" in up:
                 break
@@ -157,11 +157,16 @@ def _ckbr_statements(text: str, ftype: Optional[str]) -> List[str]:
                 start = j
                 break
         if start != i or "EXEC" in raw.upper():
-            for j in range(i, min(len(lines), i + 30)):
+            for j in range(i, len(lines)):  # on to its END-EXEC, however long it is
+                if j > i and re.search(r"\bEXEC\s+(?:CICS|SQL)\b", lines[j].upper()):
+                    break  # no END-EXEC before the next EXEC: stop at this line
+                end = j
                 if "END-EXEC" in lines[j].upper():
-                    end = j
                     break
-        stmt = " ".join(lines[start:end + 1])
+        part = lines[start:end + 1]
+        if cobol:
+            part = [ln for ln in part if not (len(ln) > 6 and ln[6] in "*/")]
+        stmt = " ".join(part)
         out.append(stmt)
     return out
 
@@ -200,10 +205,20 @@ def scan_mqsc(repo: str, relpath: str, text: str,
         if kind == "remote":
             attrs["rqmname"] = _value(kws, "RQMNAME")
             attrs["xmitq"] = _value(kws, "XMITQ")
+        named = [x for x in (name, initq) if x]
+        exact = any(x in ctx.ckbr_queues for x in named)
+        folded = sorted(c for c in ctx.ckbr_queues
+                        if c not in named and c.upper() in [x.upper() for x in named])
         attrs["bridge"] = bool(
             "CICS BRIDGE" in descr.upper()
             or (process is not None and process in ctx.ckbr_processes)
-            or name.upper() in ctx.ckbr_queues
-            or (initq is not None and initq.upper() in ctx.ckbr_queues))
+            or exact or folded)
+        if folded and not exact and attrs["bridge"] and not (
+                "CICS BRIDGE" in descr.upper()
+                or (process is not None and process in ctx.ckbr_processes)):
+            # a match only when case is ignored: kept, but never certain
+            attrs["bridge_note"] = ("a CKBR start names Q=%s, which matches this queue only "
+                                    "when case is ignored (MQ names are case-sensitive)"
+                                    % ", ".join(folded))
         nodes.append(Node("queue:" + name, "queue", name, repo, [ev], attrs))
     return nodes, []
