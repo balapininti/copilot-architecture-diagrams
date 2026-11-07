@@ -30,6 +30,9 @@ def _register_builtin_scanners() -> None:
     from . import jcl
     SCANNERS["jcl"] = jcl.scan_jcl
     SCANNERS["proc"] = jcl.scan_proc
+    from . import cobol
+    SCANNERS["cobol"] = cobol.scan_cobol
+    SCANNERS["copybook"] = cobol.scan_copybook
 
 
 def _collect_pass(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
@@ -65,7 +68,13 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             continue
         new_nodes, new_refs = scanner(repo_name, rel, text, ctx)
         for n in new_nodes:
-            nodes.setdefault(n.id, n)
+            have = nodes.get(n.id)
+            if have is None:
+                nodes[n.id] = n
+                continue
+            for ev in n.evidence:  # same id defined again: keep every definition site
+                if ev not in have.evidence:
+                    have.evidence.append(ev)
         refs.extend(new_refs)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed)

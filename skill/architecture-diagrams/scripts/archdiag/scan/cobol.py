@@ -1,0 +1,731 @@
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Optional, Tuple
+
+from ..model import Evidence, Node, Ref
+from . import ScanContext
+
+# --------------------------------------------------------------------------
+# Source preparation: sequence area, comments, continuation, literal masking
+# --------------------------------------------------------------------------
+
+AREA_B_WIDTH = 65  # columns 8-72
+
+_VERBS = frozenset("""
+ACCEPT ADD ALTER CALL CANCEL CLOSE COMPUTE CONTINUE DELETE DISPLAY DIVIDE
+ELSE END END-CALL END-EVALUATE END-IF END-PERFORM END-READ EVALUATE EXEC EXIT
+GO GOBACK IF INITIALIZE INSPECT MERGE MOVE MULTIPLY NEXT NOT ON OPEN PERFORM
+READ RELEASE RETURN REWRITE SEARCH SET SORT START STOP STRING SUBTRACT
+UNSTRING WHEN WRITE EXCEPTION RETURNING USING GIVING
+""".split())
+
+
+def _is_fixed(lines: List[str]) -> bool:
+    """Fixed format unless the text clearly starts inside columns 1-6 (free format)."""
+    fixed = free = blank7 = 0
+    for ln in lines:
+        if not ln.strip():
+            continue
+        head = ln[:6]
+        if len(ln) > 6 and ln[6] in "*/-" and not head.strip(" 0123456789"):
+            fixed += 1
+        elif head.strip().isdigit():
+            fixed += 1
+        elif not head.strip():
+            if not ln[6:7].strip():
+                blank7 += 1
+        elif ln[0] != "*":
+            free += 1
+    if fixed:
+        return True
+    return not free > blank7
+
+
+def _cut(s: str, delim: Optional[str]) -> Tuple[str, Optional[str]]:
+    """Drop a trailing '*>' comment; return (text, delimiter still open at end of line)."""
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if delim:
+            if ch == delim:
+                if i + 1 < n and s[i + 1] == delim:
+                    i += 1
+                else:
+                    delim = None
+        elif ch in "'\"":
+            delim = ch
+        elif ch == "*" and i + 1 < n and s[i + 1] == ">":
+            return s[:i].rstrip(), delim
+        i += 1
+    return s.rstrip(), delim
+
+
+class _Piece:
+    __slots__ = ("line", "text", "glue", "delim")
+
+    def __init__(self, line: int, text: str, glue: str, delim: Optional[str]) -> None:
+        self.line = line
+        self.text = text
+        self.glue = glue
+        self.delim = delim
+
+
+class _Src:
+    """The code of one source file as a single string with offset -> line mapping."""
+
+    def __init__(self, text: str) -> None:
+        raw_lines = text.split("\n")
+        fixed = _is_fixed(raw_lines)
+        pieces: List[_Piece] = []
+        self.line_text: Dict[int, str] = {}
+        for no, raw in enumerate(raw_lines, 1):
+            raw = raw.rstrip("\r")
+            if fixed:
+                ind = raw[6] if len(raw) > 6 else " "
+                if ind in "*/":
+                    continue
+                body = raw[7:72]
+            else:
+                if raw[:1] in ("*", "/"):
+                    continue
+                body = raw
+                ind = " "
+            if not body.strip():
+                continue
+            self.line_text[no] = body.strip()
+            if ind == "-" and pieces:
+                prev = pieces[-1]
+                if prev.delim:
+                    prev.text = prev.text.ljust(AREA_B_WIDTH)
+                    s = body.lstrip()
+                    if s[:1] in ("'", '"'):
+                        s = s[1:]
+                    txt, dl = _cut(s, prev.delim)
+                    pieces.append(_Piece(no, txt, "", dl))
+                else:
+                    txt, dl = _cut(body.strip(), None)
+                    pieces.append(_Piece(no, txt, " ", dl))
+                continue
+            txt, dl = _cut(body, None)
+            pieces.append(_Piece(no, txt, "\n", dl))
+        out: List[str] = []
+        self.starts: List[int] = []
+        self.plines: List[int] = []
+        pos = 0
+        for i, p in enumerate(pieces):
+            glue = p.glue if i else ""
+            pos += len(glue)
+            self.starts.append(pos)
+            self.plines.append(p.line)
+            out.append(glue)
+            out.append(p.text)
+            pos += len(p.text)
+        self.blob = "".join(out)
+        self.masked = _mask(self.blob)
+
+    def line_of(self, off: int) -> int:
+        if not self.plines:
+            return 1
+        lo, hi = 0, len(self.starts)
+        while lo < hi:  # last piece starting at or before off
+            mid = (lo + hi) // 2
+            if self.starts[mid] <= off:
+                lo = mid + 1
+            else:
+                hi = mid
+        return self.plines[max(lo - 1, 0)]
+
+
+def _mask(s: str) -> str:
+    """Replace the inside of every string literal with '_' (quotes and newlines kept)."""
+    out: List[str] = []
+    delim: Optional[str] = None
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if delim:
+            if ch == "\n":
+                delim = None
+                out.append(ch)
+            elif ch == delim:
+                if i + 1 < n and s[i + 1] == delim:
+                    out.append("__")
+                    i += 1
+                else:
+                    delim = None
+                    out.append(ch)
+            else:
+                out.append("_")
+        else:
+            if ch in "'\"":
+                delim = ch
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+# --------------------------------------------------------------------------
+# Patterns (applied to the masked text; values are read from the original)
+# --------------------------------------------------------------------------
+
+_I = re.I
+_NB = r"(?<![\w-])"
+_LIT = r"(['\"])_*\1"
+
+_PROGRAM_ID = re.compile(_NB + r"PROGRAM-ID\b", _I)
+_PROGRAM_NAME = re.compile(r"\s*\.?\s*['\"]?([A-Za-z0-9#$@][\w#$@-]*)")
+_EXEC = re.compile(_NB + r"EXEC\s+(SQL|CICS)\b", _I)
+_END_EXEC = re.compile(_NB + r"END-EXEC\b", _I)
+_COPY = re.compile(_NB + r"COPY\s+((['\"])_*\2|[A-Za-z0-9][\w#$@-]*)", _I)
+_CALL = re.compile(_NB + r"CALL\s+((['\"])_*\2|[A-Za-z][\w-]*)", _I)
+_SELECT_FILE = re.compile(
+    _NB + r"SELECT\s+(?:OPTIONAL\s+)?([A-Za-z][\w-]*)\s+ASSIGN\s+(?:TO\s+)?"
+    r"((['\"])_*\3|[A-Za-z0-9][\w#$@-]*)", _I)
+_OPEN = re.compile(_NB + r"OPEN\s+(?=INPUT|OUTPUT|I-O|EXTEND)", _I)
+_VALUE_ITEM = re.compile(
+    _NB + r"(\d{1,2})\s+([A-Za-z][\w-]*)\s+((?:[^.]|\.(?=\S))*?)"
+    r"(?<![\w-])VALUES?\s+(?:IS\s+|ARE\s+)?((['\"])_*\5)", _I)
+_MOVE = re.compile(
+    _NB + r"MOVE\s+(?:CORR(?:ESPONDING)?\s+)?((['\"])_*\2|[A-Za-z][\w-]*)\s+TO\s+", _I)
+_IDENT = re.compile(r"\s*([A-Za-z][\w-]*)")
+_QUAL = re.compile(r"\s+(?:OF|IN)\s+[A-Za-z][\w-]*", _I)
+_SUBSCR = re.compile(r"\s*\([^)]*\)")
+_ARG_TOK = re.compile(r"(['\"])_*\1|[A-Za-z][\w-]*|\d+|\.")
+
+MQ_PUTGET = {"MQPUT": "put", "MQPUT1": "put", "MQGET": "get"}
+MQ_API = frozenset("""
+MQCONN MQCONNX MQDISC MQOPEN MQCLOSE MQINQ MQSET MQCMIT MQBACK MQBEGIN MQSUB
+MQSUBRQ MQCRTMH MQDLTMH MQSETMP MQINQMP MQDLTMP MQMHBUF MQBUFMH MQCB MQCTL
+MQSTAT
+""".split())
+_MODES = {"INPUT": "input", "OUTPUT": "output", "I-O": "i-o", "EXTEND": "extend"}
+
+_SQL_TOKEN = re.compile(
+    r"'_*'"
+    r"|:[\w#$@-]+(?:\.[\w-]+)*"
+    r"|\d[\w.]*"
+    r"|(?:[A-Za-z_#$@][\w#$@]*|\"_*\")(?:\.(?:[A-Za-z_#$@][\w#$@]*|\"_*\")){0,2}"
+    r"|\S")
+_SQL_NOT_TABLE = frozenset(
+    "SELECT TABLE LATERAL UNNEST ONLY FINAL NEW OLD XMLTABLE JSON_TABLE VALUES".split())
+_ALIAS_STOP = frozenset("""
+WHERE GROUP ORDER HAVING UNION EXCEPT INTERSECT JOIN INNER LEFT RIGHT FULL CROSS
+NATURAL ON USING FETCH WITH FOR SET OPTIMIZE QUERY READ ISOLATION SKIP LIMIT
+OFFSET CONCURRENT INTO VALUES WHEN THEN ELSE END SELECT AND OR
+""".split())
+_FUNC_FROM = frozenset("EXTRACT TRIM SUBSTRING POSITION OVERLAY".split())
+_DUMMY_TABLES = frozenset(["SYSIBM.SYSDUMMY1", "SYSDUMMY1"])
+
+_CICS_READ = frozenset("READ STARTBR READNEXT READPREV RESETBR ENDBR".split())
+_CICS_WRITE = frozenset("WRITE REWRITE DELETE".split())
+
+
+def _unq(text: str) -> str:
+    text = text.strip()
+    if len(text) >= 2 and text[0] in "'\"" and text[-1] == text[0]:
+        q = text[0]
+        return text[1:-1].replace(q + q, q)
+    return text
+
+
+# --------------------------------------------------------------------------
+# Scanner
+# --------------------------------------------------------------------------
+
+class _Scan:
+    def __init__(self, repo: str, relpath: str, text: str) -> None:
+        self.repo = repo
+        self.rel = relpath
+        self.src = _Src(text)
+        self.refs: List[Ref] = []
+        self.nodes: List[Node] = []
+        s = self.src
+        # EXEC blocks, and the COBOL text with them blanked out
+        self.execs: List[Tuple[str, int, int]] = []
+        cm = list(s.masked)
+        pos = 0
+        while True:
+            m = _EXEC.search(s.masked, pos)
+            if not m:
+                break
+            e = _END_EXEC.search(s.masked, m.end())
+            nxt = _EXEC.search(s.masked, m.end())
+            if e and (not nxt or e.start() < nxt.start()):
+                end, after = e.start(), e.end()
+            elif nxt:
+                end, after = nxt.start(), nxt.start()
+            else:
+                end, after = len(s.masked), len(s.masked)
+            self.execs.append((m.group(1).upper(), m.end(), end))
+            for i in range(m.start(), after):
+                if cm[i] != "\n":
+                    cm[i] = " "
+            pos = max(after, m.end())
+        self.cm = "".join(cm)
+
+    # -- helpers --------------------------------------------------------
+    def ev(self, off: int) -> Evidence:
+        line = self.src.line_of(off)
+        return Evidence(self.repo, self.rel, line, self.src.line_text.get(line, ""))
+
+    def lit(self, s: int, e: int) -> str:
+        """Value of the literal whose quotes are at s and e-1 (e exclusive)."""
+        return _unq(self.src.blob[s:e])
+
+    def add(self, pid: str, op: str, kind: str, name: Optional[str], off: int,
+            reason: Optional[str] = None, candidates: Optional[List[str]] = None,
+            attrs: Optional[dict] = None) -> None:
+        self.refs.append(Ref(pid, op, kind, name, self.ev(off), reason,
+                             list(candidates or []), dict(attrs or {})))
+
+    # -- program discovery ----------------------------------------------
+    def programs(self, stem: str) -> List[Tuple[str, int, int, int]]:
+        s = self.src
+        found: List[Tuple[str, int]] = []
+        for m in _PROGRAM_ID.finditer(s.masked):
+            nm = _PROGRAM_NAME.match(s.blob, m.end())
+            if nm:
+                found.append((nm.group(1).upper(), m.start()))
+        if not found:
+            return [(stem.upper(), 0, len(s.masked), 0)]
+        out = []
+        for i, (pid, start) in enumerate(found):
+            end = found[i + 1][1] if i + 1 < len(found) else len(s.masked)
+            out.append((pid, start if i else 0, end, start))
+        return out
+
+    # -- one program ----------------------------------------------------
+    def scan_program(self, pid: str, a: int, b: int) -> Dict[str, str]:
+        s = self.src
+        cm = self.cm
+        values: Dict[str, List[str]] = {}
+        for m in _VALUE_ITEM.finditer(cm, a, b):
+            if m.group(1) == "88":
+                continue
+            v = self.lit(m.start(4), m.end(4)).strip()
+            lst = values.setdefault(m.group(2).upper(), [])
+            if v and v not in lst:
+                lst.append(v)
+
+        # COPY
+        for m in _COPY.finditer(cm, a, b):
+            name = self.lit(m.start(1), m.end(1)) if m.group(2) else m.group(1)
+            self.add(pid, "copy", "copybook", name.strip().upper(), m.start(1))
+
+        # CALL (MQ calls are collected separately)
+        mq_calls: List[Tuple[int, str, int]] = []   # (offset, API name, end of match)
+        for m in _CALL.finditer(cm, a, b):
+            if m.group(2):
+                name = self.lit(m.start(1), m.end(1)).strip().upper()
+                if name in MQ_PUTGET or name in MQ_API:
+                    mq_calls.append((m.start(), name, m.end()))
+                    continue
+                self.add(pid, "call", "program", name, m.start(1))
+            else:
+                var = m.group(1)
+                self.variable(pid, "call", "program", var, m.start(1),
+                              "CALL through variable " + var, values)
+
+        # MOVEs (literal and identifier sources) for MQ queue resolution
+        moves = self.collect_moves(a, b)
+        self.mq(pid, mq_calls, moves, values)
+
+        # file modes
+        files = self.file_modes(a, b)
+
+        # EXEC blocks
+        for kind, bs, be in self.execs:
+            if bs < a or bs >= b:
+                continue
+            if kind == "SQL":
+                self.sql(pid, bs, be, values)
+            else:
+                self.cics(pid, bs, be, values)
+        return files
+
+    def variable(self, pid: str, op: str, kind: str, var: str, off: int, reason: str,
+                 values: Dict[str, List[str]]) -> None:
+        self.add(pid, op, kind, None, off, reason, values.get(var.upper(), []))
+
+    # -- files ----------------------------------------------------------
+    def file_modes(self, a: int, b: int) -> Dict[str, str]:
+        s = self.src
+        dd_of: Dict[str, str] = {}
+        for m in _SELECT_FILE.finditer(self.cm, a, b):
+            op = self.lit(m.start(2), m.end(2)) if m.group(3) else m.group(2)
+            dd_of[m.group(1).upper()] = _ddname(op.strip())
+        seen: Dict[str, set] = {}
+        for m in _OPEN.finditer(self.cm, a, b):
+            pos = m.end()
+            mode = None
+            while True:
+                t = re.compile(r"[\s,]*([A-Za-z][\w-]*)").match(self.cm, pos, b)
+                if not t:
+                    break
+                w = t.group(1).upper()
+                if w in _MODES:
+                    mode = _MODES[w]
+                elif w in ("WITH", "NO", "REWIND", "LOCK") or w in _VERBS:
+                    if w in _VERBS or w == "LOCK":
+                        break
+                elif mode and w in dd_of:
+                    seen.setdefault(w, set()).add(mode)
+                else:
+                    break
+                pos = t.end()
+                if self.cm[pos:pos + 1] == ".":
+                    break
+        out: Dict[str, str] = {}
+        for fname, modes in seen.items():
+            if len(modes) == 1:
+                mode = next(iter(modes))
+            elif modes == {"output", "extend"}:
+                mode = "extend"
+            else:
+                mode = "i-o"
+            out[dd_of[fname]] = mode
+        return out
+
+    # -- MOVE / MQ ------------------------------------------------------
+    def collect_moves(self, a: int, b: int) -> Dict[str, List[Tuple[int, str, str]]]:
+        """target name -> [(offset, 'lit'|'var', source)] in program order."""
+        out: Dict[str, List[Tuple[int, str, str]]] = {}
+        cm = self.cm
+        for m in _MOVE.finditer(cm, a, b):
+            if m.group(2):
+                kind, srcv = "lit", self.lit(m.start(1), m.end(1)).strip()
+            else:
+                kind, srcv = "var", m.group(1).upper()
+            pos = m.end()
+            while True:
+                t = _IDENT.match(cm, pos, b)
+                if not t or t.group(1).upper() in _VERBS:
+                    break
+                out.setdefault(t.group(1).upper(), []).append((m.start(), kind, srcv))
+                pos = t.end()
+                q = _QUAL.match(cm, pos, b)
+                if q:
+                    pos = q.end()
+                sb = _SUBSCR.match(cm, pos, b)
+                if sb:
+                    pos = sb.end()
+                c = re.compile(r"\s*,").match(cm, pos, b)
+                if c:
+                    pos = c.end()
+        return out
+
+    def mq(self, pid: str, calls: List[Tuple[int, str, int]],
+           moves: Dict[str, List[Tuple[int, str, str]]],
+           values: Dict[str, List[str]]) -> None:
+        if not any(n in MQ_PUTGET for _, n, _ in calls):
+            return
+        objmoves = sorted(
+            (off, kind, srcv)
+            for tgt, lst in moves.items() if tgt.endswith("OBJECTNAME")
+            for off, kind, srcv in lst)
+        obj_values: List[str] = []
+        for k, v in values.items():
+            if k.endswith("OBJECTNAME"):
+                obj_values.extend(x for x in v if x not in obj_values)
+
+        def source_names(off: int, kind: str, srcv: str) -> List[str]:
+            if kind == "lit":
+                return [srcv]
+            prior = [x for x in moves.get(srcv, []) if x[1] == "lit" and x[0] < off]
+            if prior:
+                return [prior[-1][2]]
+            if values.get(srcv):
+                return list(values[srcv])
+            out: List[str] = []
+            for x in moves.get(srcv, []):
+                if x[1] == "lit" and x[2] not in out:
+                    out.append(x[2])
+            return out
+
+        def resolve_at(off: int) -> List[str]:
+            prior = [m for m in objmoves if m[0] < off]
+            if prior:
+                return source_names(*prior[-1])
+            if obj_values:
+                return list(obj_values)
+            names: List[str] = []
+            for m in objmoves:
+                for n in source_names(*m):
+                    if n not in names:
+                        names.append(n)
+            return names
+
+        def args_of(end: int) -> List[Optional[str]]:
+            m = re.compile(r"\s+USING\s+", _I).match(self.cm, end)
+            if not m:
+                return []
+            stop = self.cm.find(".", m.end())
+            seg = self.cm[m.end(): stop if stop >= 0 else len(self.cm)]
+            seg = re.sub(r"\([^)]*\)", " ", seg)
+            args: List[Optional[str]] = []
+            for t in _ARG_TOK.finditer(seg):
+                w = t.group(0)
+                if w.upper() in ("BY", "REFERENCE", "CONTENT", "VALUE", "ADDRESS", "OF"):
+                    continue
+                if w.upper() in _VERBS:
+                    break
+                args.append(w.upper() if w[0].isalpha() else None)
+            return args
+
+        opens: List[Tuple[int, Optional[str]]] = []   # (offset, handle variable)
+        for off, name, end in calls:
+            if name == "MQOPEN":
+                ar = args_of(end)
+                opens.append((off, ar[3] if len(ar) > 3 else None))
+
+        for off, name, end in calls:
+            op = MQ_PUTGET.get(name)
+            if not op:
+                continue
+            names: List[str] = []
+            if name != "MQPUT1":
+                ar = args_of(end)
+                hobj = ar[1] if len(ar) > 1 else None
+                mine = [o for o, h in opens if h and h == hobj]
+                if mine:
+                    prior = [o for o in mine if o < off]
+                    pick = [prior[-1]] if prior else mine
+                    for o in pick:
+                        for n in resolve_at(o):
+                            if n not in names:
+                                names.append(n)
+                else:
+                    names = resolve_at(off)
+            else:
+                names = resolve_at(off)
+            if len(names) == 1:
+                self.add(pid, op, "queue", names[0], off)
+            elif names:
+                self.add(pid, op, "queue", None, off,
+                         "queue name has several possible values", names)
+            else:
+                self.add(pid, op, "queue", None, off, "queue name not found in program")
+
+    # -- SQL ------------------------------------------------------------
+    def sql(self, pid: str, bs: int, be: int, values: Dict[str, List[str]]) -> None:
+        s = self.src
+        body = re.sub(r"--[^\n]*", lambda m: " " * len(m.group()), s.masked[bs:be])
+        toks = [(m.group(0), m.start() + bs) for m in _SQL_TOKEN.finditer(body)]
+        if not toks:
+            return
+        up = [t.upper() for t, _ in toks]
+        kind = up[0]
+
+        def name_at(i: int) -> Optional[str]:
+            if i >= len(toks):
+                return None
+            t = toks[i][0]
+            if t.upper() in _SQL_NOT_TABLE or not re.match(r'^("|[A-Za-z_#$@])', t):
+                return None
+            return s.blob[toks[i][1]: toks[i][1] + len(t)]
+
+        if kind == "INCLUDE":
+            n = name_at(1)
+            if n:
+                self.add(pid, "copy", "copybook", n.upper(), toks[1][1])
+            return
+        if kind in ("PREPARE", "EXECUTE") and (kind == "PREPARE" or up[1:2] == ["IMMEDIATE"]):
+            if kind == "EXECUTE" and up[1:2] != ["IMMEDIATE"]:
+                return
+            host = next((t for t, _ in toks[1:] if t.startswith(":")), None)
+            self.add(pid, "select", "table", None, toks[0][1],
+                     "dynamic SQL" + (" in " + host[1:] if host else "")
+                     + ", table and operation set at run time")
+            return
+        if kind == "DECLARE" and "CURSOR" not in up[:6]:
+            return
+        if kind in ("LOCK", "FETCH", "OPEN", "CLOSE", "COMMIT", "ROLLBACK", "WHENEVER",
+                    "CONNECT", "CALL", "GRANT", "REVOKE", "SAVEPOINT", "RELEASE"):
+            return
+
+        ctes = set()
+        if kind == "WITH":
+            depth = 0
+            for i, t in enumerate(up):
+                if t == "(":
+                    depth += 1
+                elif t == ")":
+                    depth -= 1
+                elif depth == 0 and i and re.match(r"[A-Z_#$@]", t):
+                    j = i + 1
+                    if j < len(up) and up[j] == "(":
+                        d = 0
+                        while j < len(up):
+                            d += up[j] == "("
+                            d -= up[j] == ")"
+                            j += 1
+                            if d == 0:
+                                break
+                    if j + 1 < len(up) and up[j] == "AS" and up[j + 1] == "(":
+                        ctes.add(t)
+
+        def record(op: str, i: int) -> bool:
+            n = name_at(i)
+            if not n or n.upper() in ctes or n.upper() in _DUMMY_TABLES:
+                return False
+            self.add(pid, op, "table", n, toks[i][1])
+            return True
+
+        def table_list(op: str, i: int, many: bool) -> None:
+            j = i
+            while j < len(toks):
+                if up[j] == "(" or not record(op, j):
+                    return
+                j += 1
+                if j < len(toks) and up[j] == "AS":
+                    j += 2
+                elif j < len(toks) and re.match(r"[A-Z_#$@\"]", up[j]) and up[j] not in _ALIAS_STOP:
+                    j += 1
+                if many and j < len(toks) and up[j] == ",":
+                    j += 1
+                    continue
+                return
+
+        if kind == "INSERT" and up[1:2] == ["INTO"]:
+            record("insert", 2)
+        elif kind == "UPDATE":
+            record("update", 1)
+        elif kind == "MERGE" and up[1:2] == ["INTO"]:
+            record("update", 2)
+        stack: List[bool] = []
+        for i, t in enumerate(up):
+            if t == "(":
+                stack.append(i > 0 and up[i - 1] in _FUNC_FROM)
+            elif t == ")":
+                if stack:
+                    stack.pop()
+            elif t == "FROM" and not any(stack) and up[i - 1:i] != ["DISTINCT"]:
+                if kind == "DELETE" and i == 1:
+                    record("delete", i + 1)
+                else:
+                    table_list("select", i + 1, True)
+            elif t == "JOIN":
+                table_list("select", i + 1, False)
+            elif t == "USING" and kind == "MERGE":
+                table_list("select", i + 1, False)
+
+    # -- CICS -----------------------------------------------------------
+    def cics_options(self, bs: int, be: int) -> Tuple[str, List[Tuple[str, int, int]]]:
+        m = self.src.masked
+        pos = bs
+        words: List[Tuple[str, int, int]] = []
+        cmd = ""
+        word = re.compile(r"\s*([A-Za-z][\w-]*)")
+        while pos < be:
+            w = word.match(m, pos, be)
+            if not w:
+                nxt = re.compile(r"\s*\S").match(m, pos, be)
+                if not nxt:
+                    break
+                pos = nxt.end()
+                continue
+            name = w.group(1).upper()
+            pos = w.end()
+            p = re.compile(r"\s*\(").match(m, pos, be)
+            if p:
+                depth = 1
+                j = p.end()
+                while j < be and depth:
+                    depth += m[j] == "("
+                    depth -= m[j] == ")"
+                    j += 1
+                words.append((name, p.end(), j - 1))
+                pos = j
+            else:
+                if not cmd:
+                    cmd = name
+                else:
+                    words.append((name, -1, -1))
+        return cmd, words
+
+    def cics(self, pid: str, bs: int, be: int, values: Dict[str, List[str]]) -> None:
+        cmd, opts = self.cics_options(bs, be)
+        d = {n: (s, e) for n, s, e in opts if s >= 0}
+        s = self.src
+
+        def arg(name: str) -> Optional[Tuple[str, bool, int]]:
+            if name not in d:
+                return None
+            a, e = d[name]
+            raw = s.blob[a:e]
+            lead = len(raw) - len(raw.lstrip())
+            t = raw.strip()
+            is_lit = bool(s.masked[a + lead: a + lead + 1] in ("'", '"'))
+            return (_unq(t).strip() if is_lit else t), is_lit, a + lead
+
+        def emit(op: str, kind: str, optname: str, label: str, attrs: Optional[dict] = None,
+                 alt: Optional[str] = None) -> None:
+            r = arg(optname)
+            if r is None and alt:
+                r = arg(alt)
+            if r is None:
+                return
+            val, is_lit, off = r
+            if is_lit:
+                self.add(pid, op, kind, val, off, attrs=attrs)
+                return
+            if re.match(r"^[A-Za-z][\w-]*$", val):
+                reason = (f"{cmd} to {val}, name set at run time" if optname == "PROGRAM"
+                          else f"{label} {val}, name set at run time")
+                self.add(pid, op, kind, None, off, reason, values.get(val.upper(), []), attrs)
+            else:
+                self.add(pid, op, kind, None, off,
+                         f"{label} {val}, name set at run time", [], attrs)
+
+        if cmd == "LINK":
+            emit("link", "program", "PROGRAM", "LINK PROGRAM")
+        elif cmd == "XCTL":
+            emit("xctl", "program", "PROGRAM", "XCTL PROGRAM")
+        elif cmd == "START":
+            emit("start", "transaction", "TRANSID", "START TRANSID")
+        elif cmd == "RETURN":
+            emit("return_transid", "transaction", "TRANSID", "RETURN TRANSID")
+        elif cmd == "SEND" and "MAP" in d:
+            emit("send_map", "map", "MAPSET", "SEND MAPSET", alt="MAP")
+        elif cmd in _CICS_READ or cmd in _CICS_WRITE:
+            emit("cics_file", "cicsfile", "FILE", cmd + " FILE",
+                 {"io": "read" if cmd in _CICS_READ else "write"})
+
+
+def _ddname(operand: str) -> str:
+    """ddname from an ASSIGN operand such as UT-S-CLMIN, S-CLMIN or 'CLMIN'."""
+    op = operand.upper()
+    m = re.match(r"^(?:[A-Z]{2}-)?[A-Z]-([A-Z0-9#$@]+)$", op)
+    return m.group(1) if m else op
+
+
+def _stem(relpath: str) -> str:
+    base = relpath.replace("\\", "/").rsplit("/", 1)[-1]
+    dot = base.rfind(".")
+    return base[:dot] if dot > 0 else base
+
+
+def scan_cobol(repo: str, relpath: str, text: str,
+               ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
+    sc = _Scan(repo, relpath, text)
+    nodes: List[Node] = []
+    for pid, a, b, at in sc.programs(_stem(relpath)):
+        files = sc.scan_program("program:" + pid, a, b)
+        nodes.append(Node("program:" + pid, "program", pid, repo,
+                          [sc.ev(at)], {"files": files}))
+    return nodes, sc.refs
+
+
+def scan_copybook(repo: str, relpath: str, text: str,
+                  ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
+    name = _stem(relpath).upper()
+    first, first_text = 1, ""
+    for no, ln in enumerate(text.split("\n"), 1):
+        if ln.strip():
+            first, first_text = no, ln.strip()
+            break
+    return [Node("copybook:" + name, "copybook", name, repo,
+                 [Evidence(repo, relpath, first, first_text)])], []

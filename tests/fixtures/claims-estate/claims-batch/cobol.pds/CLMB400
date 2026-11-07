@@ -1,0 +1,5 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CLMB400.
+       PROCEDURE DIVISION.
+           CALL 'CLMB210'
+           GOBACK.

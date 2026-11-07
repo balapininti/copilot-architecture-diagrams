@@ -1,0 +1,44 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CLMO100.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+           COPY CLMREC.
+           COPY DFHAID.
+       01  WS-NEXT-PGM PIC X(8).
+       01  WS-RSPQ PIC X(48) VALUE 'CLM.RSP'.
+       01  HOBJ-REQ PIC S9(9) BINARY.
+       01  HOBJ-RSP PIC S9(9) BINARY.
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           EXEC SQL
+               SELECT C.CLAIM_ID, P.POLICY_NO
+                 INTO :WS-CLM-ID, :WS-POL-NO
+                 FROM CLAIM C
+                 JOIN POLICY P ON P.POLICY_ID = C.POLICY_ID
+                WHERE C.CLAIM_ID = :WS-ID
+           END-EXEC
+           EXEC SQL
+               SELECT STATUS INTO :WS-STATUS FROM CLMS.CLM
+           END-EXEC
+           EXEC CICS LINK PROGRAM('CLMO110')
+                COMMAREA(WS-COMM) LENGTH(100)
+           END-EXEC
+           EXEC CICS XCTL PROGRAM(WS-NEXT-PGM)
+           END-EXEC
+           EXEC CICS READ FILE('CLMMAST') INTO(WS-REC)
+                RIDFLD(WS-KEY)
+           END-EXEC
+           EXEC CICS SEND MAP('CLMM1') MAPSET('CLMM01')
+           END-EXEC
+           MOVE 'CLM.REQ.LQ' TO MQOD-OBJECTNAME
+           CALL 'MQOPEN' USING HCONN MQOD OPEN-OPTIONS HOBJ-REQ
+                               COMPCODE REASON
+           CALL 'MQGET' USING HCONN HOBJ-REQ MQMD MQGMO
+                              BUFLEN BUFFER DATALEN COMPCODE REASON
+           MOVE WS-RSPQ TO MQOD-OBJECTNAME
+           CALL 'MQOPEN' USING HCONN MQOD OPEN-OPTIONS HOBJ-RSP
+                               COMPCODE REASON
+           CALL 'MQPUT' USING HCONN HOBJ-RSP MQMD MQPMO
+                              BUFLEN BUFFER COMPCODE REASON
+           EXEC CICS RETURN TRANSID('CLMU')
+           END-EXEC.
