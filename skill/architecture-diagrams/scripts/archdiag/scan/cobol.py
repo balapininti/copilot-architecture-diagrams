@@ -318,7 +318,14 @@ def _copy_clause(blob: str, start: int) -> Tuple[int, Optional[List[List[str]]],
     REPLACING pairs or None, why REPLACING could not be read or None)."""
     i, n = start, len(blob)
     end = n
+    unended: Optional[str] = None  # the statement that starts where no period ended COPY
     while i < n:
+        if blob[i] == "\n":
+            w = re.match(r"\s*([A-Za-z][\w-]*)", blob[i + 1:i + 80])
+            if w and (w.group(1).upper() in _VERBS or w.group(1).upper() == "COPY") \
+                    and w.group(1).upper() not in ("BY", "IN"):
+                end, unended = i, w.group(1).upper()
+                break
         if blob.startswith("==", i):
             j = blob.find("==", i + 2)
             if j < 0:
@@ -395,6 +402,8 @@ def _copy_clause(blob: str, start: int) -> Tuple[int, Optional[List[List[str]]],
         p += 3
     if not pairs:
         return end, None, "REPLACING without operands"
+    if unended:
+        return end, None, "no period ends the COPY statement before %s" % unended
     return end, pairs, None
 
 
@@ -407,7 +416,9 @@ _NB = r"(?<![\w-])"
 _LIT = r"(['\"])_*\1"
 
 _PROGRAM_ID = re.compile(_NB + r"PROGRAM-ID\b", _I)
-_END_PROGRAM = re.compile(_NB + r"END\s+PROGRAM\s+['\"]?([A-Za-z0-9#$@][\w#$@-]*)['\"]?\s*\.?", _I)
+# on the masked text a quoted name is quotes around '_'s: its value is read from the blob
+_END_PROGRAM = re.compile(_NB + r"END\s+PROGRAM\s+((['\"])_*\2|[A-Za-z0-9#$@][\w#$@-]*)\s*\.?",
+                          _I)
 _PROGRAM_NAME = re.compile(r"\s*\.?\s*['\"]?([A-Za-z0-9#$@][\w#$@-]*)")
 _EXEC = re.compile(_NB + r"EXEC\s+(SQL|CICS)\b", _I)
 _END_EXEC = re.compile(_NB + r"END-EXEC\b", _I)
@@ -568,7 +579,8 @@ class _Scan:
                 found.append((nm.group(1).upper(), m.start()))
         if not found:
             return [(stem.upper(), [(0, n)], 0)]
-        ends = [(m.group(1).upper(), m.start(), m.end()) for m in _END_PROGRAM.finditer(self.cm)]
+        ends = [((self.lit(m.start(1), m.end(1)) if m.group(2) else m.group(1)).strip().upper(),
+                 m.start(), m.end()) for m in _END_PROGRAM.finditer(self.cm)]
         if not ends:
             out = []
             for i, (pid, start) in enumerate(found):
@@ -695,6 +707,8 @@ class _Scan:
                 continue
             if self.segs and not any(x <= bs < y for x, y in self.segs):
                 continue
+            if any(x <= bs < y for x, y in blanks):
+                continue  # an EXEC inside a COPY REPLACING operand is not this program's
             if kind == "SQL":
                 self.sql(pid, bs, be, values)
             else:

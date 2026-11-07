@@ -602,3 +602,40 @@ def test_replacing_operands_are_not_the_programs_own_statements(tmp_path):
            if r.src == "program:P1" and not r.attrs.get("via_copybook")}
     assert own == {("copy", "TAGGED")}
     assert ("call", "SUBX") in _attributed(i, "P1")
+
+
+def test_exec_inside_a_replacing_operand_is_not_the_programs(tmp_path):
+    # review of A5: the EXEC block was blanked from the text but still scanned
+    prog = _copier("P4", "REPLACING\n"
+                         "            ==EXEC CICS LINK PROGRAM('OLDLNK') END-EXEC==\n"
+                         "            BY ==CONTINUE==")
+    cb = "           EXEC CICS LINK PROGRAM('OLDLNK') END-EXEC.\n           CALL 'KEEP'.\n"
+    i = _ws(tmp_path, {"src/P4.cbl": prog, "copylib/TAGGED.cpy": cb})
+    own = {(r.op, r.target_name) for r in i.refs
+           if r.src == "program:P4" and not r.attrs.get("via_copybook")}
+    assert own == {("copy", "TAGGED")}
+    assert set(_attributed(i, "P4")) == {("call", "KEEP")}
+
+
+def test_copy_replacing_without_a_period_stops_at_the_next_statement(tmp_path):
+    prog = ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. P5.\n"
+            "       PROCEDURE DIVISION.\n"
+            "           COPY TAGGED REPLACING ==CALL 'A'== BY ==CALL 'B'==\n"
+            "           CALL 'REALCALL'.\n           GOBACK.\n")
+    i = _ws(tmp_path, {"src/P5.cbl": prog, "copylib/TAGGED.cpy": "           CALL 'A'.\n"})
+    own = {(r.op, r.target_name) for r in i.refs
+           if r.src == "program:P5" and not r.attrs.get("via_copybook")}
+    assert own == {("copy", "TAGGED"), ("call", "REALCALL")}
+    got = _attributed(i, "P5")
+    assert got and all("no period ends the COPY statement before CALL" in r.reason
+                       for r in got.values())
+
+
+def test_end_program_with_a_quoted_name():
+    text = _NESTED.replace("END PROGRAM INNER.", "END PROGRAM 'INNER'.")
+    _, refs = scan(text)
+    by = {}
+    for r in refs:
+        by.setdefault(r.src, set()).add((r.op, r.target_name))
+    assert by["program:INNER"] == {("call", "PGMB"), ("select", "TBLB")}
+    assert ("call", "PGMC") in by["program:OUTER"] and ("call", "PGMB") not in by["program:OUTER"]
