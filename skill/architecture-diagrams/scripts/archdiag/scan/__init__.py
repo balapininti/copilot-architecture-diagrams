@@ -54,6 +54,9 @@ class ScanContext:
     # COBOL copybooks (pass 2): NAME -> the Refs their own text makes (CALL, SQL, CICS, MQ,
     # nested COPY), with src "copybook:NAME"; attributed to every program that COPYs them
     copybook_refs: Dict[str, List[Ref]] = field(default_factory=dict)
+    # COBOL copybooks: NAME -> [(repo, relpath, text)] of every copy, so a COPY ...
+    # REPLACING can be applied per including program
+    copybook_texts: Dict[str, List[Tuple[str, str, str]]] = field(default_factory=dict)
     # files of no type that may be PDS members a job names as data (IDCAMS SYSIN
     # DSN=LIB(MEMBER)): MEMBER -> [(repo, relpath, path)], read on demand (pass 1)
     members: Dict[str, List[Tuple[str, str, Path]]] = field(default_factory=dict)
@@ -411,35 +414,65 @@ def _copybook_refs(refs: List[Ref], nodes: Dict[str, Node], ctx: ScanContext) ->
     program that COPYs them (directly or through other copybooks). Evidence is the
     copybook line; attrs["copy_evidence"] is the program's COPY statement. A copybook
     defined in several places makes them partial."""
+    import json
     from .lexutil import evidence_dict
+    from . import cobol
     out: List[Ref] = []
-    seen: Set[Tuple[str, str]] = set()
+    seen: Set[Tuple[str, str, str]] = set()
 
-    def walk(src: str, name: str, copy_ev: Evidence, depth: int, chain: Tuple[str, ...]) -> None:
+    def statements(name: str, copy_ref: Ref) -> Tuple[List[Ref], Optional[str]]:
+        """The copybook's statements as this COPY sees them: with its REPLACING applied
+        (per including program), or as written plus why they may differ."""
+        pairs = copy_ref.attrs.get("replacing")
+        err = copy_ref.attrs.get("replacing_error")
+        if err:
+            return ctx.copybook_refs.get(name, []), "%s; names in it may differ" % err
+        if not pairs:
+            return ctx.copybook_refs.get(name, []), None
+        got: List[Ref] = []
+        why = None
+        for repo, rel, text in ctx.copybook_texts.get(name, []):
+            rs, e = cobol.copybook_refs_replaced(name, repo, rel, text, pairs)
+            got.extend(rs)
+            if e:
+                why = "COPY %s REPLACING could not be applied (%s); names in it may " \
+                      "differ" % (name, e)
+        return got, why
+
+    def walk(src: str, copy_ref: Ref, copy_ev: Evidence, depth: int, chain: Tuple[str, ...],
+             inherited: Optional[str]) -> None:
+        name = (copy_ref.target_name or "").strip().upper()
         node = nodes.get("copybook:" + name)
-        inner = ctx.copybook_refs.get(name)
-        if node is None or not inner or depth > 8 or name in chain or (src, name) in seen:
+        key = (src, name, json.dumps(copy_ref.attrs.get("replacing"), sort_keys=True))
+        if node is None or depth > 8 or name in chain or key in seen:
             return
-        seen.add((src, name))
+        inner, why = statements(name, copy_ref)
+        if not inner:
+            return
+        seen.add(key)
         amb = None
         if len(node.evidence) > 1:
             amb = "via copybook %s, defined in %d places: %s" % (
                 name, len(node.evidence),
                 ", ".join("%s/%s" % (e.repo, e.path) for e in node.evidence))
+        extra = "; ".join(x for x in (inherited, why) if x) or None
         for r in inner:
-            reason = "; ".join(x for x in (r.reason, amb) if x) or None
+            parts: List[str] = []
+            for x in (r.reason, amb, extra):
+                if x and x not in parts:
+                    parts.append(x)
             attrs = dict(r.attrs)
             attrs["via_copybook"] = name
             attrs["copy_evidence"] = evidence_dict(copy_ev)
-            out.append(Ref(src, r.op, r.target_kind, r.target_name, r.evidence, reason,
-                           list(r.candidates), attrs))
+            out.append(Ref(src, r.op, r.target_kind, r.target_name, r.evidence,
+                           "; ".join(parts) or None, list(r.candidates), attrs))
             if r.op == "copy" and r.target_name:
-                walk(src, r.target_name.strip().upper(), copy_ev, depth + 1, chain + (name,))
+                walk(src, r, copy_ev, depth + 1, chain + (name,), extra)
 
     for r in list(refs):
         if r.op == "copy" and r.target_kind == "copybook" and r.target_name \
                 and not r.src.startswith("copybook:"):
-            walk(r.src, r.target_name.strip().upper(), r.evidence, 0, ())
+            walk(r.src, r, r.evidence, 0, (), None)
     return out
 
 

@@ -529,3 +529,76 @@ def test_mq_move_after_the_call_without_a_loop_does_not_count():
            "           PERFORM 2000-X UNTIL WS-DONE\n           GOBACK.\n"
            "       2000-X.\n           DISPLAY 'X'.\n")[0]
     assert q.target_name == "Q.A"
+
+
+# ------------------------------------------------------------------ COPY REPLACING (A5)
+
+_TAGGED = ("           CALL :PGM: USING WS-A.\n"
+           "           EXEC SQL SELECT A INTO :B FROM :TBL: END-EXEC.\n"
+           "           CALL 'OLDPGM'.\n"
+           "           EXEC SQL DELETE FROM OLDTBL END-EXEC.\n"
+           "           EXEC SQL SELECT A INTO :B FROM XXTB_CLAIM END-EXEC.\n"
+           "           CALL WS-PGM-XX.\n")
+
+
+def _copier(name, replacing):
+    return ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. %s.\n"
+            "       PROCEDURE DIVISION.\n           COPY TAGGED %s.\n           GOBACK.\n"
+            % (name, replacing))
+
+
+def _attributed(i, prog):
+    return {(r.op, r.target_name): r for r in i.refs
+            if r.src == "program:" + prog and r.attrs.get("via_copybook") == "TAGGED"}
+
+
+def test_copy_replacing_is_applied_before_attribution(tmp_path):
+    rep = ("REPLACING ==:PGM:== BY =='CLMB200'==\n"
+           "                ==:TBL:== BY ==CLMS.CLAIM==\n"
+           "                'OLDPGM' BY 'NEWPGM' OLDTBL BY NEWTBL\n"
+           "                LEADING ==XXTB== BY ==PROD==\n"
+           "                TRAILING ==-XX== BY ==-CLM==")
+    i = _ws(tmp_path, {"src/P1.cbl": _copier("P1", rep), "copylib/TAGGED.cpy": _TAGGED})
+    got = _attributed(i, "P1")
+    assert set(got) == {("call", "CLMB200"), ("select", "CLMS.CLAIM"), ("call", "NEWPGM"),
+                        ("delete", "NEWTBL"), ("select", "PROD_CLAIM"), ("call", None)}
+    assert all(r.reason is None for k, r in got.items() if k[1])
+    assert got[("call", None)].reason == "CALL through variable WS-PGM-CLM"
+    # evidence is still the copybook's own line
+    assert (got[("delete", "NEWTBL")].evidence.path,
+            got[("delete", "NEWTBL")].evidence.line) == ("copylib/TAGGED.cpy", 4)
+
+
+def test_copy_replacing_is_per_including_program(tmp_path):
+    i = _ws(tmp_path, {"src/P1.cbl": _copier("P1", "REPLACING 'OLDPGM' BY 'PGMONE'"),
+                       "src/P2.cbl": _copier("P2", "REPLACING 'OLDPGM' BY 'PGMTWO'"),
+                       "src/P3.cbl": _copier("P3", ""),
+                       "copylib/TAGGED.cpy": _TAGGED})
+    assert ("call", "PGMONE") in _attributed(i, "P1") and ("call", "OLDPGM") not in _attributed(i, "P1")
+    assert ("call", "PGMTWO") in _attributed(i, "P2")
+    assert ("call", "OLDPGM") in _attributed(i, "P3")
+
+
+def test_copy_replacing_that_cannot_be_read_makes_attributed_refs_partial(tmp_path):
+    i = _ws(tmp_path, {"src/P1.cbl": _copier("P1", "REPLACING ==:PGM:== BY"),
+                       "copylib/TAGGED.cpy": _TAGGED})
+    got = _attributed(i, "P1")
+    assert got and all(r.reason and "COPY TAGGED REPLACING could not be read" in r.reason
+                       for r in got.values())
+
+
+def test_replacing_pseudo_text_ignores_spacing_and_line_breaks():
+    from archdiag.scan.cobol import apply_replacing
+    out = apply_replacing("       MOVE A   TO\n           B.\n",
+                          [["", "==MOVE A TO B==", "==MOVE C TO D=="]])
+    assert "MOVE C TO D" in out[0] and out[1] is None
+
+
+def test_replacing_operands_are_not_the_programs_own_statements(tmp_path):
+    i = _ws(tmp_path, {"src/P1.cbl": _copier("P1", "REPLACING ==CALL 'OLDPGM'==\n"
+                                                   "                BY ==CALL 'SUBX'=="),
+                       "copylib/TAGGED.cpy": _TAGGED})
+    own = {(r.op, r.target_name) for r in i.refs
+           if r.src == "program:P1" and not r.attrs.get("via_copybook")}
+    assert own == {("copy", "TAGGED")}
+    assert ("call", "SUBX") in _attributed(i, "P1")

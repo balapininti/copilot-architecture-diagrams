@@ -180,6 +180,225 @@ def _mask(s: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# COPY ... REPLACING
+# --------------------------------------------------------------------------
+
+def _rtokens(s: str) -> List[Tuple[str, int, int]]:
+    """COBOL text words for REPLACING: literals, words, and the separators ( ) : and a
+    period followed by a blank. Blanks, commas and semicolons only separate (IBM: the
+    colon is a separator, so ==:TAG:== can replace part of a name)."""
+    out: List[Tuple[str, int, int]] = []
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch.isspace() or ch in ",;":
+            i += 1
+        elif ch in "'\"":
+            j = i + 1
+            while j < n and s[j] != "\n":
+                if s[j] == ch:
+                    if j + 1 < n and s[j + 1] == ch:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            j = min(j + 1, n)
+            out.append((s[i:j], i, j))
+            i = j
+        elif ch in "():" or (ch == "." and (i + 1 == n or s[i + 1].isspace())):
+            out.append((ch, i, i + 1))
+            i += 1
+        else:
+            j = i
+            while j < n and not (s[j].isspace() or s[j] in "'\"():,;"
+                                 or (s[j] == "." and (j + 1 == n or s[j + 1].isspace()))):
+                j += 1
+            out.append((s[i:j], i, j))
+            i = j
+    return out
+
+
+def _tkey(tok: str) -> str:
+    return tok if tok[:1] in ("'", '"') else tok.upper()
+
+
+def _operand_text(raw: str) -> str:
+    """The text an operand stands for: pseudo-text without its == delimiters, else as is."""
+    if raw.startswith("==") and raw.endswith("==") and len(raw) >= 4:
+        return raw[2:-2].strip()
+    return raw.strip()
+
+
+def _replace_blob(blob: str, pairs: List[List[str]]
+                  ) -> Tuple[str, List[Tuple[int, int, bool]], Optional[str]]:
+    """Apply REPLACING ``pairs`` ([mode, operand, by-operand], mode "" / LEADING /
+    TRAILING) to ``blob``. Returns (new text, chunks, error): chunks are (new offset,
+    original offset, replaced) so a new offset maps back to its original line."""
+    pats = []
+    for mode, frm, to in pairs:
+        ft = [_tkey(t) for t, _a, _b in _rtokens(_operand_text(frm))]
+        if not ft:
+            return blob, [], "empty operand %s" % frm
+        if mode and (len(ft) != 1 or ft[0][:1] in ("'", '"')):
+            return blob, [], "%s operand must be one word: %s" % (mode, frm)
+        pats.append((mode, ft, _operand_text(to)))
+    toks = _rtokens(blob)
+    out: List[str] = []
+    chunks: List[Tuple[int, int, bool]] = []
+    size = 0
+    pos = 0
+
+    def emit(text: str, orig: int, replaced: bool) -> None:
+        nonlocal size
+        if text:
+            chunks.append((size, orig, replaced))
+            out.append(text)
+            size += len(text)
+
+    i = 0
+    while i < len(toks):
+        hit = False
+        for mode, ft, tt in pats:
+            if not mode:
+                k = len(ft)
+                if [_tkey(t[0]) for t in toks[i:i + k]] == ft:
+                    a0, b0 = toks[i][1], toks[i + k - 1][2]
+                    emit(blob[pos:a0], pos, False)
+                    emit(tt, a0, True)
+                    pos, i, hit = b0, i + k, True
+                    break
+                continue
+            w, a0, b0 = toks[i]
+            if w[:1] in ("'", '"') or len(w) < len(ft[0]):
+                continue
+            if mode == "LEADING" and w.upper().startswith(ft[0]):
+                span = (a0, a0 + len(ft[0]))
+            elif mode == "TRAILING" and w.upper().endswith(ft[0]):
+                span = (b0 - len(ft[0]), b0)
+            else:
+                continue
+            emit(blob[pos:span[0]], pos, False)
+            emit(tt, span[0], True)
+            emit(blob[span[1]:b0], span[1], False)
+            pos, i, hit = b0, i + 1, True
+            break
+        if not hit:
+            i += 1
+    emit(blob[pos:], pos, False)
+    return "".join(out), chunks, None
+
+
+def apply_replacing(text: str, pairs: List[List[str]]) -> Tuple[str, Optional[str]]:
+    """``text`` with COPY REPLACING ``pairs`` applied, and why they could not be (or None)."""
+    new, _chunks, err = _replace_blob(text, pairs)
+    return new, err
+
+
+class _ReplacedSrc:
+    """A _Src whose code had COPY REPLACING applied; offsets map back to original lines."""
+
+    def __init__(self, orig: "_Src", pairs: List[List[str]]) -> None:
+        self.orig = orig
+        self.blob, self.chunks, self.error = _replace_blob(orig.blob, pairs)
+        self.masked = _mask(self.blob)
+        self.line_text = orig.line_text
+        self._starts = [c[0] for c in self.chunks]
+
+    def line_of(self, off: int) -> int:
+        import bisect
+        k = bisect.bisect_right(self._starts, off) - 1
+        if k < 0:
+            return self.orig.line_of(0)
+        new0, orig0, replaced = self.chunks[k]
+        return self.orig.line_of(orig0 if replaced else orig0 + (off - new0))
+
+
+def _copy_clause(blob: str, start: int) -> Tuple[int, Optional[List[List[str]]], Optional[str]]:
+    """The rest of a COPY statement after its name: (offset of its closing period,
+    REPLACING pairs or None, why REPLACING could not be read or None)."""
+    i, n = start, len(blob)
+    end = n
+    while i < n:
+        if blob.startswith("==", i):
+            j = blob.find("==", i + 2)
+            if j < 0:
+                break
+            i = j + 2
+            continue
+        ch = blob[i]
+        if ch in "'\"":
+            j = blob.find(ch, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "." and (i + 1 == n or blob[i + 1].isspace()):
+            end = i
+            break
+        i += 1
+    clause = blob[start:end]
+    items: List[str] = []
+    k, m = 0, len(clause)
+    while k < m:
+        if clause[k].isspace() or clause[k] in ",;":
+            k += 1
+            continue
+        if clause.startswith("==", k):
+            j = clause.find("==", k + 2)
+            if j < 0:
+                return end, None, "unclosed =="
+            items.append(clause[k:j + 2])
+            k = j + 2
+        elif clause[k] in "'\"":
+            q = clause[k]
+            j = k + 1
+            while j < m:
+                if clause[j] == q:
+                    if j + 1 < m and clause[j + 1] == q:
+                        j += 2
+                        continue
+                    break
+                j += 1
+            items.append(clause[k:j + 1])
+            k = j + 1
+        elif clause[k] in "()":
+            items.append(clause[k])
+            k += 1
+        else:
+            j = k
+            while j < m and not (clause[j].isspace() or clause[j] in ",;()"):
+                j += 1
+            items.append(clause[k:j])
+            k = j
+    up = [x.upper() for x in items]
+    p = 0
+    if p < len(up) and up[p] in ("OF", "IN"):
+        p += 2
+    if p < len(up) and up[p] == "SUPPRESS":
+        p += 1
+    if p >= len(up) or up[p] != "REPLACING":
+        return end, None, None
+    p += 1
+    pairs: List[List[str]] = []
+    while p < len(items):
+        mode = ""
+        if up[p] in ("LEADING", "TRAILING"):
+            mode = up[p]
+            p += 1
+        if p >= len(items) or up[p] == "BY":
+            return end, None, "an operand is missing before BY"
+        frm = items[p]
+        if p + 1 >= len(items) or up[p + 1] != "BY":
+            return end, None, ("%s is not followed by BY (qualified or subscripted "
+                               "operands are not read)" % frm)
+        if p + 2 >= len(items) or up[p + 2] in ("BY", "LEADING", "TRAILING"):
+            return end, None, "BY without an operand after %s" % frm
+        pairs.append([mode, frm, items[p + 2]])
+        p += 3
+    if not pairs:
+        return end, None, "REPLACING without operands"
+    return end, pairs, None
+
+
+# --------------------------------------------------------------------------
 # Patterns (applied to the masked text; values are read from the original)
 # --------------------------------------------------------------------------
 
@@ -285,10 +504,10 @@ def _unq(text: str) -> str:
 # --------------------------------------------------------------------------
 
 class _Scan:
-    def __init__(self, repo: str, relpath: str, text: str) -> None:
+    def __init__(self, repo: str, relpath: str, text: str, src=None) -> None:
         self.repo = repo
         self.rel = relpath
-        self.src = _Src(text)
+        self.src = src if src is not None else _Src(text)
         self.refs: List[Ref] = []
         self.nodes: List[Node] = []
         s = self.src
@@ -428,10 +647,27 @@ class _Scan:
             if v and v not in lst:
                 lst.append(v)
 
-        # COPY
+        # COPY (with REPLACING kept for the copybook's attributed statements)
+        blanks: List[Tuple[int, int]] = []
         for m in _COPY.finditer(cm, a, b):
             name = self.lit(m.start(1), m.end(1)) if m.group(2) else m.group(1)
-            self.add(pid, "copy", "copybook", name.strip().upper(), m.start(1))
+            name = name.strip().upper()
+            end, pairs, err = _copy_clause(s.blob, m.end(1))
+            at: dict = {}
+            if pairs:
+                at["replacing"] = pairs
+            if err:
+                at["replacing_error"] = "COPY %s REPLACING could not be read (%s)" % (name, err)
+            if pairs or err:
+                blanks.append((m.end(1), min(end, b)))
+            self.add(pid, "copy", "copybook", name, m.start(1), attrs=at)
+        if blanks:  # the REPLACING operands are not this program's own statements
+            chars = list(cm)
+            for x, y in blanks:
+                for k in range(x, y):
+                    if chars[k] != "\n":
+                        chars[k] = " "
+            cm = self.cm = "".join(chars)
 
         # CALL (MQ calls are collected separately)
         mq_calls: List[Tuple[int, str, int]] = []   # (offset, API name, end of match)
@@ -987,6 +1223,18 @@ def scan_cobol(repo: str, relpath: str, text: str,
     return nodes, sc.refs
 
 
+def copybook_refs_replaced(name: str, repo: str, relpath: str, text: str,
+                           pairs: List[List[str]]) -> Tuple[List[Ref], Optional[str]]:
+    """The statements of copybook ``name`` (one copy of it) after a COPY ... REPLACING
+    applied ``pairs``, and why the pairs could not be applied (then the refs are the
+    copybook's own, unreplaced)."""
+    plain = _Scan(repo, relpath, text)
+    src = _ReplacedSrc(plain.src, pairs)
+    sc = plain if src.error else _Scan(repo, relpath, text, src)
+    sc.scan_program("copybook:" + name, 0, len(sc.cm))
+    return sc.refs, src.error
+
+
 def scan_copybook(repo: str, relpath: str, text: str,
                   ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
     name = _stem(relpath).upper()
@@ -1000,5 +1248,6 @@ def scan_copybook(repo: str, relpath: str, text: str,
     sc.scan_program("copybook:" + name, 0, len(sc.cm))
     if sc.refs:
         ctx.copybook_refs.setdefault(name, []).extend(sc.refs)
+    ctx.copybook_texts.setdefault(name, []).append((repo, relpath, text))
     return [Node("copybook:" + name, "copybook", name, repo,
                  [Evidence(repo, relpath, first, first_text)])], []
