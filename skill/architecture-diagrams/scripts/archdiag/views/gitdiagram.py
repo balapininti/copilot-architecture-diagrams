@@ -3,8 +3,8 @@
 
 Every resolved node is mapped to one box by the file that defines it (``file_of``):
 
-* ``grp:<name>`` - the first group whose pattern matches the file; ``grp:?`` ("Not yet
-  grouped") when none does. A table, copybook, queue or map whose definition is in a group
+* ``grp:<name>`` (``grp:??x`` for a name ``?x``) - the first group whose pattern matches
+  the file; ``grp:?`` ("Not yet grouped") when none does. A table, copybook, queue or map whose definition is in a group
   is part of that group (10.2).
 * ``act:<kind>`` - CICS transactions, REST endpoints, Angular pages and z/OS Connect APIs of
   this repo, folded into one entry-point box per kind (10.3). ``act:scheduler`` starts each
@@ -47,7 +47,10 @@ _UTIL = "<utility>"  # a utility a step runs: the job's own work
 
 
 def _gid(name: str) -> str:
-    return "grp:%s" % name
+    """The box id of group ``name``. A name starting with "?" gets one more "?", so no
+    group name (not even "?" itself) can produce UNGROUPED's id and two names never share
+    one."""
+    return "grp:%s" % ("?" + name if name.startswith("?") else name)
 
 
 def _s(n: int) -> str:

@@ -336,3 +336,22 @@ def test_deterministic():
             a = mod.render(view_of(gd, r))
             b = mod.render(view_of(gd, r))
             assert a == b, mod.__name__
+
+
+def test_group_named_question_mark_draws_beside_not_yet_grouped():
+    """A group named "?" (or a top-level folder named "?") must not take the id of
+    "Not yet grouped": both boxes are drawn and every style renders."""
+    from archdiag.render.report import links_report
+    base = batch_gd()
+    for names in (["?"], ["?", "??"]):
+        groups = [GitGroup(nm, "JCL", [pat]) for nm, pat in zip(names, ["jcl/", "proc/"])]
+        gd = GitDiagram(base.repo, "", groups + base.groups[2:], [], [], True, "ok")
+        v = view_of(gd)
+        ids = [n.id for n in v.nodes]
+        assert len(ids) == len(set(ids)), ids
+        assert "grp:?" in ids  # CLMB500 and CLMB510 are not grouped
+        assert [n.label for n in v.nodes if n.kind == "group"][:len(names)] == names
+        for mod in STYLES:
+            for text in mod.render(v).values():
+                assert text
+        assert "### ?" in links_report(v, fixture_resolved())

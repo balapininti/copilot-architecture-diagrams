@@ -180,3 +180,16 @@ def test_summary_counts_starts_lines_apart_from_links(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "job-structure" not in out
     assert "Summary: 12 nodes, 13 links: 7 confirmed, 5 partly known, 1 loose ends\n" in out
+
+
+def test_group_named_question_mark_draws_every_style(tmp_path, capsys):
+    w = _estate(tmp_path)
+    (w / "architecture-diagrams" / "gitdiagram-claims-batch.json").write_text(json.dumps(
+        {"repo": "claims-batch", "groups": [{"name": "?", "files": ["jcl/"]},
+                                            {"name": "??", "files": ["proc/"]}]}),
+        encoding="utf-8")
+    rc = main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "claims-batch",
+               "--style", "all"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "Traceback" not in out and "Summary:" in out
