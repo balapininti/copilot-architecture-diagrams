@@ -609,3 +609,34 @@ def repo_links(resolved: Resolved) -> List[Tuple[str, str, str, List[Edge]]]:
             for b in repos[i + 1:]:
                 put(a, b, _label(nodes[rid]), by_repo[a] + by_repo[b])
     return [(a, b, label, out[(a, b, label)]) for a, b, label in sorted(out)]
+
+
+
+def repo_link_status(resolved: Resolved, a: str, b: str, edges: List[Edge]) -> str:
+    """The status of the line between repos ``a`` and ``b`` drawn for ``edges`` (one entry
+    of ``repo_links``). A direct edge (both ends in a repo) counts as itself: the most
+    certain one wins, as each names the same target. Through a shared resource with no
+    definition, the line is only as certain as its less certain side: the worse of (the
+    best status on side ``a``, the best status on side ``b``)."""
+    from ..model import CONFIRMED, LOOSE, PARTIAL
+    rank = {CONFIRMED: 0, PARTIAL: 1, LOOSE: 2}
+    nodes = resolved.nodes
+    direct: List[int] = []
+    sides: Dict[str, List[int]] = {a: [], b: []}
+    for e in edges:
+        s, d = nodes.get(e.src), nodes.get(e.dst)
+        r = rank.get(e.status, 2)
+        if s is not None and d is not None and s.repo and d.repo:
+            direct.append(r)
+            continue
+        for res, other in ((d, s), (s, d)):
+            if res is not None and other is not None and res.repo is None and \
+                    other.repo in sides:
+                sides[other.repo].append(r)
+                break
+    worst = 0
+    if direct:
+        worst = max(worst, min(direct))
+    if sides[a] or sides[b]:
+        worst = max(worst, min(sides[a] or [2]), min(sides[b] or [2]))
+    return (CONFIRMED, PARTIAL, LOOSE)[worst]

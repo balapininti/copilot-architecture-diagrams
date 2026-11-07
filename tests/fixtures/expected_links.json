@@ -90,5 +90,6 @@
   {"src": "step:claims-batch/proc/CLMEXT.proc#EXT", "op": "runs", "dst": "program:CLMB210", "status": "partial"},
   {"src": "step:claims-batch/proc/CLMEXT.proc#EXT", "op": "read", "dst": "dataset:CLAIMS.EXTRACT", "status": "partial"},
   {"src": "program:CLMO140", "op": "put", "dst": "queue:CLM.AUDIT", "status": "confirmed"},
-  {"src": "program:CLMO140", "op": "put", "dst": "missing:queue:?CLMO140:27", "status": "partial"}
+  {"src": "program:CLMO140", "op": "put", "dst": "missing:queue:?CLMO140:27", "status": "partial"},
+  {"src": "class:claims-api/PaymentArchiveRepository", "op": "select", "dst": "table:CLMS.PAYMENT", "status": "partial"}
 ]

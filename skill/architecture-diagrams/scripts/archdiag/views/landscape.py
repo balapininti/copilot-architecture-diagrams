@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.model import CONFIRMED, Edge
-from archdiag.views.common import (_CROSS_TARGETS, VEdge, VNode, ViewGraph, _Ctx, _combine,
+from archdiag.views.common import (_CROSS_TARGETS, _RANK, VEdge, VNode, ViewGraph, _Ctx, _combine,
                                    _counts_line, _evidence, _family, _least_certain,
                                    _mark_missing, _short, _suggest_note, _suggestions, _tech)
 
@@ -64,12 +64,21 @@ def landscape(ctx: _Ctx) -> ViewGraph:
         if e.op == "copy" and not d.startswith("missing:"):
             s, d = d, s  # shared code is drawn from the copybook's owner to its users
         keyed.append(((s, d, fam), e))
+    # one line per (ends, family, status): the label names its targets, so a target known
+    # only partly gets its own dotted line instead of riding on a solid one. Each target
+    # goes on the line of the most certain edge that reaches it.
+    best: Dict[tuple, str] = {}
+    for key, e in keyed:
+        t = key + (e.dst,)
+        if t not in best or _RANK[e.status] < _RANK[best[t]]:
+            best[t] = e.status
+    keyed = [(key + (best[key + (e.dst,)],), e) for key, e in keyed]
 
     # an application's own loose ends fold into one "N loose ends" box; the far sides of
     # exchanges, and ends reached from several places, keep their own box
     srcs: Dict[str, Set[str]] = {}
-    for (s, d, _), e in keyed:
-        srcs.setdefault(d, set()).add(s)
+    for key, e in keyed:
+        srcs.setdefault(key[1], set()).add(key[0])
     folded: Dict[str, List[str]] = {}  # app rep -> missing ids
     for d, ss in srcs.items():
         n = nodes.get(d)
@@ -87,7 +96,7 @@ def landscape(ctx: _Ctx) -> ViewGraph:
             rest.append((key, e))
 
     def label(key: tuple, es: List[Edge]) -> str:
-        s, d, fam = key
+        s, d, fam = key[:3]
         if fam == "COPY":
             return "COPY ×%d" % len({(x.src, x.dst) for x in es})
         if not d.startswith("app:"):

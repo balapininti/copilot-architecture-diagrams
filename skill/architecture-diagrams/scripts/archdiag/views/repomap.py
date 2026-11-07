@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.model import Edge
-from archdiag.resolve import repo_links
+from archdiag.resolve import repo_link_status, repo_links
 from archdiag.views.common import (_GAP_OPS, VEdge, VNode, ViewGraph, _combine, _Ctx, _display,
                                    _evidence, _key_label, _kind_of, _mark_missing, _scope_error,
-                                   _tech, combine_status)
+                                   _tech)
 
 MAX_EVIDENCE_FILES = 8  # highlighted evidence files on one card
 
@@ -46,7 +46,7 @@ def repomap(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
         from_a = sum(1 for e in es if nodes.get(e.src) is not None and nodes[e.src].repo == a)
         from_b = sum(1 for e in es if nodes.get(e.src) is not None and nodes[e.src].repo == b)
         s, d = (b, a) if from_b > from_a else (a, b)
-        vedges.append(VEdge("repo:%s" % s, "repo:%s" % d, via, combine_status(e.status for e in es),
+        vedges.append(VEdge("repo:%s" % s, "repo:%s" % d, via, repo_link_status(ctx.r, a, b, es),
                             _kind_of(es), _evidence(es), None, list(es)))
     # loose and partly known links out of a repo: stubs to missing and outside nodes
     touch: Dict[str, Set[str]] = {}

@@ -54,7 +54,7 @@ def test_landscape_shape():
     assert "dataset:CLM.MASTER.KSDS" in ids and "queue:CLM.REQ.LQ" in ids
     assert edges(v, "app:claims-api", "queue:CLM.REQ.LQ")
     assert node(v, "app:claims-db").kind == "datastore"
-    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 6 classes"]
+    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 7 classes"]
     # tables of a datastore app are inside it, not separate boxes
     assert not any(i.startswith("table:") for i in ids)
     sql = edges(v, "app:claims-online", "app:claims-db")
@@ -102,17 +102,24 @@ def _synthetic(edge_specs, repos=("a", "b", "c", "d")):
 
 def test_status_combination():
     r = _synthetic([("program:Pa1", "program:Pb1", CONFIRMED, "call"),
+                    ("program:Pa4", "program:Pb4", CONFIRMED, "call"),
                     ("program:Pa2", "program:Pb2", PARTIAL, "call"),
                     ("program:Pc1", "program:Pd1", PARTIAL, "call"),
                     ("program:Pc2", "program:Pd2", LOOSE, "call"),
                     ("program:Pc3", "program:Pa3", LOOSE, "link")])
     v = build_view(r, default_groups(r), "landscape", None)
-    ab, = edges(v, "app:a", "app:b")
-    cd, = edges(v, "app:c", "app:d")
+    # a line is never more certain than a target it names (final review C3): each target
+    # rides on the line of its own status, so Pb2 (partial) gets a dotted line beside the
+    # solid one to Pb1 and Pb4
+    ab = {e.status: e for e in edges(v, "app:a", "app:b")}
+    cd = {e.status: e for e in edges(v, "app:c", "app:d")}
     ca, = edges(v, "app:c", "app:a")
-    assert (ab.status, cd.status, ca.status) == (CONFIRMED, PARTIAL, LOOSE)
-    assert len(ab.underlying) == 2 and len(ab.evidence) == 1  # same evidence line kept once
-    assert ab.label == "CALL · Pb1, Pb2"
+    assert sorted(ab) == [CONFIRMED, PARTIAL] and sorted(cd) == [LOOSE, PARTIAL]
+    assert ca.status == LOOSE
+    assert ab[CONFIRMED].label == "CALL · Pb1, Pb4" and ab[PARTIAL].label == "CALL · Pb2"
+    assert (cd[PARTIAL].label, cd[LOOSE].label) == ("CALL · Pd1", "CALL · Pd2")
+    solid = ab[CONFIRMED]
+    assert len(solid.underlying) == 2 and len(solid.evidence) == 1  # same evidence kept once
 
 
 def test_scope_error_suggests():

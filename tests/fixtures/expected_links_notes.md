@@ -173,3 +173,14 @@ partial, "ambiguous: PROC X defined in N places: ..." (unit tests in test_scan_j
 | CLMO140 put missing:queue:?CLMO140:27 | partial | CLMO140.cbl:27 `MQPUT` on WS-HANDLE, which no MQOPEN in the program sets; the program opens two different queues, so the ref is partial with both candidates (CLM.AUDIT, CLM.RSP) |
 
 CLM.AUDIT still has no consumer: the existing `queue:CLM.AUDIT partial missing:queue-consumer:CLM.AUDIT` edge is unchanged.
+
+### C3: a partial target beside a solid one on a combined line (`claims-api/.../PaymentArchiveRepository.java`)
+
+| Edge | Status | Why |
+|---|---|---|
+| PaymentArchiveRepository select table:CLMS.PAYMENT | partial | PaymentArchiveRepository.java:17 `FROM OLDS.PAYMENT`; OLDS is not a listed environment qualifier, so the match to CLMS.PAYMENT (PAYMENT.sql:1) is only possible after dropping it: partly known (§7.4) |
+
+The resolver edge was already right; the trap guards the views. The landscape used to merge it
+with ClaimRepository's confirmed POLICY edge into one solid "SQL · PAYMENT, POLICY" line. Now
+each target rides on a line of its own most certain status: solid "SQL · POLICY" and dotted
+"SQL · PAYMENT" (tests/test_view_invariants.py checks every line of every fixture view).
