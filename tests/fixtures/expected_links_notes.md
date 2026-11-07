@@ -216,3 +216,9 @@ such host in its config, so the match is on the path only. Relative URLs (ClaimS
 
 A table with no DDL used from one repo only stays a loose end to `missing:table:<NAME>`
 (unit test in test_resolve_data.py).
+
+### Counts after the final fix wave
+
+92 entries (67 confirmed, 16 partial, 9 loose): the 77 above, one changed by Ruling 36
+(ClaimStatusClient → zosapi, confirmed → partial), and 15 new for the C1, C2, C3, I1, I3
+and I5 traps.
