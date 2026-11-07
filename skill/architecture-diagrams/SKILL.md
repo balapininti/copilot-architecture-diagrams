@@ -119,6 +119,12 @@ Map the request using `reference/levels-and-styles.md`.
 
 Each line is `NAME (repo/path)`. Use the exact NAME.
 
+**Environment copies of a job.** When the same job name exists in several places (for
+example a prod and a test copy), `--scope NAME` draws one of them and the output notes
+`Also exists as: <repo/path>, ...`. To draw a specific copy, pass its id
+`job:<repo/path>` from the listing, for example
+`--scope "job:claims-batch/jcl/test/CLMD100.jcl"`.
+
 **Scope rule.** When the user names a flow in words, for example "the claim details
 transaction", list `transactions`, `pages` and `endpoints`, plus `jobs` for batch, and
 match their words against the names. To match better, you may open the CSD, BMS map or

@@ -207,3 +207,14 @@ def test_person_and_external_colors():
     svg = style_b.render(v)["svg"]
     assert "#08427b" in svg and "#999999" in svg and "#1168bd" in svg
     assert_office_safe(svg)
+
+
+def test_azure_devops_copy_uses_the_wiki_fence():
+    # GitHub reads ```mermaid; Azure DevOps wikis read ::: mermaid. One file each, the same
+    # diagram, so neither shows the other's block as raw text.
+    out = style_b.render(fixture_view("landscape"))
+    assert "::: mermaid" not in out["md"]
+    az = out["azure.md"]
+    assert "```" not in az
+    body = az.split("::: mermaid\n", 1)[1].split("\n:::", 1)[0]
+    assert body.strip() == _fence(out["md"]).strip()

@@ -6,7 +6,7 @@ Looks like diagram 1 of ``docs/samples/mainframe-samples.html`` and option B of
 boundaries labelled bottom-left, and edge labels of a sentence plus a ``[tech]`` line.
 Line types encode certainty exactly as in Style A (see ``common``).
 
-render(view) -> {"svg": ..., "md": ...}; the Markdown holds a Mermaid ``flowchart LR`` and
+render(view) -> {"svg": ..., "md": ..., "azure.md": ...}; the Markdown holds a Mermaid ``flowchart LR`` and
 a legend.
 """
 from __future__ import annotations
@@ -383,9 +383,12 @@ _MD_LEGEND = (
 )
 
 
-def _markdown(view: ViewGraph) -> str:
+def _markdown(view: ViewGraph, azure: bool = False) -> str:
+    """The Mermaid Markdown: fenced with ```mermaid for GitHub and VS Code, or with the
+    ``::: mermaid`` block Azure DevOps wikis need (``azure=True``, the ``.azure.md`` copy)."""
     styles = {line_style(e.status, e.kind) for e in view.edges}
-    out = ["# %s" % " ".join(view.title.split()), "", "```mermaid", _mermaid(view), "```", "",
+    fence = ("::: mermaid", ":::") if azure else ("```mermaid", "```")
+    out = ["# %s" % " ".join(view.title.split()), "", fence[0], _mermaid(view), fence[1], "",
            "## Legend", ""]
     for key, label in _MD_LEGEND:
         if key in styles:
@@ -401,6 +404,7 @@ def _markdown(view: ViewGraph) -> str:
 # ------------------------------------------------------------------ entry point
 
 def render(view: ViewGraph) -> Dict[str, str]:
-    """The C4-style SVG and its Mermaid Markdown, from one layout of ``view``."""
+    """The C4-style SVG and its Mermaid Markdown (GitHub ``.md`` and Azure DevOps wiki
+    ``.azure.md``), from one layout of ``view``."""
     L = layout_for(view, node_size)
-    return {"svg": _svg(view, L), "md": _markdown(view)}
+    return {"svg": _svg(view, L), "md": _markdown(view), "azure.md": _markdown(view, True)}

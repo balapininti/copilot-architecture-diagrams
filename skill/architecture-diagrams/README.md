@@ -85,7 +85,7 @@ plus an editable copy and a links report (`*-links.md`):
 | Style | Look | Editable copy |
 |---|---|---|
 | a | Pictorial icons | `.drawio` (draw.io) |
-| b | C4 boxes | `.md` with Mermaid |
+| b | C4 boxes | `.md` with Mermaid (GitHub, VS Code), and `.azure.md`, the same diagram for an Azure DevOps wiki |
 | c | Repo link map | `.html`: click a line to see its evidence (works offline) |
 | d | Whiteboard sketch | `.excalidraw` |
 
