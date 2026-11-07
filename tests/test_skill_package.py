@@ -167,3 +167,16 @@ def test_installed_project_skill_is_not_scanned(tmp_path):
             files = list(iter_source_files(ws / r.path))
             assert files, "the repo's own file is scanned"
             assert not any("architecture-diagrams" in f.parts for f in files), files
+
+
+def test_readme_recommends_personal_install_and_notes_cli_git_root():
+    t = " ".join(_text(SKILL / "README.md").split())
+    assert "recommended" in t.lower() and "personal" in t.lower()
+    assert t.lower().index("recommended") < t.index("-Project")
+    assert "git root" in t.lower()  # Copilot CLI may only find project skills at a git root
+
+
+def test_skill_md_copies_tasks_json_only_when_asked_and_never_overwrites():
+    t = " ".join(_text(SKILL / "SKILL.md").split())
+    assert "Only when the user asks you to" in t and "never overwrite" in t
+    assert ".vscode/tasks.json" in t

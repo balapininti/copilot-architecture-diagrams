@@ -14,6 +14,9 @@ made-up link is the worst failure.
 **Never edit, create or delete files in the user's repos.** The skill only reads them.
 Only write inside `<ws>/architecture-diagrams/`, and there only `groups.json` and
 `archdiag.config.json`. The scripts write everything else.
+The one exception is `<ws>/.vscode/tasks.json` (see below). Only when the user asks you to,
+copy `assets/tasks.json` there, and never overwrite a `tasks.json` that already exists
+(show them the entries to merge instead). Otherwise just tell them how to copy it.
 
 ## Paths and how to run a command
 
@@ -37,7 +40,8 @@ Only write inside `<ws>/architecture-diagrams/`, and there only `groups.json` an
 
 **If you can't run commands** (blocked by policy, or the user declines the terminal
 approval), give the user the exact command to run in a terminal. Or, in VS Code, they can
-copy `assets/tasks.json` into `<ws>/.vscode/tasks.json` and run *Terminal > Run Task >
+copy `assets/tasks.json` into `<ws>/.vscode/tasks.json` themselves (you do not create it
+unless they ask) and run *Terminal > Run Task >
 Architecture diagrams: ...*. Ask them to paste the output back, then carry on from it.
 You can also read `<ws>/architecture-diagrams/summary.md` and the `*-links.md` reports
 yourself.

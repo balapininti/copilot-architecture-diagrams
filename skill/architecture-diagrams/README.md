@@ -31,11 +31,14 @@ In PowerShell, from the root of the delivered package (the folder that holds
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-This copies the skill to `%USERPROFILE%\.copilot\skills\architecture-diagrams`. VS Code
-and Copilot CLI both read skills from there.
+This is the **recommended** install: it copies the skill to the personal skills folder,
+`%USERPROFILE%\.copilot\skills\architecture-diagrams`. VS Code and Copilot CLI both read
+skills from there, in every workspace, wherever you start them.
 
-To install it for one workspace only, point `-Project` at **the folder you open in VS Code
-or start Copilot CLI in**. That is the folder holding the cloned repos (see below), not
+A project install is the alternative, for one workspace only. Copilot CLI may only find
+project skills when it is started at a git root (the folder that holds `.git`); if the
+workspace folder is not one, use the personal install above. To use it, point `-Project` at **the folder you open
+in VS Code or start Copilot CLI in**. That is the folder holding the cloned repos (see below), not
 one of the repos inside it:
 
 ```powershell
