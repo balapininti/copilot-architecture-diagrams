@@ -153,11 +153,9 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             runs.setdefault(e.src, []).append(e)
         out_of.setdefault(e.src, []).append(e)
 
-    def handler(nid: str) -> Optional[str]:
-        """The group holding entry point ``nid``'s handler (its first, by name)."""
-        hs = sorted({str(base(x.dst)) for x in out_of.get(nid, [])
-                     if str(base(x.dst)).startswith("grp:")})
-        return hs[0] if hs else None
+    def handlers(nid: str) -> List[Edge]:
+        """Entry point ``nid``'s edges to its handlers in groups of this repo."""
+        return [x for x in out_of.get(nid, []) if str(base(x.dst)).startswith("grp:")]
 
     def program_run(e: Edge) -> Optional[Edge]:
         """The confirmed ``runs`` edge of ``e``'s step to a program of this repo that opens
@@ -178,7 +176,9 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         opened = {str(k).strip().upper() for k in (nodes[progs[0].dst].attrs.get("files") or {})}
         return progs[0] if dd in opened else None
 
-    def ends(e: Edge) -> Tuple[Optional[str], Optional[str], str, List[Edge]]:
+    def ends(e: Edge) -> List[Tuple[Optional[str], Optional[str], str, List[Edge]]]:
+        """Where ``e`` is drawn: (source box, target box, status, the other edges it stands
+        on); several for a group's use of an entry point with handlers in several groups."""
         s, d = base(e.src), base(e.dst)
         if d == _UTIL:
             d = s
@@ -190,19 +190,21 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             s = base(run.dst)
             st = _least_certain([e.status, run.status])
             extra = [run]
-        # a group's use of an entry point of this repo is an internal call: drawn to the
-        # group holding the handler, never into the actor (Ruling 5); same status
+        # a group's use of an entry point of this repo is an internal call: drawn to each
+        # group holding a handler, never into the actor (Ruling 5). Each line stands on the
+        # call and the entry point's edge to that handler: no more certain than either
         if s is not None and s.startswith("grp:") and d is not None and \
                 d.startswith("act:") and d != SCHEDULER:
-            h = handler(e.dst)
-            if h is not None:
-                d = h
-        return s, d, st, extra
+            hs = handlers(e.dst)
+            if hs:
+                return [(s, base(h.dst), _least_certain([st, h.status]), extra + [h])
+                        for h in hs]
+        return [(s, d, st, extra)]
 
     def mine(b: Optional[str]) -> bool:
         return b is not None and b.startswith(("grp:", "act:"))
 
-    mapped = [(e,) + ends(e) for e in r.edges]
+    mapped = [(e,) + x for e in r.edges for x in ends(e)]
     # temporary (&&) datasets are never boxes: folded into the line between the groups that
     # write and read them ("via &&SORTED"), and listed on the boxes' info (Ruling 6)
     temp_ids = {nid for nid, n in nodes.items() if n.kind == "dataset" and n.attrs.get("temp")}
@@ -243,7 +245,9 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             tid, other = (e.dst, s0) if at_dst else (e.src, d0)
             if mine(other) and str(other).startswith("grp:"):
                 temps.setdefault(tid, []).append(
-                    (str(other), (e.op in ("write", "update")) if at_dst else True, e, st, extra))
+                    # the dataset as the edge's source is read by the other end
+                    (str(other), (e.op in ("write", "update")) if at_dst else False, e, st,
+                     extra))
             continue
         s = res_box.get(e.src) if s0 == _RES else s0
         d = res_box.get(e.dst) if d0 == _RES else d0
@@ -320,19 +324,25 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         for u in uses:
             if line not in temp_info.setdefault(u[0], []):
                 temp_info[u[0]].append(line)
-        paired = False
+        crossed: List[tuple] = []  # uses in a pair across two groups
+        within: List[tuple] = []  # uses in a pair inside one group
         for w in (u for u in uses if u[1]):
             for rd in (u for u in uses if not u[1]):
                 if w[0] == rd[0]:
+                    within += [w, rd]
                     continue
                 key = (w[0], rd[0])
                 if key not in via:
                     via[key] = []
                     via_order.append(key)
                 via[key].append((tid, w, rd))
-                paired = True
-        if not paired:  # written and read in one group: links inside it
-            for u in uses:
+                crossed += [w, rd]
+        # written and read in one group, or a use with no counterpart: links inside the group
+        done: List[Edge] = []
+        for u in uses:
+            if (any(u is x for x in within) or not any(u is x for x in crossed)) and \
+                    not any(u[2] is x for x in done):
+                done.append(u[2])
                 inside.setdefault(u[0], []).append((u[2], u[3], u[4]))
     for key in via_order:
         names: List[str] = []
@@ -452,12 +462,12 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         return out, under
 
     def inside_summary(gid: str) -> List[str]:
-        """The one muted box line: ``+14 links inside (1 partly known)``."""
+        """The one muted box line: ``+14 links (1 partly known)``, the links inside the group."""
         items = inside.get(gid, [])
         if not items:
             return []
         partly = sum(1 for _, st, _ in items if st != CONFIRMED)
-        return ["+%d link%s inside%s" % (len(items), _s(len(items)),
+        return ["+%d link%s%s" % (len(items), _s(len(items)),
                                          " (%d partly known)" % partly if partly else "")]
 
     groups: List[VNode] = []

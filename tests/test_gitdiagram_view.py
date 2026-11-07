@@ -198,7 +198,7 @@ def test_undefined_shared_resource_box_only_when_two_groups():
     ga = node(v, "grp:A")
     assert any("D2" in x for x in ga.info)
     # its partial link is counted inside A (one muted box line) and kept for the links report
-    assert ga.detail_lines[-1] == "+1 link inside (1 partly known)" and ga.muted == 1
+    assert ga.detail_lines[-1] == "+1 link (1 partly known)" and ga.muted == 1
     assert "1 link inside" in ga.info and "1 partly known link inside" in ga.info
     assert any(u.dst == "dataset:D2" for u in ga.underlying)
 
@@ -470,3 +470,74 @@ def test_deterministic():
         [(n.id, n.label, n.detail_lines) for n in b.nodes]
     assert [(e.src, e.dst, e.label, e.status) for e in a.edges] == \
         [(e.src, e.dst, e.label, e.status) for e in b.edges]
+
+
+# ------------------------------------------------------------------ fix round 2 (Ruling 5, 6)
+
+def _handler_estate(ha_status, hb_status=None):
+    c = prog("C", "c/C.java")
+    ha = prog("HA", "a/HA.java")
+    ep = Node("endpoint:GET /x", "endpoint", "GET /x", "r1", [_ev("r1", "a/Api.java")])
+    edges = [Edge(c.id, "http", ep.id, CONFIRMED, None, [_ev("r1", "c/C.java", 5)]),
+             Edge(ep.id, "runs", ha.id, ha_status, None if ha_status == CONFIRMED else "x",
+                  [_ev("r1", "a/Api.java", 2)])]
+    nodes = [c, ha, ep]
+    groups = [GitGroup("A", "", ["a/"]), GitGroup("C", "", ["c/"])]
+    files = [("c/C.java", "java"), ("a/HA.java", "java"), ("a/Api.java", "java")]
+    if hb_status is not None:
+        hb = prog("HB", "b/HB.java")
+        nodes.append(hb)
+        edges.append(Edge(ep.id, "runs", hb.id, hb_status, None if hb_status == CONFIRMED
+                          else "x", [_ev("r1", "a/Api.java", 3)]))
+        groups.append(GitGroup("B", "", ["b/"]))
+        files.append(("b/HB.java", "java"))
+    r = synthetic(nodes, edges, files)
+    return view_of(GitDiagram("r1", "", groups, [], [], True), r), edges
+
+
+def test_entry_point_redirect_one_line_per_handler_group_least_certain():
+    v, edges = _handler_estate(PARTIAL, CONFIRMED)
+    assert not lines(v, "grp:C", "act:endpoint")
+    la, = lines(v, "grp:C", "grp:A")
+    lb, = lines(v, "grp:C", "grp:B")
+    assert la.status == PARTIAL and lb.status == CONFIRMED
+    assert any(u is edges[1] for u in la.underlying)  # the handler edge it stands on
+    assert any(u is edges[2] for u in lb.underlying)
+    assert not any(u is edges[1] for u in lb.underlying)
+
+
+def test_entry_point_redirect_single_partial_or_loose_handler():
+    v, _ = _handler_estate(PARTIAL)
+    ln, = lines(v, "grp:C", "grp:A")
+    assert ln.status == PARTIAL
+    v, _ = _handler_estate(LOOSE)
+    ln, = lines(v, "grp:C", "grp:A")
+    assert ln.status == LOOSE
+
+
+def _temp_estate(extra_edges):
+    a, b = prog("A", "a/A.cbl"), prog("B", "b/B.cbl")
+    t = Node("dataset:r1/j.jcl#&&T", "dataset", "&&T", None, [],
+             {"temp": True, "names": ["&&T"]})
+    edges = [Edge(a.id, "write", t.id, CONFIRMED, None, [_ev("r1", "a/A.cbl", 2)])] + \
+        [Edge(*x) for x in extra_edges(a, b, t)]
+    r = synthetic([a, b, t], edges, [("a/A.cbl", "cobol"), ("b/B.cbl", "cobol")])
+    gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"]), GitGroup("B", "", ["b/"])], [], [], True)
+    return view_of(gd, r), edges
+
+
+def test_temp_dataset_as_edge_source_is_a_read():
+    v, _ = _temp_estate(lambda a, b, t: [(t.id, "feeds", b.id, CONFIRMED, None,
+                                         [_ev("r1", "b/B.cbl", 4)])])
+    ln, = lines(v, "grp:A", "grp:B")
+    assert ln.label == "via &&T" and ln.status == CONFIRMED
+
+
+def test_temp_dataset_same_group_pair_kept_inside_when_a_cross_pair_exists():
+    v, edges = _temp_estate(lambda a, b, t: [
+        (b.id, "read", t.id, CONFIRMED, None, [_ev("r1", "b/B.cbl", 4)]),
+        (a.id, "read", t.id, PARTIAL, "x", [_ev("r1", "a/A.cbl", 9)])])
+    assert lines(v, "grp:A", "grp:B")[0].label == "via &&T"
+    ga = node(v, "grp:A")
+    assert "1 partly known link inside" in ga.info or "2 links inside" in ga.info
+    assert any(u is edges[2] for u in ga.underlying)  # A's own read of &&T, kept

@@ -159,7 +159,7 @@ def _box_texts(svg, link, name=None):
 
 def test_group_box_line_caps_in_every_style():
     """A group box: name, [tech], up to 4 files then "… N more", a description in at most 2
-    lines, one muted "+N links inside" line; never the resource or other-repo details."""
+    lines, one muted "+N links (M partly known)" line; never the resource or other-repo details."""
     long_desc = "This group does a great many things for the nightly claims run, " * 6
     base = batch_gd()
     gd = GitDiagram(base.repo, "", [GitGroup("Everything", "COBOL", ["cobol/", "cobol.pds/"],
@@ -178,7 +178,7 @@ def test_group_box_line_caps_in_every_style():
         # name + tech + 5 file lines + 2 description + 1 links line (+ icon text in A)
         assert len(texts) <= 11 + (mod is style_a), (mod.__name__, len(texts), texts)
     jobs = [n for n in v.nodes if n.id == "grp:Nightly jobs"][0]
-    assert jobs.detail_lines[-1].startswith("+") and "links inside" in jobs.detail_lines[-1]
+    assert jobs.detail_lines[-1] == "+13 links (1 partly known)"
     assert jobs.muted == 1
     assert any(x.startswith("datasets:") for x in jobs.info)  # kept for the links report
 

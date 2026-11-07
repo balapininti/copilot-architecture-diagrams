@@ -215,7 +215,7 @@ def _text_block(t: _NodeText, cx: float, top: float, ink: str, sub_ink: str) -> 
         y += 3
     for k, s in enumerate(t.detail):
         y += DETAIL_LINE
-        parts.append(text(cx, y - 3, s, DETAIL_SIZE, "#868e96" if k in t.muted else "#495057",
+        parts.append(text(cx, y - 3, s, DETAIL_SIZE, "#6c757d" if k in t.muted else "#495057",
                           "middle"))
     return "".join(parts)
 
