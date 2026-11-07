@@ -56,7 +56,7 @@ def _s(n: int) -> str:
 
 def _file_lines(paths: List[str], more: str, keep: int = MAX_FILES) -> List[str]:
     """Up to ``keep`` base names (with the parent folder when two base names collide), then
-    ``… N more`` + ``more``."""
+    ``… N more`` + ``more``. One file over ``keep`` is shown: "… 1 more" would take its row."""
     base = [posixpath.basename(p) for p in paths]
     out = []
     for p, b in zip(paths, base):
@@ -64,7 +64,7 @@ def _file_lines(paths: List[str], more: str, keep: int = MAX_FILES) -> List[str]
             parent = posixpath.basename(posixpath.dirname(p))
             b = "%s/%s" % (parent, b) if parent else b
         out.append(b)
-    if len(out) > keep:
+    if len(out) > keep + 1:
         return out[:keep] + ["… %d more%s" % (len(out) - keep, more)]
     return out
 

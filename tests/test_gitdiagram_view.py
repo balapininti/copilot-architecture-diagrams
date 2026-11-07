@@ -588,3 +588,13 @@ def test_temp_dataset_same_group_pair_kept_inside_when_a_cross_pair_exists():
     ga = node(v, "grp:A")
     assert "1 partly known link inside" in ga.info or "2 links inside" in ga.info
     assert any(u is edges[2] for u in ga.underlying)  # A's own read of &&T, kept
+
+
+def test_group_box_shows_a_fifth_file_rather_than_one_more():
+    """"… 1 more files" takes the same row as the file itself: the file is shown."""
+    files = [("src/F%02d.cbl" % i, "cobol") for i in range(5)]
+    r = synthetic([], [], files)
+    gd = GitDiagram("r1", "", [GitGroup("All", "COBOL", ["src/"], "")], [], [], True)
+    n = node(view_of(gd, r), "grp:All")
+    assert n.detail_lines[:5] == ["F00.cbl", "F01.cbl", "F02.cbl", "F03.cbl", "F04.cbl"]
+    assert not any("more" in x for x in n.detail_lines)
