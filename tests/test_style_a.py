@@ -3,8 +3,12 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from conftest import OUT, assert_office_safe, fixture_view
+from archdiag.layout import layout_for
 from archdiag.render import style_a
+from archdiag.render.common import line_style
 from archdiag.views import VEdge, VGroup, VNode, ViewGraph
 
 LEVELS = (("landscape", None), ("application", "claims-online"), ("flow_job", "CLMD100"),
@@ -73,7 +77,9 @@ def test_drawio_parses_and_has_cells():
         cells = list(root.iter("mxCell"))
         vertices = [c for c in cells if c.get("vertex") == "1"]
         edges = [c for c in cells if c.get("edge") == "1"]
-        assert len(vertices) == len(v.nodes) + len(v.groups), level
+        L = layout_for(v, style_a.node_size)
+        # one container per group drawn (Layout.groups), as in the SVG
+        assert len(vertices) == len(v.nodes) + len(L.groups), level
         assert len(edges) == len(v.edges)
         ids = {c.get("id") for c in cells}
         assert len(ids) == len(cells)
@@ -107,8 +113,10 @@ def test_legend_lists_only_present_statuses():
     assert "shared code (copybook, package)" in text
 
 
-def test_lines_match_certainty():
-    v = fixture_view("flow_job", "CLMD100")
+@pytest.mark.parametrize("level,scope", [("flow_job", "CLMD100"),
+                                         ("application", "claims-online")])
+def test_lines_match_certainty(level, scope):
+    v = fixture_view(level, scope)
     svg = style_a.render(v)["svg"]
     root = ET.fromstring(svg)
     paths = [p for p in root.iter("{http://www.w3.org/2000/svg}path") if p.get("id", "").startswith("edge-")]
@@ -116,6 +124,8 @@ def test_lines_match_certainty():
     for p in paths:
         e = v.edges[int(p.get("id")[5:])]
         want = {"confirmed": "#334155", "partial": "#d97706", "loose": "#dc2626"}[e.status]
+        if e.status == "confirmed" and e.kind == "shared_code":
+            want = "#a16207"
         assert p.get("stroke") == want
     dots = [c for c in root.iter("{http://www.w3.org/2000/svg}circle")
             if c.get("fill") == "#dc2626" and c.get("r") == "6"]
@@ -149,3 +159,77 @@ def test_writes_samples_for_eyeballing(tmp_path):
         (OUT / (name + ".svg")).write_text(out["svg"], encoding="utf-8")
         (OUT / (name + ".drawio")).write_text(out["drawio"], encoding="utf-8")
         ET.parse(str(OUT / (name + ".svg")))
+
+
+def _inside(pt, rect, pad=0.0):
+    x, y, w, h = rect
+    return x - pad <= pt[0] <= x + w + pad and y - pad <= pt[1] <= y + h + pad
+
+
+def test_no_pill_covers_a_line_end():
+    for level, scope in LEVELS:
+        v = fixture_view(level, scope)
+        L = layout_for(v, style_a.node_size)
+        pills = style_a.place_pills(v, L, [line_style(e.status, e.kind) for e in v.edges])
+        rects = [(p.x, p.y, p.w, p.h) for p in pills]
+        for k, r in enumerate(L.routes):
+            (xa, ya), (xb, yb) = r[-2], r[-1]
+            d = ((xb - xa) ** 2 + (yb - ya) ** 2) ** 0.5 or 1.0
+            ends = [r[0], r[-1]]
+            # the last 14px before the end, and the arrowhead or dot around it
+            ends += [(xb - (xb - xa) / d * t, yb - (yb - ya) / d * t)
+                     for t in (2, 5, 8, 11, 14) if t <= d]
+            ends += [(xb + dx, yb + dy) for dx in (-6, 6) for dy in (-6, 6)]
+            for rect in rects:
+                for pt in ends:
+                    assert not _inside(pt, rect), (level, v.edges[k].label, pt, rect)
+
+
+def _crosses(a, b, rect):
+    """Does segment a-b pass through the inside of rect (axis-aligned or not)?"""
+    x, y, w, h = rect
+    for t in [i / 40.0 for i in range(41)]:
+        px, py = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+        if x + 1 < px < x + w - 1 and y + 1 < py < y + h - 1:
+            return True
+    return False
+
+
+def test_no_line_runs_through_a_foreign_group():
+    for level, scope in LEVELS:
+        v = fixture_view(level, scope)
+        L = layout_for(v, style_a.node_size)
+        for k, (e, r) in enumerate(zip(v.edges, L.routes)):
+            for gid, g in L.groups.items():
+                rect = (g.x, g.y, g.w, g.h)
+                sb, db = L.boxes[e.src], L.boxes[e.dst]
+                if _inside((sb.cx, sb.cy), rect) or _inside((db.cx, db.cy), rect):
+                    continue
+                for a, b in zip(r, r[1:]):
+                    assert not _crosses(a, b, rect), (level, e.src, e.dst, gid)
+
+
+def test_landscape_is_not_a_tall_strip():
+    root = ET.fromstring(style_a.render(fixture_view("landscape"))["svg"])
+    w, h = float(root.get("width")), float(root.get("height"))
+    assert h <= 1.2 * w, (w, h)
+
+
+def test_drawio_draws_only_laid_out_groups():
+    v = ViewGraph("job", "flow_job", "J",
+                  [VNode("job:J", "J", kind="job", group="g1"),
+                   VNode("step:J#S1", "S1", kind="program", row="lane", group="g1")],
+                  [VEdge("job:J", "step:J#S1", kind="sequence")],
+                  [VGroup("g1", "app", "#3b82f6")])
+    out = style_a.render(v)
+    root = ET.fromstring(out["drawio"])
+    assert len([c for c in root.iter("mxCell") if c.get("vertex") == "1"]) == 2
+    assert "app" not in svg_text(out["svg"])
+
+
+def test_drawio_partial_missing_box_matches_svg():
+    v = fixture_view("application", "claims-online")
+    root = ET.fromstring(style_a.render(v)["drawio"])
+    styles = {c.get("value", "").split("\n")[0]: c.get("style") for c in root.iter("mxCell")}
+    assert "fillColor=#fffbeb" in styles["which program?"]
+    assert "fillColor=#fef2f2" in styles["CLMO120"]

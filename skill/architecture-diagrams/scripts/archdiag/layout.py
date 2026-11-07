@@ -12,6 +12,8 @@ box border; renderers add arrowheads and labels.
 """
 from __future__ import annotations
 
+import bisect
+import heapq
 import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -25,15 +27,27 @@ MARGIN = 30.0          # blank border around the whole picture
 COL_GAP = 90.0         # layered: added to the widest box to space columns
 ROW_GAP = 50.0         # layered: added to the tallest box in a row to space rows
 DUMMY_ROW_H = 20.0     # layered: height of a row that only lines pass through
+LINE_ROW_GAP = 16.0    # layered: gap next to a row that only lines pass through
 GROUP_PAD = 20.0       # group rectangle padding around its members
 GROUP_TITLE = 24.0     # extra padding on top of a group for its title
 GROUP_ROW_GAP = 80.0   # layered: row gap where one group ends and another begins
 PORT_GAP = 16.0        # layered: least gap between two lines on one box side
 PORT_INSET = 10.0      # layered: keep line ends this far from box corners
+LAYER_CAP = 4          # layered: most boxes per layer before loose ends move right
+SINK_REACH = 3         # layered: how many layers past its feeder a loose end may move
+COMPACT_GAIN = 0.8     # layered: rank rows are used when this much shorter than straight ones
 SWEEPS = 4             # down/up barycenter sweeps
 JOB_ROW_GAP = 60.0     # job_rows: vertical gap between the above row, lane and below row
 JOB_SPREAD_GAP = 30.0  # job_rows: least gap between two boxes in the above/below row
 JOB_DETOUR = 30.0      # job_rows: how far above the lane a step-skipping line runs
+MAZE_STEP = 10.0       # layered: grid step for lines rerouted around a group
+MAZE_CLEAR = 8.0       # layered: how far a rerouted line keeps from boxes and groups
+MAZE_STUB = 12.0       # layered: straight run out of and into a box before a reroute bends
+MAZE_BEND = 60.0       # layered: cost of one bend, in px of length
+MAZE_POPS = 40000      # layered: search budget per rerouted line
+MAZE_BUDGET = 120000   # layered: search budget for all reroutes in one picture
+MAZE_CELLS = 160       # layered: the reroute grid is at most this many steps across
+MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
 CARD_COL_GAP = 120.0   # card_grid gaps
 CARD_ROW_GAP = 90.0
 CARD_POINTS = 12       # card_grid: points per flattened Bezier
@@ -98,6 +112,7 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
     else:
         boxes, routes = layered(view, sizes)
         groups = _group_boxes(view, boxes)
+        routes = _avoid_groups(view, boxes, groups, routes)
     return _finish(boxes, groups, routes)
 
 
@@ -190,6 +205,152 @@ def _group_boxes(view: ViewGraph, boxes: Dict[str, Box]) -> Dict[str, Box]:
     return out
 
 
+def _seg_hits(a: Point, b: Point, box: Box, pad: float = 1.0) -> bool:
+    """Does the axis-aligned segment a-b pass through the inside of box?"""
+    x0, x1 = min(a[0], b[0]), max(a[0], b[0])
+    y0, y1 = min(a[1], b[1]), max(a[1], b[1])
+    return (x0 < box.right - pad and x1 > box.x + pad
+            and y0 < box.bottom - pad and y1 > box.y + pad)
+
+
+def _avoid_groups(view: ViewGraph, boxes: Dict[str, Box], groups: Dict[str, Box],
+                  routes: List[List[Point]]) -> List[List[Point]]:
+    """Move a line's vertical run out of a group that holds neither of its ends: to just
+    left or right of that group, whichever keeps the line clear of every box and every
+    other foreign group (and is shorter). A run that cannot move stays."""
+    group_of = {n.id: n.group for n in view.nodes}
+    used: Dict[float, int] = {}
+    out: List[List[Point]] = []
+    rerouted = 0
+    budget = MAZE_BUDGET
+    for e, route in zip(view.edges, routes):
+        pts = list(route)
+        mine = {group_of.get(e.src), group_of.get(e.dst)}
+        foreign = [g for gid, g in groups.items() if gid not in mine]
+        for _ in range(4):
+            moved = False
+            for i in range(1, len(pts) - 2):
+                a, b = pts[i], pts[i + 1]
+                if abs(a[0] - b[0]) > 1e-6:
+                    continue
+                hit = [g for g in foreign if _seg_hits(a, b, g)]
+                if not hit:
+                    continue
+                g = hit[0]
+                best = None
+                for side in (g.x, g.right):
+                    off = PORT_GAP / 2 + PORT_GAP * used.get(round(side), 0)
+                    xn = side - off if side == g.x else side + off
+                    trial = pts[:i] + [(xn, a[1]), (xn, b[1])] + pts[i + 2:]
+                    segs = list(zip(trial[i - 1:i + 3], trial[i:i + 3]))
+                    ok = all(not _seg_hits(p, q, bx) for p, q in segs for bx in boxes.values())
+                    ok = ok and all(not _seg_hits(p, q, fg) for p, q in segs for fg in foreign)
+                    extra = abs(xn - a[0])
+                    if ok and (best is None or extra < best[0]):
+                        best = (extra, trial, side)
+                if best is not None:
+                    pts = best[1]
+                    used[round(best[2])] = used.get(round(best[2]), 0) + 1
+                    moved = True
+                    break
+            if not moved:
+                break
+        if any(_seg_hits(p, q, g) for p, q in zip(pts, pts[1:]) for g in foreign) \
+                and rerouted < MAZE_LIMIT and budget > 0:
+            rerouted += 1
+            blocks = list(boxes.values()) + foreign
+            alt, spent = _maze(pts, blocks, budget)
+            budget -= spent
+            if alt is not None:
+                pts = alt
+        out.append(_simplify(pts))
+    return out
+
+
+def _maze(route: List[Point], blocks: List[Box], budget: int
+          ) -> Tuple[Optional[List[Point]], int]:
+    """An orthogonal path with few bends from the route's first point to its last, leaving
+    and arriving the way the route does, clear of every block (by MAZE_CLEAR), and the
+    search steps it took (at most ``budget``; None when none was found within it)."""
+    a, b = route[0], route[-1]
+
+    def unit(p: Point, q: Point) -> Tuple[float, float]:
+        dx, dy = q[0] - p[0], q[1] - p[1]
+        if abs(dx) >= abs(dy):
+            return (1.0 if dx >= 0 else -1.0, 0.0)
+        return (0.0, 1.0 if dy >= 0 else -1.0)
+
+    da, db = unit(route[0], route[1]), unit(route[-2], route[-1])
+    s = (a[0] + da[0] * MAZE_STUB, a[1] + da[1] * MAZE_STUB)
+    t = (b[0] - db[0] * MAZE_STUB, b[1] - db[1] * MAZE_STUB)
+    xs_all = [bx.x for bx in blocks] + [bx.right for bx in blocks] + [s[0], t[0]]
+    ys_all = [bx.y for bx in blocks] + [bx.bottom for bx in blocks] + [s[1], t[1]]
+    lo_x, hi_x = min(xs_all) - 3 * MAZE_STEP, max(xs_all) + 3 * MAZE_STEP
+    lo_y, hi_y = min(ys_all) - 3 * MAZE_STEP, max(ys_all) + 3 * MAZE_STEP
+    step = max(MAZE_STEP, (hi_x - lo_x) / MAZE_CELLS, (hi_y - lo_y) / MAZE_CELLS)
+    xs = sorted(set([lo_x + k * step for k in range(int((hi_x - lo_x) / step) + 1)]
+                    + [s[0], t[0]]))
+    ys = sorted(set([lo_y + k * step for k in range(int((hi_y - lo_y) / step) + 1)]
+                    + [s[1], t[1]]))
+    grown = [Box(bx.x - MAZE_CLEAR, bx.y - MAZE_CLEAR, bx.w + 2 * MAZE_CLEAR,
+                 bx.h + 2 * MAZE_CLEAR) for bx in blocks]
+
+    # blocked[i][j]: grid point (xs[i], ys[j]) lies inside a grown block
+    blocked = [[False] * len(ys) for _ in xs]
+    for g in grown:
+        i0, i1 = bisect.bisect_right(xs, g.x), bisect.bisect_left(xs, g.right)
+        j0, j1 = bisect.bisect_right(ys, g.y), bisect.bisect_left(ys, g.bottom)
+        for i in range(i0, i1):
+            col = blocked[i]
+            for j in range(j0, j1):
+                col[j] = True
+    xi = {x: i for i, x in enumerate(xs)}
+    yi = {y: j for j, y in enumerate(ys)}
+    start, goal = (xi[s[0]], yi[s[1]]), (xi[t[0]], yi[t[1]])
+    if blocked[start[0]][start[1]] or blocked[goal[0]][goal[1]]:
+        return None, 0
+    dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    sd = (int(da[0]), int(da[1]))
+    h0 = abs(s[0] - t[0]) + abs(s[1] - t[1])
+    heap = [(h0, 0.0, start, sd)]
+    best: Dict[Tuple[Tuple[int, int], Tuple[int, int]], float] = {(start, sd): 0.0}
+    prev: Dict[Tuple[Tuple[int, int], Tuple[int, int]], Tuple[Tuple[int, int], Tuple[int, int]]] = {}
+    end_dir = (int(db[0]), int(db[1]))
+    found = None
+    pops = 0
+    while heap and pops < min(MAZE_POPS, budget):
+        _, cost, cell, d = heapq.heappop(heap)
+        pops += 1
+        if cost > best.get((cell, d), float("inf")):
+            continue
+        if cell == goal and d == end_dir:
+            found = (cell, d)
+            break
+        for nd in dirs:
+            if nd == (-d[0], -d[1]):
+                continue
+            ni, nj = cell[0] + nd[0], cell[1] + nd[1]
+            if not (0 <= ni < len(xs) and 0 <= nj < len(ys)):
+                continue
+            if blocked[ni][nj]:
+                continue
+            x0, y0, x1, y1 = xs[cell[0]], ys[cell[1]], xs[ni], ys[nj]
+            nc = cost + abs(x1 - x0) + abs(y1 - y0) + (MAZE_BEND if nd != d else 0.0)
+            key = ((ni, nj), nd)
+            if nc < best.get(key, float("inf")):
+                best[key] = nc
+                prev[key] = (cell, d)
+                hh = abs(x1 - t[0]) + abs(y1 - t[1])
+                heapq.heappush(heap, (nc + hh, nc, (ni, nj), nd))
+    if found is None:
+        return None, pops
+    cells = [found]
+    while cells[-1] in prev:
+        cells.append(prev[cells[-1]])
+    path = [(xs[c[0]], ys[c[1]]) for c, _ in reversed(cells)]
+    return _simplify([a] + path + [b]), pops
+
+
 def _finish(boxes: Dict[str, Box], groups: Dict[str, Box],
             routes: List[List[Point]]) -> Layout:
     xs: List[float] = []
@@ -273,6 +434,7 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     for u in ids:
         if not preds[u] and succs[u]:
             layer[u] = min(layer[v] for v in succs[u]) - 1
+    _balance_sinks(view, ids, preds, succs, layer)
 
     # 3. Dummy nodes so long edges get their own slot in every layer they cross.
     chains: Dict[int, List[str]] = {}
@@ -309,19 +471,21 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     row = _assign_rows(layers, seg_pred, seg_succ,
                        [c[1:-1] for c in chains.values() if len(c) > 2])
     # Groups get their own band of rows, so no outside box sits inside a group.
-    row = _band_rows(layers, row, group_of, real=set(ids))
+    straight_layers = [list(l) for l in layers]
+    row = _band_rows(straight_layers, row, group_of, real=set(ids))
+    # Straight lines can stack a busy graph into a tall staircase. Then take rows by
+    # rank in each layer instead (lines bend in the column gaps), when much shorter.
+    compact_layers = [list(l) for l in layers]
+    compact = _band_rows(compact_layers, _rank_rows(layers, set(ids)), group_of, real=set(ids))
+    straight_h = _row_coords(straight_layers, row, ids, sizes, group_of)
+    compact_h = _row_coords(compact_layers, compact, ids, sizes, group_of)
+    if compact_h[0][-1] + compact_h[1][-1] < COMPACT_GAIN * (straight_h[0][-1] + straight_h[1][-1]):
+        row, layers, (row_y, row_h) = compact, compact_layers, compact_h
+    else:
+        layers, (row_y, row_h) = straight_layers, straight_h
 
     # 6. Coordinates.
     maxw = max(w for w, _ in sizes.values())
-    nrows = max(row.values()) + 1
-    big_gap = _group_gaps(layers, row, group_of, set(ids), nrows)
-    # each row as tall as its tallest box (a row of only passing lines: DUMMY_ROW_H)
-    row_h = [DUMMY_ROW_H] * nrows
-    for i in ids:
-        row_h[row[i]] = max(row_h[row[i]], sizes[i][1])
-    row_y = [0.0]
-    for r in range(nrows - 1):
-        row_y.append(row_y[-1] + row_h[r] + (GROUP_ROW_GAP if big_gap[r] else ROW_GAP))
     col_x = [lay * (maxw + COL_GAP) for lay in range(nlayers)]
     boxes: Dict[str, Box] = {}
     for i in ids:
@@ -395,6 +559,108 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             pts.append((x1, y1))
         routes.append(_simplify(pts[::-1] if k in reversed_edges else pts))
     return boxes, routes
+
+
+def _rank_rows(layers: List[List[str]], real: set) -> Dict[str, int]:
+    """Rows by rank: the k-th box of every layer shares row k, and the lines passing
+    between two boxes of a layer get thin rows of their own between those box rows."""
+    slot: Dict[str, Tuple[int, int]] = {}
+    width: Dict[int, int] = {}  # interval -> most lines passing in it in any layer
+    nreal = 0
+    for lay in layers:
+        i = cnt = 0
+        for n in lay:
+            if n in real:
+                slot[n] = (i, -1)
+                i, cnt = i + 1, 0
+            else:
+                slot[n] = (i, cnt)
+                cnt += 1
+                width[i] = max(width.get(i, 0), cnt)
+        nreal = max(nreal, i)
+    start: Dict[int, int] = {}
+    r = 0
+    for i in range(nreal + 1):
+        start[i] = r
+        r += width.get(i, 0) + 1
+    return {n: start[i] + (width.get(i, 0) if c < 0 else c) for n, (i, c) in slot.items()}
+
+
+def _row_coords(layers: List[List[str]], row: Dict[str, int], ids: List[str],
+                sizes: Dict[str, Tuple[float, float]], group_of: Dict[str, Optional[str]]
+                ) -> Tuple[List[float], List[float]]:
+    """Top and height of every row. A row is as tall as its tallest box; a row that only
+    lines pass through is DUMMY_ROW_H tall and sits closer to its neighbors, though never
+    inside the padding or title of a group in the row next to it."""
+    nrows = max(row.values()) + 1
+    big_gap = _group_gaps(layers, row, group_of, set(ids), nrows)
+    row_h = [DUMMY_ROW_H] * nrows
+    has_box = [False] * nrows
+    grouped = [False] * nrows
+    for i in ids:
+        r = row[i]
+        row_h[r] = max(row_h[r], sizes[i][1])
+        has_box[r] = True
+        grouped[r] = grouped[r] or group_of[i] is not None
+    row_y = [0.0]
+    for r in range(nrows - 1):
+        if has_box[r] and has_box[r + 1]:
+            gap = GROUP_ROW_GAP if big_gap[r] else ROW_GAP
+        else:
+            gap = LINE_ROW_GAP
+            if grouped[r]:
+                gap = max(gap, GROUP_PAD + LINE_ROW_GAP)
+            if grouped[r + 1]:
+                gap = max(gap, GROUP_PAD + GROUP_TITLE + LINE_ROW_GAP)
+        row_y.append(row_y[-1] + row_h[r] + gap)
+    return row_y, row_h
+
+
+def _balance_sinks(view: ViewGraph, ids: List[str], preds: Dict[str, List[str]],
+                   succs: Dict[str, List[str]], layer: Dict[str, int]) -> None:
+    """Keep layers to LAYER_CAP boxes where it is cheap: move boxes that feed nothing
+    (loose ends first, then outside systems; a member of a small group only within the
+    layers its group already spans) one layer right,
+    at most SINK_REACH layers past their farthest feeder, so one crowded column does not
+    become a tall stack."""
+    kind = {n.id: n.kind for n in view.nodes}
+    group = {n.id: n.group for n in view.nodes}
+    order = {i: k for k, i in enumerate(ids)}
+    # a box with no lines goes to the least crowded layer (of its group's layers)
+    count: Dict[int, int] = {}
+    for i in ids:
+        count[layer[i]] = count.get(layer[i], 0) + 1
+    for i in ids:
+        if preds[i] or succs[i]:
+            continue
+        mates = [layer[j] for j in ids if j != i and group[i] is not None and group[j] == group[i]]
+        lo, hi = (min(mates), max(mates)) if mates else (0, max(count))
+        best = min(range(lo, hi + 1), key=lambda k: (count.get(k, 0), k))
+        if count.get(best, 0) + 1 < count[layer[i]]:
+            count[layer[i]] -= 1
+            layer[i] = best
+            count[best] = count.get(best, 0) + 1
+    size: Dict[str, int] = {}
+    for i in ids:
+        if group[i] is not None:
+            size[group[i]] = size.get(group[i], 0) + 1
+    k = 0
+    while k <= max(layer.values()):
+        here = [i for i in ids if layer[i] == k]
+        span: Dict[str, int] = {}  # each group's last layer
+        for i in ids:
+            if group[i] is not None:
+                span[group[i]] = max(span.get(group[i], 0), layer[i])
+        movable = [i for i in here if not succs[i] and preds[i]
+                   and (group[i] is None or span[group[i]] >= k + 1
+                        or size[group[i]] > 2 * LAYER_CAP)
+                   and k + 1 <= max(layer[p] for p in preds[i]) + SINK_REACH]
+        movable.sort(key=lambda i: (kind[i] != "missing",
+                                    kind[i] != "external", -order[i]))
+        excess = len(here) - LAYER_CAP
+        for i in movable[:max(0, excess)]:
+            layer[i] = k + 1
+        k += 1
 
 
 def _extents(layers: List[List[str]], row: Dict[str, int],

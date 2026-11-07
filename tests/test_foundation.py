@@ -17,8 +17,8 @@ import dataclasses
 SCRIPTS = Path(__file__).resolve().parent.parent / "skill" / "architecture-diagrams" / "scripts"
 
 STDLIB_39 = {
-    "__future__", "argparse", "ast", "collections", "contextlib", "copy", "dataclasses",
-    "datetime", "difflib", "enum", "fnmatch", "functools", "hashlib", "html", "io",
+    "__future__", "argparse", "ast", "bisect", "collections", "contextlib", "copy", "dataclasses",
+    "datetime", "difflib", "enum", "fnmatch", "functools", "hashlib", "heapq", "html", "io",
     "itertools", "json", "math", "os", "pathlib", "random", "re", "shutil", "string",
     "sys", "textwrap", "time", "typing", "unicodedata", "urllib", "xml", "zipfile",
 }

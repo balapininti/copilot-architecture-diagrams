@@ -122,9 +122,10 @@ def _edge_text(e) -> str:
 
 
 class _Pill:
-    def __init__(self, i: int, s: str, at: Tuple[float, float], style: str) -> None:
+    def __init__(self, i: int, s: str, at: Tuple[float, float], style: str,
+                 max_w: float = PILL_MAX_W) -> None:
         self.i = i
-        self.lines = wrap(s, PILL_MAX_W, PILL_SIZE)
+        self.lines = wrap(s, max_w, PILL_SIZE)
         self.w = max(text_width(x, PILL_SIZE) for x in self.lines) + 14
         self.h = 5 + PILL_LINE * len(self.lines)
         self.x = at[0] - self.w / 2
@@ -143,8 +144,10 @@ class _Pill:
         return "".join(parts)
 
 
-def _point_at(route: List[Tuple[float, float]], t: float) -> Tuple[float, float]:
-    """The point a fraction ``t`` of the way along a polyline."""
+def _seg_at(route: List[Tuple[float, float]], t: float
+            ) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """The point a fraction ``t`` of the way along a polyline, and the unit direction of
+    the segment it lies on."""
     segs = [((route[k + 1][0] - route[k][0]) ** 2 + (route[k + 1][1] - route[k][1]) ** 2) ** 0.5
             for k in range(len(route) - 1)]
     left = sum(segs) * t
@@ -152,9 +155,9 @@ def _point_at(route: List[Tuple[float, float]], t: float) -> Tuple[float, float]
         if left <= d and d > 0:
             f = left / d
             (x0, y0), (x1, y1) = route[k], route[k + 1]
-            return (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f)
+            return (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f), ((x1 - x0) / d, (y1 - y0) / d)
         left -= d
-    return route[-1]
+    return route[-1], (1.0, 0.0)
 
 
 def _overlap(a: Tuple[float, float, float, float], b: Tuple[float, float, float, float]) -> float:
@@ -164,14 +167,62 @@ def _overlap(a: Tuple[float, float, float, float], b: Tuple[float, float, float,
 
 
 _PILL_SPOTS = (0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78, 0.15, 0.85)
+END_CLEAR = 14.0   # the last stretch of every line, and its arrowhead or dot, stays uncovered
+MARKER_R = 8.0
 
 
-def _place_pills(view: ViewGraph, L: Layout, styles: List[str]) -> List["_Pill"]:
-    """One pill per labeled line, at the first spot along the line (middle first) that
-    covers no box and no other pill; else the spot covering least. A line into a missing
-    box whose label only repeats the box's own words gets no pill."""
+def end_zones(route: List[Tuple[float, float]]) -> List[Tuple[float, float, float, float]]:
+    """Rectangles a pill must not cover: both ends of the line, the last END_CLEAR px
+    before its end, and the arrowhead or loose dot there."""
+    if len(route) < 2:
+        return []
+    (x0, y0), (x1, y1) = route[0], route[-1]
+    zones = [(x0 - 4, y0 - 4, 8, 8), (x1 - MARKER_R, y1 - MARKER_R, 2 * MARKER_R, 2 * MARKER_R)]
+    k = len(route) - 2
+    while k > 0 and route[k] == route[-1]:
+        k -= 1
+    dx, dy = x1 - route[k][0], y1 - route[k][1]
+    d = (dx * dx + dy * dy) ** 0.5 or 1.0
+    xa, ya = x1 - dx / d * min(END_CLEAR, d), y1 - dy / d * min(END_CLEAR, d)
+    zones.append((min(xa, x1) - 3, min(ya, y1) - 3, abs(x1 - xa) + 6, abs(y1 - ya) + 6))
+    return zones
+
+
+def _candidates(route: List[Tuple[float, float]], probe: "_Pill"
+                ) -> List[Tuple[float, float]]:
+    """Pill centers to try: on the last segment (where the line enters its target) when it
+    has room, then along the line from the middle out, then beside the line."""
+    out: List[Tuple[float, float]] = []
+    if len(route) < 2:
+        return out
+    (xa, ya), (xb, yb) = route[-2], route[-1]
+    seg = ((xb - xa) ** 2 + (yb - ya) ** 2) ** 0.5
+    along = probe.w if abs(xb - xa) >= abs(yb - ya) else probe.h
+    if seg >= along + END_CLEAR + 2 * MARKER_R:
+        f = (seg - END_CLEAR - MARKER_R - along / 2) / seg
+        out.append((xa + (xb - xa) * f, ya + (yb - ya) * f))
+        out.append((xa + (xb - xa) * 0.5, ya + (yb - ya) * 0.5))
+    on = [_seg_at(route, t) for t in _PILL_SPOTS]
+    out.extend(p for p, _ in on)
+    for (px, py), (ux, uy) in on:
+        if abs(ux) >= abs(uy):  # horizontal stretch: above, then below
+            off = probe.h / 2 + MARKER_R + 4
+            out += [(px, py - off), (px, py + off)]
+        else:  # vertical stretch: right, then left
+            off = probe.w / 2 + MARKER_R + 4
+            out += [(px + off, py), (px - off, py)]
+    return out
+
+
+def place_pills(view: ViewGraph, L: Layout, styles: List[str]) -> List["_Pill"]:
+    """One pill per labeled line, at the first candidate spot that covers no box, no
+    other pill and no line end (arrowhead, dot or last stretch); else the spot covering
+    least. A line into a missing box whose label only repeats the box's own words gets
+    no pill."""
     by_id = {n.id: n for n in view.nodes}
     obstacles = [(b.x, b.y, b.w, b.h) for b in L.boxes.values()]
+    for r in L.routes:
+        obstacles.extend(end_zones(r))
     pills: List[_Pill] = []
     for i, e in enumerate(view.edges):
         s = _edge_text(e)
@@ -182,15 +233,19 @@ def _place_pills(view: ViewGraph, L: Layout, styles: List[str]) -> List["_Pill"]
                 and e.label.strip() == dst.label.strip()):
             continue
         route = L.routes[i] if i < len(L.routes) else []
-        spots = [_point_at(route, t) for t in _PILL_SPOTS] if len(route) >= 2 else []
         best, best_cost = None, None
-        for at in spots or [L.label_at[i]]:
-            p = _Pill(i, s, at, styles[i])
-            r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
-            cost = sum(_overlap(r, o) for o in obstacles)
-            if best_cost is None or cost < best_cost:
-                best, best_cost = p, cost
-            if cost == 0:
+        # the label on one line where it fits; on a short line, wrapped narrower
+        for max_w in (PILL_MAX_W, 84.0, 56.0):
+            probe = _Pill(i, s, (0.0, 0.0), styles[i], max_w)
+            for at in _candidates(route, probe) or [L.label_at[i]]:
+                p = _Pill(i, s, at, styles[i], max_w)
+                r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
+                cost = sum(_overlap(r, o) for o in obstacles)
+                if best_cost is None or cost < best_cost:
+                    best, best_cost = p, cost
+                if cost == 0:
+                    break
+            if best_cost == 0:
                 break
         pills.append(best)
         obstacles.append((best.x, best.y, best.w, best.h))
@@ -272,7 +327,7 @@ def _lane_svg(view: ViewGraph, L: Layout, ox: float, oy: float) -> str:
 def _svg(view: ViewGraph, L: Layout) -> str:
     colors = _group_colors(view)
     styles = [line_style(e.status, e.kind) for e in view.edges]
-    pills = _place_pills(view, L, styles)
+    pills = place_pills(view, L, styles)
 
     # grow the canvas so every pill fits (Ruling 6), and leave room for the title
     min_x = min([p.x for p in pills] + [0.0])
@@ -357,9 +412,10 @@ def _value(lines: List[str]) -> str:
 def _vertex_style(n: VNode, color: str) -> str:
     shape = _SHAPE.get(n.kind, "rounded=1;")
     if n.kind == "missing":
-        c = PARTIAL_COLOR if n.status == "partial" else LOOSE_COLOR
-        return shape + "whiteSpace=wrap;html=0;fillColor=#fef2f2;strokeColor=%s;fontColor=%s;" % (
-            c, c)
+        partial = n.status == "partial"
+        c = PARTIAL_COLOR if partial else LOOSE_COLOR
+        return shape + "whiteSpace=wrap;html=0;fillColor=%s;strokeColor=%s;fontColor=%s;" % (
+            "#fffbeb" if partial else "#fef2f2", c, c)
     if n.kind in ("neighbor", "notanalyzed"):
         return shape + "whiteSpace=wrap;html=0;fillColor=#f8fafc;strokeColor=#94a3b8;" \
                        "fontColor=#64748b;"
@@ -379,21 +435,11 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
     group_cell: Dict[str, Tuple[str, Box]] = {}
     for i, g in enumerate(view.groups):
         gb = L.groups.get(g.id)
-        members = [L.boxes[n.id] for n in view.nodes if n.group == g.id and n.id in L.boxes]
-        if gb is None and members:
-            x0 = min(b.x for b in members) - 20
-            y0 = min(b.y for b in members) - 44
-            gb = Box(x0, y0, max(b.right for b in members) + 20 - x0,
-                     max(b.bottom for b in members) + 20 - y0)
-            nest = False
-        else:
-            nest = gb is not None
-        if gb is None:
-            gb = Box(0, 0, 160, 40)
+        if gb is None:  # not drawn in the SVG either (no members, or a job/card level)
+            continue
         c = colors[g.id]
         cid = "g%d" % i
-        if nest:
-            group_cell[g.id] = (cid, gb)
+        group_cell[g.id] = (cid, gb)
         cells.append('<mxCell id="%s" value="%s" style="rounded=1;arcSize=6;dashed=1;'
                      'dashPattern=6 4;container=1;collapsible=0;html=0;fillColor=%s;'
                      'strokeColor=%s;fontColor=%s;fontStyle=1;align=left;verticalAlign=top;'
