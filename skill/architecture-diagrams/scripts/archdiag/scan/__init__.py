@@ -174,6 +174,29 @@ def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
                 k, srcs[k], rel)
 
 
+_URL_HOST = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/\s'\"]*@)?(\[[^\]]*\]|[^/:?#\s'\"]+)")
+
+
+def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
+    """Per repo, the hosts that its config names in URLs (Ruling 36)."""
+    vals: Dict[str, List[str]] = {}
+    for repo, props in ctx.props.items():
+        vals.setdefault(repo, []).extend(props.values())
+    for table in (ctx.props_src, ctx.props_prof):
+        for repo, entries in table.items():
+            vals.setdefault(repo, []).extend(v for _rel, v in entries.values())
+    for repo, env in ctx.ts_env.items():
+        vals.setdefault(repo, []).extend(env.values())
+    for (repo, _prefix), url in ctx.zc_servers.items():
+        vals.setdefault(repo, []).append(url)
+    out: Dict[str, List[str]] = {}
+    for repo, vs in vals.items():
+        hosts = sorted(set(m.group(1).lower() for v in vs for m in _URL_HOST.finditer(str(v))))
+        if hosts:
+            out[repo] = hosts
+    return out
+
+
 def scan_workspace(workspace: Path, config: Config) -> Inventory:
     workspace = Path(workspace)
     repos = discover_repos(workspace)
@@ -244,7 +267,8 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
-                     fingerprint(workspace, repos, config), not_analyzed, skipped)
+                     fingerprint(workspace, repos, config), not_analyzed, skipped,
+                     _config_hosts(ctx))
 
 
 _register_builtin_scanners()

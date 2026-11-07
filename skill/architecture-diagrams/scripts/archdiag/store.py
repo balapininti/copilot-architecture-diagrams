@@ -77,6 +77,7 @@ def _inventory(d: dict) -> Inventory:
         d.get("fingerprint", ""),
         dict(d.get("languages_not_analyzed", {})),
         [dict(x) for x in d.get("skipped", [])],
+        {k: list(v) for k, v in d.get("config_hosts", {}).items()},
     )
 
 

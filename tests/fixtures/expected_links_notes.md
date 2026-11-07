@@ -184,3 +184,15 @@ The resolver edge was already right; the trap guards the views. The landscape us
 with ClaimRepository's confirmed POLICY edge into one solid "SQL · PAYMENT, POLICY" line. Now
 each target rides on a line of its own most certain status: solid "SQL · POLICY" and dotted
 "SQL · PAYMENT" (tests/test_view_invariants.py checks every line of every fixture view).
+
+### I1 / Ruling 36: absolute-URL REST matches need their host tied to the target repo (`claims-api/.../PartnerClient.java`)
+
+| Edge | Status | Why |
+|---|---|---|
+| PartnerClient http endpoint:GET /api/claims/{} | partial | PartnerClient.java:13 `https://partner.example.com/api/claims/{id}`: the path equals our `GET /api/claims/{}` (ClaimController.java:16), but partner.example.com is named in no config of claims-api (the endpoint's repo): "matched on path only; host partner.example.com isn't tied to a scanned repo". Before Ruling 36 this was drawn solid |
+
+Changed by Ruling 36 (revises Ruling 17): **ClaimStatusClient http zosapi:GET /zos/claims/{}/status
+is now partial** (was confirmed). Its base URL `https://zcee.internal:9443` comes from
+claims-api's own application.yml:6; claims-online (the z/OS Connect API's repo) names no
+such host in its config, so the match is on the path only. Relative URLs (ClaimService's
+`/api` base) and `localhost` keep the old behaviour.

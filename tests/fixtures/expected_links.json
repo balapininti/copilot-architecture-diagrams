@@ -72,7 +72,7 @@
   {"src": "class:claims-api/MqClaimGateway", "op": "put", "dst": "queue:CLM.REQ.LQ", "status": "confirmed"},
   {"src": "class:claims-api/MqClaimGateway", "op": "get", "dst": "queue:CLM.RSP", "status": "confirmed"},
   {"src": "class:claims-api/ClaimRepository", "op": "select", "dst": "table:CLMS.POLICY", "status": "confirmed"},
-  {"src": "class:claims-api/ClaimStatusClient", "op": "http", "dst": "zosapi:GET /zos/claims/{}/status", "status": "confirmed"},
+  {"src": "class:claims-api/ClaimStatusClient", "op": "http", "dst": "zosapi:GET /zos/claims/{}/status", "status": "partial"},
   {"src": "class:claims-api/RatesClient", "op": "http", "dst": "external:rates.example.com", "status": "loose"},
   {"src": "class:claims-api/ClaimController", "op": "uses", "dst": "class:claims-api/MqClaimGateway", "status": "confirmed"},
   {"src": "class:claims-api/ClaimController", "op": "uses", "dst": "class:claims-api/ClaimStatusClient", "status": "confirmed"},
@@ -91,5 +91,6 @@
   {"src": "step:claims-batch/proc/CLMEXT.proc#EXT", "op": "read", "dst": "dataset:CLAIMS.EXTRACT", "status": "partial"},
   {"src": "program:CLMO140", "op": "put", "dst": "queue:CLM.AUDIT", "status": "confirmed"},
   {"src": "program:CLMO140", "op": "put", "dst": "missing:queue:?CLMO140:27", "status": "partial"},
-  {"src": "class:claims-api/PaymentArchiveRepository", "op": "select", "dst": "table:CLMS.PAYMENT", "status": "partial"}
+  {"src": "class:claims-api/PaymentArchiveRepository", "op": "select", "dst": "table:CLMS.PAYMENT", "status": "partial"},
+  {"src": "class:claims-api/PartnerClient", "op": "http", "dst": "endpoint:GET /api/claims/{}", "status": "partial"}
 ]

@@ -163,8 +163,9 @@ def test_rest():
     assert edge(svc, "http", "endpoint:GET /api/claims/{}").status == "confirmed"
     assert edge(svc, "http", "endpoint:POST /api/claims").status == "confirmed"
     assert edge(svc, "http", "missing:endpoint:DELETE /api/claims/{}").status == "loose"
-    assert edge("class:claims-api/ClaimStatusClient", "http",
-                "zosapi:GET /zos/claims/{}/status").status == "confirmed"
+    # Ruling 36: zcee.internal (claims-api's config) is not named in claims-online's config
+    e = edge("class:claims-api/ClaimStatusClient", "http", "zosapi:GET /zos/claims/{}/status")
+    assert e.status == "partial" and "host zcee.internal" in e.reason
     e = edge("class:claims-api/RatesClient", "http", "external:rates.example.com")
     assert e.status == "loose" and e.reason == "external or missing service"
 
@@ -525,10 +526,44 @@ def test_path_only_ambiguous_across_repos():
     assert r.nodes[e.dst].attrs["candidates"] == ["endpoint:GET /a/{}", "zosapi:GET /a/{}"]
 
 
-def test_host_ignored_when_path_unique_and_reason_caps():
+def test_host_not_tied_to_target_repo_is_partial_and_reason_caps():
+    # Ruling 36 (revises Ruling 17): an absolute URL matched on its path alone is partial
     r = _run([_ep("GET", "/a")], [_http("GET https://h.example/a", 4),
-                                  _http("GET /a", 5, "base URL guessed")])
-    assert [e.status for e in edges(op="http", r=r)] == ["confirmed", "partial"]
+                                  _http("GET /a", 5, "base URL guessed"),
+                                  _http("GET http://localhost:8080/a", 6)])
+    got = [(e.evidence[0].line, e.status, e.reason) for e in edges(op="http", r=r)]
+    assert got == [(4, "partial", "matched on path only; host h.example isn't tied to a "
+                                  "scanned repo"),
+                   (5, "partial", "base URL guessed"),
+                   (6, "confirmed", None)]
+
+
+def test_host_named_in_the_target_repos_config_is_confirmed():
+    inv = _inv([_ep("GET", "/a")], [_http("GET https://h.example:8443/a", 4),
+                                    _http("GET https://other.example/a", 5)])
+    inv.config_hosts = {"api": ["h.example"], "web": ["other.example"]}
+    r = resolve(inv, Config())
+    got = [(e.evidence[0].line, e.status) for e in edges(op="http", r=r)]
+    # other.example is only in the CALLER's config: not tied to the target repo
+    assert got == [(4, "confirmed"), (5, "partial")]
+
+
+def test_scan_collects_config_hosts_per_repo(tmp_path):
+    for repo, rel, text in (
+            ("svc", "src/main/resources/application.yml",
+             "server:\n  public-url: https://Claims.Internal:9443/claims\n"),
+            ("svc", "zosconnect/openapi.yaml", "servers:\n  - url: http://zcee.internal/x\n"),
+            ("web", "src/environments/environment.ts",
+             "export const environment = { apiBase: 'https://web.example/api' };\n")):
+        root = tmp_path / repo
+        root.mkdir(exist_ok=True)
+        (root / ".archdiag-repo").write_text("")
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    inv = scan_workspace(tmp_path, Config())
+    assert "claims.internal" in inv.config_hosts["svc"]
+    assert inv.config_hosts["web"] == ["web.example"]
 
 
 def test_http_target_not_worked_out():

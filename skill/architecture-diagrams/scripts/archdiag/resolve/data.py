@@ -42,6 +42,7 @@ BRIDGE_MONITOR = "CKBR"
 LIBRARY_DDS = frozenset(["STEPLIB", "JOBLIB", "JOBCAT", "STEPCAT", "ISPLLIB", "SYSLMOD", "SYSLIB"])
 # resources that, without a definition, belong to no repo and link every repo using them
 SHARED_KINDS = ("dataset", "queue")
+LOCAL_HOSTS = frozenset(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"])
 
 
 def _defs_reason(node: Node) -> Optional[str]:
@@ -484,7 +485,7 @@ class _Data:
                  if p == path and (method == "ANY" or m == "ANY" or m == method)]
         if len(cands) == 1:
             node = self.nodes[cands[0]]
-            status, reason = _status(ref.reason, _defs_reason(node))
+            status, reason = _status(ref.reason, _defs_reason(node), self.host_reason(host, node))
             self.add(ref, ref.op, node.id, status, reason, list(node.evidence))
         elif cands:
             reason = join(ref.reason, "ambiguous: " + ", ".join(cands))
@@ -498,6 +499,15 @@ class _Data:
         else:
             self.add(ref, ref.op, missing(self.nodes, "endpoint", "%s %s" % (method, path)),
                      LOOSE, ref.reason)
+
+    def host_reason(self, host: Optional[str], node: Node) -> Optional[str]:
+        """Why an absolute-URL match on the path alone is not certain (Ruling 36): the host
+        must be named in the config of the endpoint's own repo (or be the local machine)."""
+        if host is None or host in LOCAL_HOSTS:
+            return None
+        if host in (self.inv.config_hosts or {}).get(node.repo or "", []):
+            return None
+        return "matched on path only; host %s isn't tied to a scanned repo" % host
 
     # -- uses ----------------------------------------------------------------------------
     def uses(self, ref: Ref) -> None:

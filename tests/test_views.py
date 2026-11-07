@@ -54,7 +54,10 @@ def test_landscape_shape():
     assert "dataset:CLM.MASTER.KSDS" in ids and "queue:CLM.REQ.LQ" in ids
     assert edges(v, "app:claims-api", "queue:CLM.REQ.LQ")
     assert node(v, "app:claims-db").kind == "datastore"
-    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 7 classes"]
+    # 8 classes and one partly known link inside: the final-fix traps PaymentArchiveRepository
+    # and PartnerClient (its path-only REST match to our own endpoint is partial, Ruling 36)
+    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 8 classes",
+                                                      "1 partly known link inside"]
     # tables of a datastore app are inside it, not separate boxes
     assert not any(i.startswith("table:") for i in ids)
     sql = edges(v, "app:claims-online", "app:claims-db")
