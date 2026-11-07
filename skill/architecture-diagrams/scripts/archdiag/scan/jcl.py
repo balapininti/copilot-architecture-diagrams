@@ -250,7 +250,11 @@ def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext,
     if ftype not in ("jcl", "proc", None) or not text.lstrip().startswith("//"):
         return
     stmts = parse_statements(text)
+    has_job = any(s.op == "JOB" for s in stmts)
+    instream: set = set()  # in-stream PROCs of this job: calls to them use this file's copy
     for s in stmts:
+        if s.op == "PROC" and has_job and s.name:
+            instream.add(s.name)
         if s.op == "EXEC":
             called = None
             for k, v in parse_params(s.operands):
@@ -263,9 +267,11 @@ def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext,
                     called = v
             if called and "&" not in called:
                 cname = _unquote(called).upper()
+                if cname in instream:
+                    continue
                 ctx.proc_calls.add(cname)
                 ctx.proc_callers.setdefault(cname, set()).add(repo)
-    if not stmts or any(s.op == "JOB" for s in stmts):
+    if not stmts or has_job:
         return
     names = [_stem(relpath)]
     if stmts[0].op == "PROC" and stmts[0].name and stmts[0].name not in names:
@@ -404,6 +410,16 @@ class _Scanner:
         self.header_done = False
         # reasons of the ambiguous PROC / INCLUDE expansions being walked (None = certain)
         self.amb: List[Optional[str]] = []
+        # JCLLIB ORDER libraries (dataset names): which repo holds them is not known
+        self.jcllib: List[str] = []
+
+    def jcllib_reason(self, what: str, name: str, repo: str, path: str) -> Optional[str]:
+        """A PROC / INCLUDE member found only in another repo while the job names its own
+        libraries (JCLLIB ORDER): the libraries are not mapped to repos, so not certain."""
+        if not self.jcllib or repo == self.repo:
+            return None
+        return "JCLLIB ORDER not mapped to repos; %s %s taken from %s/%s" % (
+            what, name, repo, path)
 
     def amb_reason(self) -> Optional[str]:
         parts = [a for a in self.amb if a]
@@ -466,6 +482,16 @@ class _Scanner:
             elif op == "ENDIF":
                 if self.conds:
                     self.conds.pop()
+            elif op == "JCLLIB":
+                for k, v in parse_params(s.operands):
+                    if k == "ORDER":
+                        v = v.strip()
+                        if v.startswith("(") and v.endswith(")"):
+                            v = v[1:-1]
+                        for _k, lib in parse_params(v):
+                            lib = _resolve(_unquote(lib), scope)[0].upper()
+                            if lib and lib not in self.jcllib:
+                                self.jcllib.append(lib)
             elif op == "INCLUDE":
                 self.include(s, src, scope, proc, callstep, depth)
             elif op == "EXEC":
@@ -486,6 +512,8 @@ class _Scanner:
         if sel is None:
             return
         (irepo, irel, text), amb = sel
+        jl = self.jcllib_reason("INCLUDE member", member, irepo, irel)
+        amb = "; ".join(x for x in (amb, jl) if x) or None
         isrc = (irepo, irel)
         _defaults, body = _split_proc(parse_statements(text)) if _has_proc(text) else ({}, parse_statements(text))
         self.active_procs.append(member)
@@ -548,6 +576,8 @@ class _Scanner:
             found = self.local_procs[pname]
         elif sel is not None and pname not in self.active_procs and depth < MAX_DEPTH:
             (prepo, prel, ptext), amb = sel
+            jl = self.jcllib_reason("PROC", pname, prepo, prel)
+            amb = "; ".join(x for x in (amb, jl) if x) or None
             found = _split_proc(parse_statements(ptext))
             psrc = (prepo, prel)
         if found is None:
@@ -623,6 +653,8 @@ class _Scanner:
         sysout: List[str] = []
         attrs = {"order": st.order, "cond": st.cond, "pgm": st.pgm or "", "proc": st.proc,
                  "sysout": sysout, "job": self.job_id}
+        if self.jcllib:
+            attrs["jcllib"] = list(self.jcllib)
         nodes.append(Node(st.id, "step", st.name, self.repo, [ev], attrs))
 
         cur_amb: List[Optional[str]] = [st.amb]
@@ -966,7 +998,8 @@ def _scan(repo: str, relpath: str, text: str, ctx: ScanContext, proc_file: bool
     sc.run(stmts, (repo, relpath), _Scope({}), None, None, 0)
     name = card.name or _stem(relpath)
     node = Node(sc.job_id, "proc" if proc_file else "job", name, repo,
-                [Evidence(repo, relpath, card.line, card.text)], {})
+                [Evidence(repo, relpath, card.line, card.text)],
+                {"jcllib": list(sc.jcllib)} if sc.jcllib else {})
     called = False
     other_copy = ""
     if proc_file:

@@ -428,3 +428,58 @@ def test_idcams_repro_define_delete(tmp_path):
     assert ("update", "dataset", "CLM.SRC") not in got  # INFILE says it is read
     rep = [r for r in step_refs(i, "r/J1.jcl#S1") if r.target_name == "CLM.FLAT"][0]
     assert rep.evidence.line == 9 and "INDATASET" in rep.evidence.text
+
+
+# ------------------------------------------------------------------ Batch A fixes
+
+_INSTREAM_JOB = ("//JOBX    JOB (ACCT),'X'\n//MYPROC  PROC\n//S1      EXEC PGM=LOCPGM\n"
+                 "//IN      DD DSN=LOC.IN,DISP=SHR\n//        PEND\n//STEP1   EXEC MYPROC\n")
+
+
+def test_instream_proc_call_does_not_mark_a_cataloged_proc_called(tmp_path):
+    # A1: bbb's job runs its own in-stream MYPROC; aaa's cataloged MYPROC has no caller
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_A},
+                              "bbb": {"jcl/JOBB.jcl": _INSTREAM_JOB}})
+    got = {(r.op, r.target_name) for r in i.refs if r.src.startswith("step:aaa/")}
+    assert ("runs", "AAAPGM") in got and ("read", "AAA.IN") in got
+    for r in i.refs:
+        if r.src.startswith("step:aaa/"):
+            assert r.attrs.get("proc_default") and "no caller in these repos" in r.reason
+    job = {(r.op, r.target_name) for r in step_refs(i, "bbb/jcl/JOBB.jcl#S1")}
+    assert job == {("runs", "LOCPGM"), ("read", "LOC.IN")}
+
+
+_JCLLIB_JOB = ("//JOBX    JOB (ACCT),'X'\n//LIBS    JCLLIB ORDER=(PROD.PROCLIB,'SYS1.PROCLIB')\n"
+               "//STEP1   EXEC MYPROC\n")
+
+
+def test_jcllib_order_with_proc_from_another_repo_is_partial(tmp_path):
+    # A2
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_A},
+                              "bbb": {"jcl/JOBB.jcl": _JCLLIB_JOB}})
+    refs = step_refs(i, "bbb/jcl/JOBB.jcl#S1")
+    assert {(r.op, r.target_name) for r in refs} == {("runs", "AAAPGM"), ("read", "AAA.IN")}
+    for r in refs:
+        assert r.reason and ("JCLLIB ORDER not mapped to repos; PROC MYPROC taken from "
+                             "aaa/proc/MYPROC.proc") in r.reason
+    assert i.nodes["job:bbb/jcl/JOBB.jcl"].attrs["jcllib"] == ["PROD.PROCLIB", "SYS1.PROCLIB"]
+    assert i.nodes["step:bbb/jcl/JOBB.jcl#S1"].attrs["jcllib"] == ["PROD.PROCLIB",
+                                                                   "SYS1.PROCLIB"]
+
+
+def test_jcllib_order_with_proc_in_own_repo_stays_certain(tmp_path):
+    i = scan_repos(tmp_path, {"bbb": {"proc/MYPROC.proc": _PROC_B,
+                                      "jcl/JOBB.jcl": _JCLLIB_JOB.replace("ORDER=(PROD.PROCLIB,'SYS1.PROCLIB')", "ORDER=PROD.PROCLIB")}})
+    refs = step_refs(i, "bbb/jcl/JOBB.jcl#S1")
+    assert refs and all(r.reason is None for r in refs)
+    assert i.nodes["job:bbb/jcl/JOBB.jcl"].attrs["jcllib"] == ["PROD.PROCLIB"]
+
+
+def test_jcllib_order_with_include_from_another_repo_is_partial(tmp_path):
+    inc = "//S9      EXEC PGM=INCPGM\n"
+    job = _JCLLIB_JOB.replace("//STEP1   EXEC MYPROC\n", "//        INCLUDE MEMBER=INCMEM\n")
+    i = scan_repos(tmp_path, {"aaa": {"jcl/INCMEM": inc}, "bbb": {"jcl/JOBB.jcl": job}})
+    r = one_ref(i, "bbb/jcl/JOBB.jcl#S9", "runs")
+    assert r.target_name == "INCPGM"
+    assert "JCLLIB ORDER not mapped to repos; INCLUDE member INCMEM taken from aaa/jcl/INCMEM" \
+        in r.reason
