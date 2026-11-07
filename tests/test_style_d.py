@@ -131,3 +131,19 @@ def test_excalidraw_key_has_a_heading_and_square_brackets_for_plain_markers():
     marks = [t for i, t in texts.items() if i.startswith("label-") and t[:1] in "[("
              and t.rstrip("])").lstrip("[(").isdigit()]
     assert marks and all(t.startswith("[") for t in marks), marks
+
+
+def test_loose_dot_sits_fully_outside_the_box_it_points_at():
+    """Style D draws boxes over lines, so a dot centred on the box edge was half hidden
+    (claims-api's "1 outside system"). The dot now stops short of the edge, as in A to C."""
+    from archdiag.render.common import LOOSE_R
+    for route in ([(0.0, 50.0), (100.0, 50.0)], [(40.0, 0.0), (40.0, 30.0), (40.0, 30.0)],
+                  [(200.0, 10.0), (120.0, 10.0)]):
+        svg = style_d._edge_svg(style_d.Rough(7), 0, route, "loose", 0.0, 0.0)
+        m = re.search(r'<circle cx="([-0-9.]+)" cy="([-0-9.]+)" r="(\d+)"', svg)
+        cx, cy = float(m.group(1)), float(m.group(2))
+        tip, prev = route[-1], next(p for p in reversed(route) if p != route[-1])
+        # on the last stretch, its whole disc short of the edge point
+        dist = ((tip[0] - cx) ** 2 + (tip[1] - cy) ** 2) ** 0.5
+        assert dist >= LOOSE_R - 0.01, (route, cx, cy)
+        assert (cx - tip[0]) * (prev[0] - tip[0]) + (cy - tip[1]) * (prev[1] - tip[1]) > 0

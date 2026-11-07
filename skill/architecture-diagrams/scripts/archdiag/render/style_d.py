@@ -22,7 +22,7 @@ import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
+from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR, LOOSE_R,
                                     PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
                                     esc, gd_details, group_colors, legend, legend_width, line_style,
                                     link_wrap, loose_dot, node_href, note_lines, num, overview_block, path_d,
@@ -341,10 +341,16 @@ def _edge_svg(R: Rough, i: int, route: Sequence[Tuple[float, float]], style: str
     while k > 0 and abs(pts[k][0] - tip[0]) + abs(pts[k][1] - tip[1]) < 1e-6:
         k -= 1
     if style == "loose":
-        body = R.stroke(pts, False, amp=1.5)
+        # boxes are drawn over lines here: the dot stops LOOSE_R short of the box edge so
+        # the whole dot shows, as in styles A to C
+        dx, dy = tip[0] - pts[k][0], tip[1] - pts[k][1]
+        d = math.hypot(dx, dy) or 1.0
+        back = min(float(LOOSE_R), d * 0.5)
+        dot = (tip[0] - dx / d * back, tip[1] - dy / d * back)
+        body = R.stroke(pts[:k + 1] + [dot], False, amp=1.5)
         return ('<path id="edge-%d" d="%s" fill="none" stroke="%s" stroke-width="%s" '
                 'stroke-linecap="round" stroke-linejoin="round"/>%s'
-                % (i, _d(body), color, num(width), loose_dot(tip[0], tip[1])))
+                % (i, _d(body), color, num(width), loose_dot(dot[0], dot[1])))
     head, stop = _chevron(R, pts[k], tip)
     body = R.stroke(pts[:-1] + [stop], False, amp=1.5)
     out = ('<path id="edge-%d" d="%s" fill="none" stroke="%s" stroke-width="%s" '
