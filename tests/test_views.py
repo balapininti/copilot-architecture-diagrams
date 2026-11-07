@@ -54,12 +54,14 @@ def test_landscape_shape():
     assert "dataset:CLM.MASTER.KSDS" in ids and "queue:CLM.REQ.LQ" in ids
     assert edges(v, "app:claims-api", "queue:CLM.REQ.LQ")
     assert node(v, "app:claims-db").kind == "datastore"
-    # 8 classes and one partly known link inside: the final-fix traps PaymentArchiveRepository
-    # and PartnerClient (its path-only REST match to our own endpoint is partial, Ruling 36)
-    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 8 classes",
+    # 9 classes and one partly known link inside: the final-fix traps PaymentArchiveRepository,
+    # ClaimHistoryRepository and PartnerClient (its path-only REST match to our own endpoint
+    # is partial, Ruling 36)
+    assert node(v, "app:claims-api").detail_lines == ["2 endpoints · 9 classes",
                                                       "1 partly known link inside"]
     # tables of a datastore app are inside it, not separate boxes
-    assert not any(i.startswith("table:") for i in ids)
+    # (a table no DDL defines belongs to no app: shared by two apps, it is its own box, I5)
+    assert [i for i in ids if i.startswith("table:")] == ["table:CLMS.CLMHIST"]
     sql = edges(v, "app:claims-online", "app:claims-db")
     assert [e.label for e in sql] == ["SQL · CLAIM"]
     assert sql[0].status == CONFIRMED and len(sql[0].underlying) == 2
@@ -202,9 +204,9 @@ def test_landscape_keeps_every_loose_end():
 def test_landscape_folds_each_apps_loose_ends():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    # 19: the final-fix traps make CLAIMS.DAILY (CLMEXT, duplicate PROC) and CLM.AUDIT
-    # (CLMO140, MQ handles) shared between apps
-    assert len(v.nodes) == 19
+    # 20: the final-fix traps make CLAIMS.DAILY (CLMEXT, duplicate PROC), CLM.AUDIT
+    # (CLMO140, MQ handles) and the DDL-less table CLMS.CLMHIST (CLMB510) shared between apps
+    assert len(v.nodes) == 20
     box = node(v, "missing:app:claims-online")
     assert (box.kind, box.label, box.status) == ("missing", "7 loose ends", LOOSE)
     assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +4"]

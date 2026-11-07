@@ -608,3 +608,37 @@ def test_unresolved_endpoint_runs_handler_partial():
 def test_endpoint_without_handler_has_no_runs_edge():
     r = _run([_ep("GET", "/a")], [])
     assert edges(op="runs", r=r) == []
+
+
+# tables with no DDL (Ruling 37, final review I5) -------------------------------------------
+
+def _tref(src, op, name, line=3, repo="r"):
+    return Ref(src, op, "table", name, _ev(line, "x", repo))
+
+
+def _cls(name, repo):
+    return Node("class:%s/%s" % (repo, name), "class", name, repo, [_ev(1, name + ".java", repo)])
+
+
+def test_table_without_ddl_used_by_two_repos_is_a_partial_shared_table():
+    nodes = [_prog("P", repo="ra"), _cls("C", "rb")]
+    r = _run(nodes, [_tref("program:P", "insert", "CLMS.NODDL", 3, "ra"),
+                     _tref("class:rb/C", "select", "clms.noddl", 4, "rb")])
+    a = edge("program:P", "insert", "table:CLMS.NODDL", r)
+    b = edge("class:rb/C", "select", "table:CLMS.NODDL", r)
+    for e in (a, b):
+        assert e.status == "partial" and e.reason == "no DDL for this table in these repos"
+    t = r.nodes["table:CLMS.NODDL"]
+    assert t.kind == "table" and t.repo is None and t.attrs.get("no_ddl") is True
+    links = {(x, y, via): es for x, y, via, es in repo_links(r)}
+    assert ("ra", "rb", "table CLMS.NODDL") in links
+
+
+def test_table_without_ddl_used_by_one_repo_stays_loose():
+    r = _run([_prog("P", repo="ra"), _prog("Q", repo="ra")],
+             [_tref("program:P", "select", "CLMS.SHARED", 3, "ra"),
+              _tref("program:Q", "update", "CLMS.SHARED", 4, "ra")])
+    for src in ("program:P", "program:Q"):
+        e = edge_from(src, None, r)
+        assert e.dst == "missing:table:CLMS.SHARED" and e.status == "loose"
+    assert "table:CLMS.SHARED" not in r.nodes

@@ -97,5 +97,7 @@
   {"src": "program:CLMB500", "op": "copy", "dst": "copybook:ADDRREC", "status": "confirmed"},
   {"src": "program:CLMB500", "op": "copy", "dst": "copybook:CLMPROC", "status": "confirmed"},
   {"src": "program:CLMB500", "op": "call", "dst": "program:CLMB210", "status": "confirmed"},
-  {"src": "program:CLMB500", "op": "select", "dst": "table:CLMS.CLAIM", "status": "confirmed"}
+  {"src": "program:CLMB500", "op": "select", "dst": "table:CLMS.CLAIM", "status": "confirmed"},
+  {"src": "program:CLMB510", "op": "insert", "dst": "table:CLMS.CLMHIST", "status": "partial"},
+  {"src": "class:claims-api/ClaimHistoryRepository", "op": "select", "dst": "table:CLMS.CLMHIST", "status": "partial"}
 ]

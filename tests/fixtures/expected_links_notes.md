@@ -206,3 +206,13 @@ such host in its config, so the match is on the path only. Relative URLs (ClaimS
 | CLMB500 copy copybook:CLMPROC | confirmed | CLMB500.cbl:12; copylib/CLMPROC has no extension and sits in a copybook folder (`copylib`) |
 | CLMB500 call program:CLMB210 | confirmed | CLMPROC:2 `CALL 'CLMB210'`: the statement is in the copybook, so it belongs to every program that COPYs it (evidence: the copybook line and CLMB500.cbl:12); one PROGRAM-ID CLMB210 |
 | CLMB500 select table:CLMS.CLAIM | confirmed | CLMPROC:3 `FROM CLMS.CLAIM`, qualified, exact DDL match (CLAIM.sql:1) |
+
+### I5 / Ruling 37: a table no DDL defines, used from two repos (`claims-batch/cobol/CLMB510.cbl`, `claims-api/.../ClaimHistoryRepository.java`)
+
+| Edge | Status | Why |
+|---|---|---|
+| CLMB510 insert table:CLMS.CLMHIST | partial | CLMB510.cbl:9 `INSERT INTO CLMS.CLMHIST`; no DDL in these repos defines it, but claims-api uses it too, so it is a shared `table:CLMS.CLMHIST` with no definition: "no DDL for this table in these repos" (Ruling 37). The old resolver drew two red loose ends and no link between the repos |
+| ClaimHistoryRepository select table:CLMS.CLMHIST | partial | ClaimHistoryRepository.java:16 `FROM CLMS.CLMHIST`; same shared table, same reason |
+
+A table with no DDL used from one repo only stays a loose end to `missing:table:<NAME>`
+(unit test in test_resolve_data.py).

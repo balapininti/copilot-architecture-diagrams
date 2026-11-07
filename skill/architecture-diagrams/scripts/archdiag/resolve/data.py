@@ -36,12 +36,13 @@ NO_READER = "written but never read in these repos"
 NO_WRITER = "read but never written in these repos"
 NO_CONSUMER = "how this queue reaches CICS isn't in these repos"
 NO_PRODUCER = "nothing in these repos puts to this queue"
+NO_DDL = "no DDL for this table in these repos"
 # the IBM-supplied CICS-MQ bridge monitor: never defined in a user CSD
 BRIDGE_MONITOR = "CKBR"
 # load-library DDs: built and read outside the code, never a loose end
 LIBRARY_DDS = frozenset(["STEPLIB", "JOBLIB", "JOBCAT", "STEPCAT", "ISPLLIB", "SYSLMOD", "SYSLIB"])
 # resources that, without a definition, belong to no repo and link every repo using them
-SHARED_KINDS = ("dataset", "queue")
+SHARED_KINDS = ("dataset", "queue", "table")
 LOCAL_HOSTS = frozenset(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"])
 
 
@@ -76,6 +77,7 @@ class _Data:
         self.file_dsn: Dict[str, List[Ref]] = {}
         self.tables_by_name: Dict[str, List[str]] = {}
         self.rest: List[Tuple[str, str, str]] = []  # (node id, METHOD, norm path)
+        self.no_ddl: Dict[str, List[Ref]] = {}  # table key -> uses with no DDL match
         for ref in inv.refs:
             if ref.op == "runs" and ref.target_kind == "program" and ref.target_name:
                 self.step_programs.setdefault(ref.src, []).append(ref.target_name.strip().upper())
@@ -322,7 +324,10 @@ class _Data:
             final = self.follow_table(c)
             finals.setdefault(final[0], final)
         if not finals:
-            self.add(ref, ref.op, missing(self.nodes, "table", wanted), LOOSE, ref.reason)
+            # no DDL: decided once every use is known (Ruling 37, undefined_tables)
+            first, dot, rest = wanted.partition(".")
+            key = rest if dot and rest and first in self.quals else wanted
+            self.no_ddl.setdefault(key, []).append(ref)
             return
         if len(finals) > 1:
             names = [self.nodes[c].name for c in cands]
@@ -361,6 +366,29 @@ class _Data:
             self.table_match(ref, cands, full,
                              join(loc, "matched only after dropping schema %s, which is not a "
                                   "listed environment qualifier" % schema))
+
+    def undefined_tables(self) -> None:
+        """Tables no DDL defines (Ruling 37): used from two or more repos, they are a shared
+        ``table:<NAME>`` with no definition and every use is partial ("no DDL for this table
+        in these repos"); used from one repo only, each use is a loose end."""
+        for key in sorted(self.no_ddl):
+            refs = self.no_ddl[key]
+            repos = set()
+            for ref in refs:
+                src = self.nodes.get(ref.src)
+                repos.add(src.repo if src is not None and src.repo else ref.evidence.repo)
+            if len(repos) < 2:
+                for ref in refs:
+                    self.add(ref, ref.op, missing(self.nodes, "table", key), LOOSE, ref.reason)
+                continue
+            tid = "table:" + key
+            if tid not in self.nodes:
+                schema, _, base = key.rpartition(".")
+                self.nodes[tid] = Node(tid, "table", key, None, [],
+                                       {"schema": schema or None, "name": base,
+                                        "type": "table", "no_ddl": True})
+            for ref in refs:
+                self.add(ref, ref.op, tid, PARTIAL, join(ref.reason, NO_DDL))
 
     # -- queues --------------------------------------------------------------------------
     def follow_queue(self, name: str) -> Tuple[str, List[Evidence]]:
@@ -570,6 +598,7 @@ class _Data:
                 self.http(ref)
             elif op == "uses" and kind in ("class", "component"):
                 self.uses(ref)
+        self.undefined_tables()
         self.handlers()
         self.triggers()
         self.dataset_loose()

@@ -140,6 +140,25 @@ def _candidates(route: List[Tuple[float, float]], probe: "Pill", own: int = -1,
 Rect = Tuple[float, float, float, float]
 
 
+def _far_candidates(route: List[Tuple[float, float]], probe: "Pill"
+                    ) -> List[Tuple[float, float]]:
+    """Spots 2 to 4 pill sizes away from the line, on either side, for a pill that found
+    no free spot on or next to it."""
+    out: List[Tuple[float, float]] = []
+    if len(route) < 2:
+        return out
+    for t in _PILL_SPOTS:
+        (px, py), (ux, uy) = seg_at(route, t)
+        for k in (2, 3, 4):
+            if abs(ux) >= abs(uy):
+                off = k * (probe.h / 2 + MARKER_R + 4)
+                out += [(px, py - off), (px, py + off)]
+            else:
+                off = k * (probe.w / 2 + MARKER_R + 4)
+                out += [(px + off, py), (px - off, py)]
+    return out
+
+
 def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                 routes: List[List[Tuple[float, float]]],
                 edge_text: Callable[[object], str],
@@ -183,6 +202,16 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                     break
             if best_cost == 0:
                 break
+        if best_cost:  # nowhere free on or beside the line: try further out from it
+            probe = Pill(i, s, (0.0, 0.0), styles[i])
+            for at in _far_candidates(route, probe):
+                p = Pill(i, s, at, styles[i])
+                r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
+                cost = sum(_overlap(r, o) for o in obstacles)
+                if cost < best_cost:
+                    best, best_cost = p, cost
+                if cost == 0:
+                    break
         pills.append(best)
         obstacles.append((best.x, best.y, best.w, best.h))
     return pills
