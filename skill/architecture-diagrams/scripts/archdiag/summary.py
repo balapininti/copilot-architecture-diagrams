@@ -276,3 +276,99 @@ def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]],
                 runs.append("proc %s" % s.attrs["proc"])
         return "steps run %s" % _names(runs) if runs else ""
     return ""
+
+
+# ---- gitdiagram context: what Copilot reads to propose groups for one repo (spec 4, 7) ----
+
+_README_LINES = 200
+_ENTRY_KINDS = ("job", "transaction", "endpoint", "page", "zosapi")
+_NAME_SKIP = ("step", "dataset", "missing", "external", "utility")
+
+
+def _repo_readme(r: Resolved, repo: str) -> List[str]:
+    from pathlib import Path
+    from .textio import read_source
+    base = next((x.path for x in r.inventory.repos if x.name == repo), repo)
+    folder = Path(r.inventory.workspace) / base
+    try:
+        names = sorted(p.name for p in folder.iterdir()
+                       if p.is_file() and p.name.lower().startswith("readme"))
+        if not names:
+            return []
+        text = read_source(folder / names[0])
+    except OSError:
+        return []
+    lines = text.splitlines()
+    out = lines[:_README_LINES]
+    if len(lines) > _README_LINES:
+        out.append("(README cut after %d lines)" % _README_LINES)
+    return out
+
+
+def _clip(lines: List[str], room: int, what: str) -> List[str]:
+    room = max(room, 1)
+    if len(lines) <= room:
+        return lines
+    return lines[:room - 1] + ["... %d more %s not listed" % (len(lines) - room + 1, what)]
+
+
+def gitdiagram_context(r: Resolved, repo: str, max_lines: int = 1500) -> str:
+    from .gitdiagram import file_of, repo_files
+    files = repo_files(r, repo)
+    names: Dict[str, List[str]] = {}
+    ends: Dict[str, Optional[Tuple[str, str]]] = {}
+    for n in sorted(r.nodes.values(), key=lambda n: (n.kind, n.name, n.id)):
+        ends[n.id] = file_of(n, r)
+        f = ends[n.id]
+        if f and f[0] == repo and n.kind not in _NAME_SKIP:
+            lst = names.setdefault(f[1], [])
+            tag = "%s:%s" % (n.kind, n.name)
+            if tag not in lst:
+                lst.append(tag)
+
+    rows = ["%s\t%s\t%s" % (f["path"], f["kind"], " ".join(names.get(f["path"], [])[:3]))
+            for f in files]
+    links, leaving = set(), Counter()
+    for e in r.edges:
+        a, b = ends.get(e.src), ends.get(e.dst)
+        if not a or a[0] != repo:
+            continue
+        if b and b[0] == repo:
+            if a[1] != b[1]:
+                links.add("%s → %s  %s  %s" % (a[1], b[1], e.op, e.status))
+        else:
+            dn = r.nodes.get(e.dst)
+            leaving[b[0] if b else "%s (%s)" % (dn.kind if dn else "unknown", "no file")] += 1
+    link_rows = sorted(links)
+    leave_rows = ["%d links to %s" % (c, k) for k, c in sorted(leaving.items())]
+    entries = sorted({"%s\t%s\t%s" % (n.kind, n.name, ends[n.id][1])
+                      for n in r.nodes.values()
+                      if n.kind in _ENTRY_KINDS and ends[n.id] and ends[n.id][0] == repo})
+
+    readme = _repo_readme(r, repo)
+    readme = readme if readme else ["(no README at the repo root)"]
+    other = len(readme) + len(link_rows) + len(leave_rows) + len(entries) + 14
+    summarised = len(rows) + other > max_lines
+    if summarised:
+        folders: Dict[str, List[str]] = {}
+        for f in files:
+            folders.setdefault(f["path"].split("/", 1)[0] if "/" in f["path"] else "(repo root)",
+                               []).append(f["kind"])
+        table = []
+        for fo, ks in sorted(folders.items()):
+            c = Counter(ks)
+            kinds = ", ".join("%s %d" % (k, v) for k, v in sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+            table.append("%s/\t%d files\t%s" % (fo, len(ks), kinds) if fo != "(repo root)"
+                         else "(repo root)\t%d files\t%s" % (len(ks), kinds))
+        table = _clip(table, max_lines // 3, "folders")
+        table.append("Too many files to list: summarised per folder.")
+    else:
+        table = rows
+    budget = max_lines - (len(table) + len(readme) + 14)
+    each = max(budget // 2, 3)
+    link_rows = _clip(link_rows, each, "links")
+    entries = _clip(entries, max(budget - len(link_rows) - len(leave_rows), 3), "entry points")
+    out = ["# Repo %s" % repo, "", "## Files"] + table + ["", "## README"] + readme + \
+          ["", "## Code links between files"] + (link_rows or ["(none)"]) + \
+          leave_rows + ["", "## Entry points"] + (entries or ["(none)"])
+    return "\n".join(out) + "\n"
