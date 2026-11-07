@@ -573,3 +573,44 @@ def test_repomap_caps_evidence_files():
     card = node(build_view(r, default_groups(r), "repomap", None), "repo:a")
     assert card.highlight == 8
     assert card.detail_lines[8] == "… 4 more evidence files"
+
+
+# B9: repomap partials inside a repo, the folded loose-ends label, the depth-cut count ----------
+
+def test_b9_repomap_card_counts_partly_known_links_inside():
+    r = _synthetic([("program:Pa1", "program:Pa2", PARTIAL, "call"),
+                    ("program:Pa2", "program:Pa3", PARTIAL, "call"),
+                    ("program:Pa1", "program:Pa3", CONFIRMED, "call"),
+                    ("program:Pa1", "program:Pb1", PARTIAL, "call")])
+    v = build_view(r, default_groups(r), "repomap", None)
+    assert "2 partly known links inside" in node(v, "repo:a").detail_lines
+    assert not any("inside" in x for x in node(v, "repo:b").detail_lines)
+
+
+def test_b9_folded_loose_ends_line_is_labelled():
+    r, g = fixture()
+    v = build_view(r, g, "landscape", None)
+    e, = edges(v, "app:claims-online", "missing:app:claims-online")
+    assert e.label == "7 loose ends"
+
+
+def test_b9_depth_cut_counts_on_past_a_forward_get():
+    nodes = {"transaction:T1": Node("transaction:T1", "transaction", "T1", "a", [])}
+    es = []
+    prev = "transaction:T1"
+    for i in range(9):
+        nid = "program:P%02d" % i
+        nodes[nid] = Node(nid, "program", "P%02d" % i, "a", [])
+        es.append(Edge(prev, "runs" if i == 0 else "call", nid, CONFIRMED, None, []))
+        prev = nid
+    nodes["queue:Q"] = Node("queue:Q", "queue", "Q", None, [])
+    nodes["program:R"] = Node("program:R", "program", "R", "a", [])
+    nodes["program:S"] = Node("program:S", "program", "S", "a", [])
+    # the last program reads Q (a forward get, cut); Q's writer R and R's callee lie beyond
+    es.append(Edge(prev, "get", "queue:Q", CONFIRMED, None, []))
+    es.append(Edge("program:R", "get", "queue:Q", CONFIRMED, None, []))
+    es.append(Edge("program:R", "call", "program:S", CONFIRMED, None, []))
+    inv = Inventory("ws", [Repo("a", "a")], dict(nodes), [], "fp", {})
+    r = Resolved(inv, nodes, es)
+    v = build_view(r, default_groups(r), "flow_tx", "T1")
+    assert "Stopped after 8 hops; 3 more links not drawn" in v.notes, v.notes

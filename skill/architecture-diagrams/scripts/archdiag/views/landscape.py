@@ -144,7 +144,8 @@ def landscape(ctx: _Ctx) -> ViewGraph:
                             "in %s" % a.name, "missing", ctx.group_of_app(a.name), st,
                             [" · ".join(names[:3]) + more]))
         # the least certain status: a loose end never looks like a partly known one
-        vedges.append(VEdge(rid, mid, "", st, "runtime", _evidence(es), None, list(es)))
+        vedges.append(VEdge(rid, mid, "%d loose end%s" % (len(ms), "" if len(ms) == 1 else "s"),
+                            st, "runtime", _evidence(es), None, list(es)))
     v = ViewGraph("Landscape", "landscape", None, vnodes, vedges, ctx.vgroups(vnodes), notes)
     if dropped:
         v.notes.append("%d partly known or loose links have no application at one end; the "

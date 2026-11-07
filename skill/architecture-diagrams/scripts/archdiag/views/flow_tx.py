@@ -63,7 +63,7 @@ def flow_tx(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
     pop: Dict[str, int] = {}
     parent: Dict[str, _Step] = {}
     steps: Dict[int, _Step] = {}
-    cut: Set[int] = set()
+    cut: Dict[int, str] = {}  # links not followed: edge id -> the box past the cut
     dq = deque(starts)
 
     def record(e: Edge, near: str, far: str, back: bool) -> _Step:
@@ -85,7 +85,7 @@ def flow_tx(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
                 record(e, u, w, back)
                 continue
             if nd > TX_DEPTH:
-                cut.add(id(e))
+                cut.setdefault(id(e), w)
                 continue
             dist[w] = nd
             parent[w] = record(e, u, w, back)
@@ -138,11 +138,12 @@ def flow_tx(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
     _mark_missing(vnodes, vedges)
     v = ViewGraph(title, "flow_tx", scope, vnodes, vedges, ctx.vgroups(vnodes))
     # links beyond the cut, counted (not drawn) by walking on from where it stopped
-    beyond: Set[int] = cut - set(steps)
+    beyond: Set[int] = set(cut) - set(steps)
     if beyond:
         seen_b = set(dist)
-        far = [e.dst if e.op != "get" or e.dst in dist else e.src
-               for e in ctx.r.edges if id(e) in beyond]
+        # walk on from the box each cut link leads to (a forward read leads to its queue,
+        # a reader found backwards to the reader), counting distinct links (B9)
+        far = [cut[i] for i in sorted(beyond)]
         dq2 = deque(x for x in far if x not in seen_b)
         while dq2:
             u = dq2.popleft()

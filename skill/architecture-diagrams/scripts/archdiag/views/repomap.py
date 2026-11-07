@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Tuple
 
-from archdiag.model import Edge
+from archdiag.model import PARTIAL, Edge
 from archdiag.resolve import repo_link_status, repo_links
 from archdiag.views.common import (_GAP_OPS, VEdge, VNode, ViewGraph, _combine, _Ctx, _display,
                                    _evidence, _key_label, _kind_of, _mark_missing, _scope_error,
@@ -71,6 +71,22 @@ def repomap(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
                 keyed.append((("repo:%s" % repo, e.dst, label), e))
                 note_files(e, {repo})
     stubs = _combine(keyed, _key_label)
+    # partly known links with both ends in one repo draw no line here: count them on its
+    # card (B9); a repo-less end belongs to the repos touching it
+    inside: Dict[str, int] = {}
+    for e in ctx.r.edges:
+        if e.status != PARTIAL:
+            continue
+        ends: Set[str] = set()
+        ok = True
+        for x in (e.src, e.dst):
+            n = nodes.get(x)
+            if n is None or n.kind in ("missing", "external"):
+                ok = False
+                break
+            ends |= {n.repo} if n.repo else touch.get(x, set())
+        if ok and len(ends) == 1:
+            inside[next(iter(ends))] = inside.get(next(iter(ends)), 0) + 1
     vedges += stubs
     used = {x for e in vedges for x in (e.src, e.dst)}
     vnodes: List[VNode] = []
@@ -95,6 +111,9 @@ def repomap(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
             lines.insert(len(hl), "… %d more evidence files" % (len(hl_all) - len(hl)))
         if len(rest) > 3:
             lines.append("… %d more" % (len(rest) - 3))
+        if inside.get(repo):
+            lines.append("%d partly known link%s inside" % (inside[repo],
+                                                             "" if inside[repo] == 1 else "s"))
         vnodes.append(VNode(rid, repo, _tech({n.kind for n in mine}), "repo", None, None, lines,
                             highlight=len(hl)))
     for nid in sorted(used):
