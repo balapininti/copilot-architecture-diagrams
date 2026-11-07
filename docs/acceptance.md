@@ -6,7 +6,7 @@ parts. **Run here (results)** holds checks that were actually run, with real out
 **To run on Windows (checklist)** holds everything else, with a blank result column. Nothing in
 the second part has been run, and none of it is marked as passed.
 
-Date of the run here: 2026-11-07. Release under acceptance: archdiag **0.1.3** (`archdiag/__init__.py`, `pyproject.toml`; cache schema 4). Commit under test: branch `fix/outstanding`, HEAD `ab5a151` (all fix batches A to E applied; this file is committed on top of it and changes no code). Every check in the table below was run on that commit; earlier results (0.1.0 at `f69d1de`) are replaced. After the review cleanups (`69c3b29`: label placement tie-break, layout notes, test robustness) checks 1, 2a, 2c and 3 were run again on `69c3b29` with the same results (suite: 608 passed; 43 files parsed and 42 modules imported under 3.9.6; 17 CLI commands exit 0, same summary lines, 74 files); checks 4 to 6 were not repeated there.
+Date of the run here: 2026-11-07. Release under acceptance: archdiag **0.1.4** (`archdiag/__init__.py`, `pyproject.toml`; cache schema 5; adds the gitdiagram view). Checks 1 to 6 below were run for 0.1.3 on branch `fix/outstanding`, HEAD `ab5a151`, and are kept as that record; check 7 (the gitdiagram) was run for 0.1.4 on branch `feature/gitdiagram`, HEAD `750bc02`, where the full suite gave 741 passed. Earlier notes on 0.1.3: earlier results (0.1.0 at `f69d1de`) are replaced. After the review cleanups (`69c3b29`: label placement tie-break, layout notes, test robustness) checks 1, 2a, 2c and 3 were run again on `69c3b29` with the same results (suite: 608 passed; 43 files parsed and 42 modules imported under 3.9.6; 17 CLI commands exit 0, same summary lines, 74 files); checks 4 to 6 were not repeated there.
 
 Two Pythons were used. `.venv/bin/python` is Python 3.14.4 and runs the pytest suite. `/usr/bin/python3` is the macOS system **Python 3.9.6** (the lowest supported version), run with `-I` (isolated: no user site-packages, no environment variables, no current folder on the path); it has no pytest and none could be installed offline (pytest 9 no longer supports 3.9; a pytest 8.3 or older wheel is needed once), so **the full pytest suite was not run on 3.9 here**. That is now Windows step W1.4 (see W1.4a).
 
@@ -27,6 +27,7 @@ Working copy: the fixture was copied to
 | 4 | Every output parses | xml.etree for `.svg`/`.drawio`; json for `.excalidraw`/`.json`; `.md` non-empty; HTML scanned for `src=`/`href=` (non-fragment, non-data), `@import`, `url(http...)` | **PASS**: 74 files checked, 0 failures |
 | 5 | Screenshots vs samples | headless Chrome at each SVG's own size, all 28 SVGs of check 3 | **PASS with known issues** (see Visual check) |
 | 6 | HTML interaction | headless Chrome `--virtual-time-budget=3000 --dump-dom` on `repomap-c.html` with a probe script | **PASS** |
+| 7 | Gitdiagram (0.1.4), Python 3.9.6 isolated, then a visual check | on a fresh copy of the fixture (with its `gitdiagram-claims-batch.json` and `gitdiagram-claims-api.json`): `/usr/bin/python3 -I run.py scan`, then for `claims-batch` and `claims-api`: `gitdiagram-context --repo <repo>` and `draw --level gitdiagram --scope <repo> --style all`; headless Chrome screenshots of the 8 SVGs at their own size | **PASS with known issues**: every exit code 0, nothing on stderr; context 50 and 34 lines; claims-batch `11 nodes, 18 links: 13 confirmed, 2 partly known, 2 loose ends` (the 18th is the grey Scheduler "starts" line) and `Not yet grouped: 2 files`; claims-api `12 nodes, 13 links: 7 confirmed, 5 partly known, 1 loose ends` and `Not yet grouped: 1 file`; all 20 outputs parse and are byte-identical to the Python 3.14 run. See "7. Gitdiagram visual check" |
 
 ### 3. Commands and results
 
@@ -74,6 +75,16 @@ What matches the samples:
 - Step numbers: `flow-claims--id-*.svg` draws every step number (1 to 27) as a small circle with the number in it.
 - Line labels: a label sits on its own line; where no spot on the line is clear, the line carries a small numbered marker (circle for a step, square otherwise) and the label is listed under "Line labels (marked on the lines)". After Batch E the `claims/:id` flow keys 2 labels over the four styles (style C only; it keyed 18), CLMD100 and CLMI key none, the landscape keys 1 to 3 per style and the whole-estate repo map 9 to 14 per style.
 
+### 7. Gitdiagram visual check
+
+The 8 gitdiagram SVGs (claims-batch and claims-api, styles A to D) were read as PNGs and compared with GitDiagram's own picture of this repo (https://gitdiagram.com/balapininti/copilot-architecture-diagrams: named, coloured groups, verb-labelled arrows, one "Engineer" actor, an overview). Reference PNGs: `docs/acceptance/style-b-gitdiagram-claims-batch.png` and `docs/acceptance/style-a-gitdiagram-claims-api.png`.
+
+What matches: one box per named group with its `[tech]`, up to 4 file names (a fifth file is shown, not "… 1 more") and the description, a distinct colour per group; labelled arrows ("CALL · CLMB210", "SQL · PAYMENT", "runs · CLMB300, CLMB400"); entry actors on the left (Scheduler with its 3 jobs for claims-batch, REST endpoints for claims-api) and the claims-portal caller under them; outside repos collapsed to grey stubs on the right; the overview band above the picture; a "Not yet grouped" box with its files; the legend shows the grey "starts" entry only for claims-batch, which has the Scheduler line. Solid only where the code shows both ends, orange dotted for partly known and the Copilot-suggested "looks up claims in", red with a dot for loose ends.
+
+Fixed during this check: a narrow line label cut a word without a break point ("ClaimSta / tusClien / t", all four styles of claims-api; it now goes to the key), group boxes said "… 1 more files", and stdout's "Top issues" listed the Scheduler "starts" line as "nothing found at the other end".
+
+Known gitdiagram issues (readability only): in claims-batch the red loose lines leave the bottom of "Nightly jobs" and double back under the box before running right, and the long horizontal runs to the right-hand stubs cross the vertical "CALL · CLMB210" line from "Not yet grouped"; style D draws the red loose dot of claims-api's "1 outside system" half under the sticky box. GitDiagram's arrows carry verbs ("runs command"); ours carry the link kind and names by design (spec 4.2).
+
 ### Known issues
 
 These are readability gaps, not failures of any check.
@@ -97,7 +108,7 @@ path of a copy of that folder. Turn the network back on after any step that turn
 |---|---|---|
 | W1 | Python 3.9 test suite, network off | not run |
 | W2 | `install.ps1` on PowerShell 5.1 | not run |
-| W3 | VS Code agent mode, five requests | not run |
+| W3 | VS Code agent mode, five requests plus the gitdiagram request | not run |
 | W4 | Copilot CLI, five requests, project-install discovery | not run |
 | W5 | Outputs in Edge, VS Code, Word, PowerPoint, draw.io, Mermaid, Excalidraw, HTML offline | not run |
 | W6 | Blocked-commands fallback | not run |
@@ -144,7 +155,7 @@ Exact messages the installer prints (from `install.ps1`):
 
 Note on W2 step 7: the `\|` in that command is a Markdown table escape. In PowerShell type a plain `|`.
 
-### W3. VS Code agent mode, the five spec section 9 requests
+### W3. VS Code agent mode, the five spec section 9 requests and the gitdiagram request
 
 **Check that agent skills are on.** Names can vary by VS Code version, so record what you see.
 1. File > Preferences > Settings, search `chat.useAgentSkills` (or "agent skills"). The box should be ticked.
@@ -160,6 +171,7 @@ Open `<fixture>` (or the workspace from W2 step 3) in VS Code. For each request 
 | 3 | `Draw the claim details transaction as a whiteboard sketch.` | asks, or picks, the flow for `claims/:id` (or CLMI); style D; `.excalidraw` written | | | | | |
 | 4 | `Link map for claims-batch: what depends on it?` | `draw --level repomap --scope claims-batch`; style C `.html` written | | | | | |
 | 5 | `Draw everything in all four styles.` | `--style all`; four SVGs plus `.drawio`, `.md`, `.html`, `.excalidraw` | | | | | |
+| 6 | `Create a gitdiagram for claims-batch.` | uses the existing `architecture-diagrams\gitdiagram-claims-batch.json` (no new grouping proposed, the file is not rewritten); `draw --level gitdiagram --scope claims-batch`; style B by default; `gitdiagram-claims-batch-b.svg`, `.md`, `-links.md` written; relays `Not yet grouped: 2 files` and offers to place them. Delete the file and ask again: Copilot runs `gitdiagram-context --repo claims-batch`, shows proposed groups and overview before saving, then draws | | | | | |
 
 Also check: the second request reuses the scan (no full rescan) and a rescan happens when asked; Copilot edits no repo file and invents no links beyond `*-links.md`; the approval prompt shows `python ... run.py ...` with quoted paths; `→` and `·` are not garbled in the terminal.
 
