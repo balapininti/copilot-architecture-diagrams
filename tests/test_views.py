@@ -171,20 +171,40 @@ def test_landscape_keeps_every_loose_end():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
     ids = {n.id for n in v.nodes}
-    missing = {nid for nid in r.nodes if nid.startswith("missing:")}
-    assert missing <= ids
+    drawn = {u.dst for e in v.edges for u in e.underlying}
+    for nid in r.nodes:
+        if nid.startswith("missing:"):
+            assert nid in ids or nid in drawn, nid
     for n in v.nodes:
         if n.kind == "missing":
             assert n.status in (PARTIAL, LOOSE)
             assert all(e.status != CONFIRMED for e in v.edges if n.id in (e.src, e.dst))
-    # a loose end with one app attaches inside that app's group
-    assert node(v, "missing:program:CLMO120").group == "group:claims-online"
-    # the other side of a shared dataset stands alone
-    assert node(v, "missing:writer:CLM.MASTER.KSDS").group is None
+    # the far side of an exchange keeps its own box
+    for nid in ("missing:writer:CLM.MASTER.KSDS", "missing:reader:CLAIMS.AUDIT",
+                "missing:endpoint:DELETE /api/claims/{}", "missing:queue-consumer:CLM.AUDIT"):
+        assert node(v, nid).group is None
     assert edges(v, "dataset:CLM.MASTER.KSDS", "missing:writer:CLM.MASTER.KSDS")[0].status == LOOSE
     # NDM transfer stays dotted
     ndm, = edges(v, "app:claims-batch", "external:NDM:FINANCE")
     assert ndm.status == PARTIAL
+
+
+def test_landscape_folds_each_apps_loose_ends():
+    r, g = fixture()
+    v = build_view(r, g, "landscape", None)
+    assert len(v.nodes) == 17
+    box = node(v, "missing:app:claims-online")
+    assert (box.kind, box.label, box.status) == ("missing", "6 loose ends", LOOSE)
+    assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +3"]
+    e, = edges(v, "app:claims-online", "missing:app:claims-online")
+    want = {"missing:copybook:ERRMSG", "missing:program:?CLMO100:26", "missing:program:CLMO120",
+            "missing:table:?POLICY", "missing:transaction:CLMB", "missing:transaction:CLMX"}
+    assert {u.dst for u in e.underlying} == want and len(e.underlying) == 7
+    assert e.status == LOOSE  # the least certain: a red end never looks merely dotted
+    assert not want & {n.id for n in v.nodes}
+    # partly known links inside one application are counted on its box
+    assert "1 partly known link inside" in node(v, "app:claims-online").detail_lines
+    assert "2 partly known links inside" in node(v, "app:claims-batch").detail_lines
 
 
 def test_landscape_shared_code():
@@ -373,6 +393,10 @@ def test_large_landscape_capped():
     drawn = [u for e in v.edges if e.status == LOOSE for u in e.underlying]
     assert len(drawn) == len(loose)
     assert all(u.status != LOOSE for e in v.edges if e.status != LOOSE for u in e.underlying)
+    assert not any(n.id.startswith("more:None:") for n in v.nodes)
+    for n in v.nodes:
+        if n.id.startswith("more:") and n.kind == "missing":
+            assert "loose ends" in n.label
 
 
 def test_application_keeps_look_alikes_and_utilities():
@@ -402,3 +426,111 @@ def test_cap_is_fast_on_large_views():
     t = time.time()
     v = build_view(_big(3000), default_groups(_big(3000)), "application", "big")
     assert len(v.nodes) <= MAX_NODES and time.time() - t < 5
+
+
+# ------------------------------------------------------------------ fix round 1
+
+def _with_suggestion(tmp_path, frm, to, note="nightly feed"):
+    r, _ = fixture()
+    p = tmp_path / "groups.json"
+    p.write_text(json.dumps({"apps": [], "suggested_links": [{"from": frm, "to": to, "note": note}]}))
+    return r, load_groups(p, r)
+
+
+def test_undrawable_suggestions_are_noted(tmp_path):
+    r, g = _with_suggestion(tmp_path, "claims-batch", "claims-api")
+    msg = "Copilot suggests a link claims-batch → claims-api (nightly feed); shown on the landscape"
+    assert msg in build_view(r, g, "application", "claims-batch").notes
+    assert msg in build_view(r, g, "flow_job", "CLMD100").notes
+    r2, g2 = _with_suggestion(tmp_path, "claims-portal", "shared-copybooks")
+    assert not build_view(r2, g2, "flow_job", "CLMD100").notes[1:]  # not about this job
+    r, g = _with_suggestion(tmp_path, "program:CLMO100", "program:CLMB200", "")
+    v = build_view(r, g, "flow_tx", "CLMI")
+    assert "Copilot suggests a link program:CLMO100 → program:CLMB200; shown on the landscape" \
+        in v.notes
+    r, g = _with_suggestion(tmp_path, "program:CLMO100", "program:CLMO110")
+    v = build_view(r, g, "flow_tx", "CLMI")
+    e, = [e for e in v.edges if e.underlying and e.underlying[0].op == "suggested"]
+    assert e.status == PARTIAL and e.number == len(v.edges)
+    assert any("inside one application" in n for n in build_view(r, g, "landscape", None).notes)
+
+
+def test_flow_tx_walkthrough_order():
+    r, g = fixture()
+    v = build_view(r, g, "flow_tx", "claims/:id")
+    num = {(e.src, e.dst): e.number for e in v.edges}
+    t = num[("queue:CLM.REQ.LQ", "transaction:CLMI")]
+    assert num[("transaction:CLMI", "program:CLMO100")] == t + 1
+    assert num[("program:CLMO100", "queue:CLM.REQ.LQ")] == t + 2
+    # the handler hop follows the REST call that reached it
+    assert num[("endpoint:GET /api/claims/{}", "class:claims-api/ClaimController")] == \
+        num[("component:claims-portal/ClaimService", "endpoint:GET /api/claims/{}")] + 1
+    assert sorted(num.values()) == list(range(1, len(v.edges) + 1))
+    # a link back to a box met earlier comes after the box it starts from
+    assert num[("program:CLMO100", "queue:CLM.RSP")] > num[("transaction:CLMI", "program:CLMO100")]
+
+
+def test_flow_tx_depth_cut_noted():
+    nodes = {"transaction:T1": Node("transaction:T1", "transaction", "T1", "a", [])}
+    es = []
+    prev = "transaction:T1"
+    for i in range(12):
+        nid = "program:P%02d" % i
+        nodes[nid] = Node(nid, "program", "P%02d" % i, "a", [])
+        es.append(Edge(prev, "runs" if i == 0 else "call", nid, CONFIRMED, None, []))
+        prev = nid
+    inv = Inventory("ws", [Repo("a", "a")], dict(nodes), [], "fp", {})
+    r = Resolved(inv, nodes, es)
+    v = build_view(r, default_groups(r), "flow_tx", "T1")
+    assert "Stopped after 8 hops; 3 more links not drawn" in v.notes
+    assert len(v.edges) == 9
+
+
+def test_job_structure_lines_are_sequence():
+    r, g = fixture()
+    v = build_view(r, g, "flow_job", "CLMD100")
+    lane = [n.id for n in v.nodes if n.row == "lane"]
+    assert {e.kind for e in v.edges if e.dst in lane and (e.src in lane or e.src.startswith("job:"))} \
+        == {"sequence"}
+    assert {e.kind for e in v.edges if e.dst.startswith("sysout:")} == {"sequence"}
+    assert all(e.kind != "sequence" for e in v.edges if e.underlying and
+               e.dst not in lane)
+
+
+def test_called_program_data_drawn_on_its_own_box():
+    nodes = {
+        "job:a/j": Node("job:a/j", "job", "J", "a", []),
+        "step:a/j#S1": Node("step:a/j#S1", "step", "S1", "a", [], {"order": 1, "job": "job:a/j"}),
+        "program:P1": Node("program:P1", "program", "P1", "a", []),
+        "program:P2": Node("program:P2", "program", "P2", "a", []),
+        "table:S.T": Node("table:S.T", "table", "S.T", "a", [], {"name": "T"}),
+        "table:S.U": Node("table:S.U", "table", "S.U", "a", [], {"name": "U"}),
+    }
+    es = [Edge("step:a/j#S1", "runs", "program:P1", CONFIRMED, None, []),
+          Edge("program:P1", "call", "program:P2", CONFIRMED, None, []),
+          Edge("program:P1", "select", "table:S.U", CONFIRMED, None, []),
+          Edge("program:P2", "select", "table:S.T", CONFIRMED, None, [])]
+    inv = Inventory("ws", [Repo("a", "a")], dict(nodes), [], "fp", {})
+    r = Resolved(inv, nodes, es)
+    v = build_view(r, default_groups(r), "flow_job", "J")
+    assert edges(v, "table:S.T", "program:P2") and not edges(v, "table:S.T", "step:a/j#S1")
+    assert edges(v, "table:S.U", "step:a/j#S1")
+    for e in v.edges:
+        for u in e.underlying:
+            if u.op == "select":
+                assert u.src == e.dst or (u.src == "program:P1" and e.dst == "step:a/j#S1")
+
+
+def test_repomap_caps_evidence_files():
+    nodes = {"program:Q": Node("program:Q", "program", "Q", "b", [Evidence("b", "q.cbl", 1, "")])}
+    es = []
+    for i in range(12):
+        nid = "program:P%02d" % i
+        ev = Evidence("a", "f%02d.cbl" % i, 1, "")
+        nodes[nid] = Node(nid, "program", "P%02d" % i, "a", [ev])
+        es.append(Edge(nid, "call", "program:Q", CONFIRMED, None, [ev]))
+    inv = Inventory("ws", [Repo("a", "a"), Repo("b", "b")], dict(nodes), [], "fp", {})
+    r = Resolved(inv, nodes, es)
+    card = node(build_view(r, default_groups(r), "repomap", None), "repo:a")
+    assert card.highlight == 8
+    assert card.detail_lines[8] == "… 4 more evidence files"
