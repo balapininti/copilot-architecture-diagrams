@@ -91,8 +91,10 @@ class Layout:
     width: float
     height: float
     boxes: Dict[str, Box]
-    groups: Dict[str, Box]      # only groups with members; none for job rows or card grids,
-                                # which do not arrange by group (draw groups from here)
+    groups: Dict[str, Box]      # only groups with members (draw groups from here). Always
+                                # empty for flow_job and repomap: job rows and card grids do
+                                # not arrange by group, the views for those levels set none
+                                # (tests/test_layout.py checks), and any given are ignored
     routes: List[List[Point]]   # one polyline per view.edges index
     label_at: List[Point]       # one label anchor per edge
 

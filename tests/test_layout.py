@@ -243,3 +243,13 @@ def test_cards_hit_samples_every_10px():
     from archdiag.layout import _cards_hit
     card = Box(141, -10, 14, 20)  # a narrow card well clear of 0, 0.5 and 1 of the segment
     assert _cards_hit([(0.0, 0.0), (400.0, 0.0)], [card]) == 1
+
+
+def test_job_and_repomap_views_set_no_groups():
+    """C8: job rows and card grids do not arrange by group (Layout.groups stays empty), so
+    the views for those levels must not carry any: a group there would silently vanish."""
+    from conftest import fixture_view
+    for level, scope in (("flow_job", "CLMD100"), ("repomap", None)):
+        v = fixture_view(level, scope)
+        assert v.groups == [] and not any(n.group for n in v.nodes), level
+        assert layout_for(v, lambda n: (100, 60)).groups == {}
