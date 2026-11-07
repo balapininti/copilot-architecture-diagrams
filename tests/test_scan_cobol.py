@@ -462,3 +462,36 @@ def test_programs_without_end_program_still_split_at_each_program_id():
             "       PROGRAM-ID. P2.\n       PROCEDURE DIVISION.\n           CALL 'B'.\n")
     _, refs = scan(text)
     assert {(r.src, r.target_name) for r in refs} == {("program:P1", "A"), ("program:P2", "B")}
+
+
+def _prog(name, mode):
+    return ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. %s.\n"
+            "       ENVIRONMENT DIVISION.\n       INPUT-OUTPUT SECTION.\n"
+            "       FILE-CONTROL.\n           SELECT F1 ASSIGN TO DDA.\n"
+            "           SELECT F2 ASSIGN TO DD%s.\n"
+            "       PROCEDURE DIVISION.\n           OPEN %s F1 F2.\n"
+            "           CALL 'SUBP'.\n" % (name, mode[:1], mode))
+
+
+def test_duplicate_program_copies_merge_their_file_modes(tmp_path):
+    # A8: the second copy's attrs["files"] used to be dropped
+    i = _ws(tmp_path, {"cobol/P1.cbl": _prog("P1", "INPUT"),
+                       "qa/P1.cbl": _prog("P1", "OUTPUT")})
+    files = i.nodes["program:P1"].attrs["files"]
+    assert files == {"DDA": "i-o", "DDI": "input", "DDO": "output"}
+    calls = [r for r in i.refs if r.src == "program:P1" and r.target_name == "SUBP"]
+    assert sorted(r.evidence.path for r in calls) == ["cobol/P1.cbl", "qa/P1.cbl"]
+
+
+def test_duplicate_program_copies_are_one_report_row(tmp_path):
+    from archdiag.config import Config
+    from archdiag.groups import default_groups
+    from archdiag.render.report import links_report
+    from archdiag.resolve import resolve
+    from archdiag.views import build_view
+    i = _ws(tmp_path, {"cobol/P1.cbl": _prog("P1", "INPUT"),
+                       "qa/P1.cbl": _prog("P1", "INPUT")})
+    r = resolve(i, Config())
+    t = links_report(build_view(r, default_groups(r), "landscape", None), r)
+    rows = [ln for ln in t.split("\n") if ln.startswith("| program P1 ") and "SUBP" in ln]
+    assert len(rows) == 1 and "also in:" in rows[0], rows

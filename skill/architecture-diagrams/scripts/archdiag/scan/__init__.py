@@ -324,6 +324,27 @@ def _merge_nodes(nodes: Dict[str, Node], new_nodes: List[Node]) -> None:
         for ev in n.evidence:  # same id defined again: keep every definition site
             if ev not in have.evidence:
                 have.evidence.append(ev)
+        _merge_files(have, n)
+
+
+def _merge_files(have: Node, new: Node) -> None:
+    """Copies of one program: the file modes of every copy count (attrs["files"], ddname
+    -> input / output / extend / i-o). Copies that open a file differently give i-o (or
+    extend, when one only writes and the other extends)."""
+    theirs = new.attrs.get("files") if new.attrs else None
+    if not isinstance(theirs, dict):
+        return
+    mine = have.attrs.setdefault("files", {})
+    if not isinstance(mine, dict):
+        return
+    for dd, mode in theirs.items():
+        old = mine.get(dd)
+        if old is None or old == mode:
+            mine[dd] = mode
+        elif {old, mode} == {"output", "extend"}:
+            mine[dd] = "extend"
+        else:
+            mine[dd] = "i-o"
 
 
 def _note_unclassified(unclassified: Dict[str, List[Tuple[str, str, Path]]], repo: str,
