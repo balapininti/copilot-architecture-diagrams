@@ -190,6 +190,9 @@ def _project_prefix(rel: str, marker: str) -> Optional[str]:
 
 
 _OAS3_DOCS = ("openapi.yaml", "openapi.yml", "openapi.json", "swagger.json")
+# folders that hold specs of services a repo CALLS (generator inputs): never its own address
+_CLIENT_DIRS = frozenset(["client", "clients", "generated", "openapi-client",
+                          "openapi-clients"])
 
 
 def _servers_urls(text: str) -> List[str]:
@@ -262,7 +265,8 @@ def collect_zosconnect(repo: str, rel: str, text: str, ftype: Optional[str],
         urls = _servers_urls(text)
         if urls and prefix is not None:
             ctx.zc_servers[(repo, prefix)] = urls[0]
-        if urls and ("/" + rel.lower()).find("/src/main/resources/") >= 0:
+        if urls and ("/" + rel.lower()).find("/src/main/resources/") >= 0 \
+                and not _CLIENT_DIRS.intersection(rel.lower().split("/")[:-1]):
             # perhaps served by a Spring app: counted only if its paths hold one of the
             # repo's own endpoints (Ruling 39, checked once all endpoints are known)
             ctx.api_specs.append((repo, urls, _spec_paths(text)))

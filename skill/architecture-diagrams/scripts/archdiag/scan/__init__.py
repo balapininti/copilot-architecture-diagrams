@@ -226,8 +226,9 @@ def _config_hosts(ctx: ScanContext, nodes: Dict[str, Node]) -> Dict[str, List[st
     in Spring keys that name the service (server.*, spring.application.*,
     management.server.address, eureka.instance.hostname), servers[].url of its z/OS Connect
     API projects, and servers[].url of a spec under src/main/resources whose paths hold one
-    of its own endpoints (Ruling 39). Client base URLs, client specs and Angular environment
-    values are outbound: never counted."""
+    of its own endpoints (Ruling 39; B1: at least half of its paths and one other than "/",
+    never a spec under a client/generated folder). Client base URLs, client specs and
+    Angular environment values are outbound: never counted."""
     found: Dict[str, Set[str]] = {}
     for repo in set(ctx.props) | set(ctx.props_src) | set(ctx.props_prof):
         entries = list(ctx.props.get(repo, {}).items())
@@ -249,7 +250,12 @@ def _config_hosts(ctx: ScanContext, nodes: Dict[str, Node]) -> Dict[str, List[st
         for url in urls:
             base = norm_path(url)  # the server URL's path: specs' paths are relative to it
             base = "" if base == "/" else base
-            if any(norm_path(p) in own or norm_path(base + p) in own for p in paths):
+            # served only when the spec is mostly the repo's own API: at least half of its
+            # paths, and at least one other than "/", are endpoints of the repo (B1)
+            hit = [p for p in paths
+                   if norm_path(p) in own or norm_path(base + p) in own]
+            if paths and any(norm_path(p) != "/" for p in hit) \
+                    and 2 * len(hit) >= len(paths):
                 found.setdefault(repo, set()).update(_value_hosts(url, False))
     return {repo: sorted(hs) for repo, hs in found.items() if hs}
 

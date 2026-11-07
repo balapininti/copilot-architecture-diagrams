@@ -756,3 +756,47 @@ def test_table_without_ddl_used_by_one_repo_stays_loose():
         e = edge_from(src, None, r)
         assert e.dst == "missing:table:CLMS.SHARED" and e.status == "loose"
     assert "table:CLMS.SHARED" not in r.nodes
+
+
+# B1 (Ruling 39 residual): a client spec under src/main/resources that shares one path with
+# the repo's own endpoints must not tie its host to the repo
+_CLIENT_SPEC = ("openapi: 3.0.0\nservers:\n  - url: https://partner.example.com\n"
+                "paths:\n  /health:\n    get: {}\n  /orders:\n    get: {}\n"
+                "  /orders/{id}:\n    get: {}\n  /invoices:\n    get: {}\n")
+
+
+def test_b1_client_spec_sharing_one_path_does_not_tie_the_host(tmp_path):
+    e = _health_link(tmp_path, "", "https://partner.example.com",
+                     [("repob", "src/main/resources/partner.yaml", _CLIENT_SPEC),
+                      ("repob", "src/main/resources/openapi.yaml", _CLIENT_SPEC)])
+    assert e.status == "partial" and "host partner.example.com" in e.reason
+
+
+def test_b1_spec_in_a_client_folder_never_ties_the_host(tmp_path):
+    for folder in ("client", "clients", "generated", "openapi-client", "openapi-clients"):
+        root = tmp_path / folder
+        root.mkdir()
+        e = _health_link(root, "", "https://partner.example.com",
+                         [("repob", "src/main/resources/%s/openapi.yaml" % folder,
+                           "openapi: 3.0.0\nservers:\n  - url: https://partner.example.com\n"
+                           "paths:\n  /health:\n    get: {}\n")])
+        assert e.status == "partial", folder
+
+
+def test_b1_root_path_alone_does_not_tie_the_host(tmp_path):
+    java = _REPO_JAVA.replace('"/health"', '"/"').replace('%s/health', '%s/')
+    _write_estate(tmp_path, [("repob", "src/main/java/x/Repo.java",
+                              java % "https://partner.example.com"),
+                             ("repob", "src/main/resources/openapi.yaml",
+                              "openapi: 3.0.0\nservers:\n  - url: https://partner.example.com\n"
+                              "paths:\n  /:\n    get: {}\n")])
+    inv = scan_workspace(tmp_path, Config())
+    assert "partner.example.com" not in inv.config_hosts.get("repob", [])
+
+
+def test_b1_half_of_the_spec_paths_served_ties_the_host(tmp_path):
+    e = _health_link(tmp_path, "", "https://api.repob.example",
+                     [("repob", "src/main/resources/openapi.yaml",
+                       "openapi: 3.0.0\nservers:\n  - url: https://api.repob.example\n"
+                       "paths:\n  /health:\n    get: {}\n  /other:\n    get: {}\n")])
+    assert e.status == "confirmed"
