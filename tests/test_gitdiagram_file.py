@@ -129,3 +129,33 @@ def test_file_of_dataset_is_none():
         ns = [n for n in r.nodes.values() if n.kind == kind]
         assert ns, kind
         assert all(file_of(n, r) is None for n in ns)
+
+
+def test_deeply_nested_and_huge_files_are_problems(tmp_path):
+    r = fixture_resolved()
+    _write(tmp_path, None, raw="[" * 200000 + "]" * 200000)
+    gd = load_gitdiagram(tmp_path, r, "claims-batch")
+    assert gd.file_state == "unusable" and not gd.from_file and gd.problems and gd.groups
+    _write(tmp_path, None, raw=" " * (5 * 1024 * 1024 + 1))
+    gd = load_gitdiagram(tmp_path, r, "claims-batch")
+    assert gd.file_state == "unusable" and "limit" in gd.problems[0]
+
+
+def test_file_state(tmp_path):
+    r = fixture_resolved()
+    assert load_gitdiagram(tmp_path, r, "claims-batch").file_state == "missing"
+    _write(tmp_path, {"groups": []})
+    gd = load_gitdiagram(tmp_path, r, "claims-batch")
+    assert gd.file_state == "ok" and gd.from_file
+
+
+def test_file_of_archive_members():
+    from archdiag.model import Evidence, Node
+    r = fixture_resolved()
+    z = Node("zosapi:x", "zosapi", "X", "claims-online",
+             [Evidence("claims-online", "apis/x.aar!/x.json", 1, "t")], {})
+    assert file_of(z, r) == ("claims-online", "apis/x.aar")
+    both = Node("c:y", "class", "Y", "claims-api",
+                [Evidence("claims-api", "lib/a.jar!/Y.class", 1, "t"), Evidence("claims-api", "src/Y.java", 2, "t")], {})
+    assert file_of(both, r) == ("claims-api", "src/Y.java")
+    assert file_of(Node("c:z", "class", "Z", None, [], {}), r) is None

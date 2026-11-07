@@ -2,7 +2,11 @@
 
 ``architecture-diagrams/gitdiagram-<repo>.json`` is written by Copilot or the user, never by
 the CLI. Reading it is tolerant: every problem is listed in ``GitDiagram.problems`` and
-nothing raises. Without the file, files are grouped by top-level folder."""
+nothing raises. Without the file, files are grouped by top-level folder.
+
+Patterns: repo-relative, case-insensitive, ``\\`` read as ``/``, a leading ``./`` dropped. A
+pattern with no glob matches that file or everything under that folder. Globs use fnmatch,
+so ``*`` also crosses ``/`` and ``**`` behaves like ``*``."""
 from __future__ import annotations
 
 import json
@@ -16,6 +20,7 @@ from .model import Node, Resolved
 
 FALLBACK_NOTE = "Grouped by folder. Ask Copilot to name groups for this repo."
 _GLOB = "*?["
+MAX_BYTES = 5 * 1024 * 1024
 _NO_FILE_NODES = ("dataset:", "missing:", "external:", "utility:")
 
 
@@ -34,7 +39,15 @@ class GitDiagram:
     groups: List[GitGroup]
     suggested_links: List[Dict[str, str]]  # {"from", "to", "label", "note"}
     problems: List[str]
-    from_file: bool  # False = folder fallback
+    from_file: bool  # False = folder fallback; true only when file_state == "ok"
+    file_state: str = ""  # "missing" | "unusable" | "ok"
+    # normalised patterns per group, computed once when the instance is built
+    _pats: List[Tuple[str, List[str]]] = field(init=False, repr=False, compare=False, default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.file_state:
+            self.file_state = "ok" if self.from_file else "missing"
+        self._pats = [(g.name, [_norm(p) for p in g.files]) for g in self.groups]
 
 
 def gitdiagram_path(out_dir: Path, repo: str) -> Path:
@@ -63,10 +76,10 @@ def _matches(pattern: str, path: str) -> bool:
 def group_of(gd: GitDiagram, path: str) -> Optional[str]:
     """Name of the first group with a pattern matching ``path``, else None."""
     p = _norm(path)
-    for g in gd.groups:
-        for pat in g.files:
-            if _matches(_norm(pat), p):
-                return g.name
+    for name, pats in gd._pats:
+        for pat in pats:
+            if _matches(pat, p):
+                return name
     return None
 
 
@@ -90,7 +103,7 @@ def default_gitdiagram(r: Resolved, repo: str) -> GitDiagram:
         while name in folders:
             name += " (root)"
         groups.append(GitGroup(name, tech(root), [f["path"] for f in root]))
-    return GitDiagram(repo, "", groups, [], [FALLBACK_NOTE], False)
+    return GitDiagram(repo, "", groups, [], [FALLBACK_NOTE], False, "missing")
 
 
 def _text(v: object, what: str, problems: List[str]) -> str:
@@ -110,12 +123,16 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
 
     def fallback(why: str) -> GitDiagram:
         gd = default_gitdiagram(r, repo)
+        gd.file_state = "unusable"
         gd.problems.insert(0, "%s %s; grouping by folder" % (name, why))
         return gd
 
     try:
+        size = path.stat().st_size
+        if size > MAX_BYTES:
+            return fallback("is %d MB, over the %d MB limit" % (size // (1024 * 1024), MAX_BYTES // (1024 * 1024)))
         data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError, MemoryError) as exc:
         return fallback("could not be read (%s)" % exc)
     if not isinstance(data, dict):
         return fallback("must be an object with \"groups\"")
@@ -152,13 +169,14 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
                 problems.append("group %r: file pattern %r is not text, ignored" % (gname, p))
         groups.append(GitGroup(gname, _text(raw.get("tech"), "group %r tech" % gname, problems), files,
                                _text(raw.get("description"), "group %r description" % gname, problems)))
-    gd = GitDiagram(repo, overview, groups, [], problems, True)
+    gd = GitDiagram(repo, overview, groups, [], problems, True, "ok")
     paths = [_norm(f["path"]) for f in repo_files(r, repo)]
     for g in groups:
         if not g.files:
             problems.append("group %r has no files" % g.name)
         for pat in g.files:
-            if not any(_matches(_norm(pat), p) for p in paths):
+            npat = _norm(pat)
+            if not any(_matches(npat, p) for p in paths):
                 problems.append("group %r: pattern %r matches no file in %s" % (g.name, pat, repo))
     links = data.get("suggested_links")
     if links is None:
@@ -185,7 +203,9 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
 
 def file_of(node: Node, r: Resolved) -> Optional[Tuple[str, str]]:
     """(repo, path) of the file that defines ``node``; None for nodes the resolver made up
-    (dataset, missing, external, utility) and nodes without evidence."""
+    (dataset, missing, external, utility) and nodes without evidence. A node defined inside
+    an archive (``x.aar!/member``) gives the archive file, which is what Inventory.files
+    lists; evidence in a plain file is preferred over archive evidence."""
     if node.id.startswith(_NO_FILE_NODES):
         return None
     src = node
@@ -195,6 +215,8 @@ def file_of(node: Node, r: Resolved) -> Optional[Tuple[str, str]]:
             src = job
     if not src.evidence:
         return None
-    ev = src.evidence[0]
+    ev = next((e for e in src.evidence if "!/" not in e.path), src.evidence[0])
     repo = ev.repo or src.repo
-    return (repo, ev.path) if repo else None
+    if not repo:
+        return None
+    return (repo, ev.path.split("!/", 1)[0])
