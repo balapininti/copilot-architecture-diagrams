@@ -210,6 +210,9 @@ _SORT = re.compile(_NB + r"(?:SORT|MERGE)\s+[A-Za-z][\w-]*", _I)
 _PARA = re.compile(
     r"(?m)^[ ]*(?:[A-Za-z0-9][\w-]*[ ]+SECTION(?:[ ]+\d+)?|([A-Za-z0-9][\w-]*))[ ]*\.[ ]*$")
 _IF = re.compile(_NB + r"IF\b", _I)
+_INLINE_LOOP = re.compile(
+    _NB + r"PERFORM\s+(?:WITH\s+TEST\s+(?:BEFORE|AFTER)\s+)?(?:UNTIL|VARYING)\b"
+    r"|" + _NB + r"PERFORM\s+(?:\d+|[A-Za-z][\w-]*)\s+TIMES\b", _I)
 _END_IF = re.compile(_NB + r"END-IF\b", _I)
 _EVAL = re.compile(_NB + r"EVALUATE\b", _I)
 _END_EVAL = re.compile(_NB + r"END-EVALUATE\b", _I)
@@ -581,8 +584,10 @@ class _Scan:
             if k.endswith("OBJECTNAME"):
                 vals[OBJ].extend(x for x in v if x not in vals[OBJ])
         obj_written = sorted(w for w in other_writes if w.endswith("OBJECTNAME"))
-        pstarts = [m.start() for m in _PARA.finditer(cm, a, b)
-                   if (m.group(1) or "").upper() not in _VERBS]
+        pheads = [(m.start(), m.group(0).strip().split()[0].rstrip(".").upper())
+                  for m in _PARA.finditer(cm, a, b)
+                  if (m.group(1) or "").upper() not in _VERBS]
+        pstarts = [p for p, _n in pheads]
 
         def para(off: int) -> int:
             n = 0
@@ -590,6 +595,19 @@ class _Scan:
                 if p <= off:
                     n += 1
             return n
+
+        def looped(off: int) -> bool:
+            """The paragraph holding ``off`` has a loop that can run it again: an inline
+            PERFORM UNTIL / VARYING / n TIMES, or a GO TO the paragraph itself."""
+            k = para(off)
+            start = pstarts[k - 1] if k > 0 else a
+            end = pstarts[k] if k < len(pstarts) else b
+            seg = cm[start:end]
+            if _INLINE_LOOP.search(seg):
+                return True
+            name = pheads[k - 1][1] if k > 0 else None
+            return bool(name and re.search(_NB + r"GO\s+(?:TO\s+)?" + re.escape(name)
+                                           + r"(?![\w-])", seg, _I))
 
         def conditional(off: int) -> bool:
             start = cm.rfind(".", a, off) + 1
@@ -604,6 +622,9 @@ class _Scan:
             prior = [o for o in offs if o < at]
             # a write anywhere outside this paragraph/section may run (PERFORM, GO TO)
             if not prior or any(para(o) != para(at) for o in offs):
+                return list(offs), False
+            # a write after 'at' in the same paragraph reaches it when the paragraph loops
+            if any(o > at for o in offs) and looped(at):
                 return list(offs), False
             out: List[int] = []
             for o in reversed(prior):

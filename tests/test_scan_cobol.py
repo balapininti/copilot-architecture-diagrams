@@ -495,3 +495,37 @@ def test_duplicate_program_copies_are_one_report_row(tmp_path):
     t = links_report(build_view(r, default_groups(r), "landscape", None), r)
     rows = [ln for ln in t.split("\n") if ln.startswith("| program P1 ") and "SUBP" in ln]
     assert len(rows) == 1 and "also in:" in rows[0], rows
+
+
+def test_mq_move_after_the_call_inside_an_inline_loop_is_a_candidate():
+    # A10: the second time round the loop the call uses the later MOVE
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "           PERFORM UNTIL WS-DONE = 'Y'\n"
+           "               CALL 'MQPUT' USING HCONN HOBJ\n"
+           "               MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           END-PERFORM.\n")[0]
+    assert q.target_name is None and q.candidates == ["Q.A", "Q.B"]
+    assert q.reason == "queue name depends on run-time path: Q.A, Q.B"
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "           PERFORM VARYING I FROM 1 BY 1 UNTIL I > 3\n"
+           "               CALL 'MQPUT' USING HCONN HOBJ\n"
+           "               MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           END-PERFORM.\n")[0]
+    assert q.target_name is None and q.candidates == ["Q.A", "Q.B"]
+
+
+def test_mq_move_after_the_call_with_go_to_back_is_a_candidate():
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ\n"
+           "           MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           IF NOT WS-DONE GO TO 0000-MAIN.\n")[0]
+    assert q.target_name is None and sorted(q.candidates) == ["Q.A", "Q.B"]
+
+
+def test_mq_move_after_the_call_without_a_loop_does_not_count():
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ\n"
+           "           MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           PERFORM 2000-X UNTIL WS-DONE\n           GOBACK.\n"
+           "       2000-X.\n           DISPLAY 'X'.\n")[0]
+    assert q.target_name == "Q.A"
