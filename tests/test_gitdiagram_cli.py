@@ -215,3 +215,17 @@ def test_undrawn_suggested_links_are_problems(tmp_path, capsys):
     sec = report.split("## Problems in the gitdiagram file")[1]
     assert "CICS transactions → Code" in sec and "Jobs → Jobs" in sec
     assert "Copilot suggests" not in report.split("## Notes")[1].split("## Clickable")[0]
+
+
+def test_grouping_file_for_a_repo_not_in_the_scan_is_named(tmp_path, capsys):
+    w = _estate(tmp_path)
+    d = w / "architecture-diagrams"
+    (d / "gitdiagram-claims-old.json").write_text('{"groups": []}', encoding="utf-8")
+    assert main(["draw", "--workspace", str(w), "--level", "gitdiagram",
+                 "--scope", "claims-batch"]) == 0
+    out = capsys.readouterr().out
+    note = ("Note: gitdiagram-claims-old.json is for a repo that is not in the scan "
+            "(claims-old); was it renamed?")
+    assert note in out, out
+    report = (d / "gitdiagram-claims-batch-links.md").read_text(encoding="utf-8")
+    assert "gitdiagram-claims-old.json is for a repo" in report.split("## Notes")[1]

@@ -162,6 +162,9 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
     if not isinstance(data, dict):
         return fallback("must be an object with \"groups\"")
     problems: List[str] = []
+    named = _text(data.get("repo"), "\"repo\"", problems).strip()
+    if named and named != repo:  # copied from another repo, or the repo was renamed
+        problems.append("\"repo\" is %r, but this file is for %s" % (named, repo))
     overview = _text(data.get("overview"), "overview", problems)
     raw_groups = data.get("groups")
     if raw_groups is None:

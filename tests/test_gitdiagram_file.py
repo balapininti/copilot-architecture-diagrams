@@ -193,3 +193,15 @@ def test_folder_and_file_names_with_glob_characters_match_themselves():
                       [], [], True)
     assert group_of(hand, "[ab]/A.cbl") == "Lit" and group_of(hand, "a") is None
     assert group_of(hand, "x[1].cbl") == "Esc" and group_of(hand, "x1.cbl") is None
+
+
+def test_repo_key_that_names_another_repo_is_a_problem(tmp_path):
+    r = fixture_resolved()
+    _write(tmp_path, {"repo": "claims-online", "groups": [{"name": "Jobs", "files": ["jcl/"]}]})
+    gd = load_gitdiagram(tmp_path, r, "claims-batch")
+    assert gd.from_file
+    assert "\"repo\" is 'claims-online', but this file is for claims-batch" in gd.problems
+    _write(tmp_path, {"repo": "claims-batch", "groups": [{"name": "Jobs", "files": ["jcl/"]}]})
+    assert not any("\"repo\"" in p for p in load_gitdiagram(tmp_path, r, "claims-batch").problems)
+    _write(tmp_path, {"groups": [{"name": "Jobs", "files": ["jcl/"]}]})  # no key: fine
+    assert not any("\"repo\"" in p for p in load_gitdiagram(tmp_path, r, "claims-batch").problems)

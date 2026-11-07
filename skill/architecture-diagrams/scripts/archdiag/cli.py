@@ -297,6 +297,19 @@ def _gitdiagram_lines(view, gd, links: Path) -> None:
         print("... and %d more (see %s)" % (len(problems) - 5, links))
 
 
+def _stray_gitdiagram_files(out_dir: Path, r) -> List[str]:
+    """A note for each gitdiagram-<repo>.json whose repo is not in the scan (a renamed or
+    removed repo): its groups are used by no drawing."""
+    repos = {x.name for x in r.inventory.repos}
+    out = []
+    for p in sorted(Path(out_dir).glob("gitdiagram-*.json")):
+        name = p.name[len("gitdiagram-"):-len(".json")]
+        if name not in repos:
+            out.append("%s is for a repo that is not in the scan (%s); was it renamed?"
+                       % (p.name, name))
+    return out
+
+
 def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     from .render import report, style_a, style_b, style_c, style_d
     from .layout import layout_notes
@@ -342,6 +355,8 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
         lines.append("To see the choices, run: " + " or ".join(
             "python run.py %s --workspace <folder>" % h for h in hint.split("; ")))
         raise _Exit(2, "\n".join(lines))
+    if gd is not None:
+        view.notes += _stray_gitdiagram_files(out_dir, r)
     renderers = {"a": style_a.render, "b": style_b.render, "c": style_c.render, "d": style_d.render}
     base = level + ("-" + _slug(scope) if scope else "")
     written: List[Path] = []

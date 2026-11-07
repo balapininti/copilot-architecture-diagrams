@@ -108,7 +108,7 @@ for a connection you have a real reason to believe in.
 
 | Field | Meaning |
 |---|---|
-| `repo` | The repo folder name. |
+| `repo` | The repo folder name. A name other than the file's repo is a problem; a file for a repo not in the scan (after a rename) is named in a `Note:`. |
 | `overview` | A short paragraph, printed above the picture and at the top of the links report. |
 | `groups[].name` | Short, human, unique. Shown on the box. |
 | `groups[].tech` | Technology label, for example `COBOL`, `JCL`, `Java`, `Angular`, `DB2`. |
