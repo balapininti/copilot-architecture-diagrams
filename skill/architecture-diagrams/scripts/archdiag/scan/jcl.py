@@ -152,7 +152,11 @@ def parse_statements(text: str) -> List[Stmt]:
             cont = in_quote = False  # an unclosed quote: a named statement is a new one
         if cont and cur is not None:
             # a quoted value continues in column 16 of the next line, blanks and all
-            opnd, _, in_quote = _split_operand_q(body.lstrip(), in_quote)
+            if in_quote and len(ln) > 15 and not ln[2:15].strip():
+                piece = ln[15:]  # inside quotes the blanks from column 16 are data
+            else:
+                piece = body.lstrip()
+            opnd, _, in_quote = _split_operand_q(piece, in_quote)
             cur.operands += opnd
             cont = opnd.endswith(",") or in_quote
             if not cont:
@@ -801,7 +805,12 @@ class _Scanner:
             if not dsn:
                 continue
             full = _unquote(dsn).upper()
-            if full.startswith("*.") or full == "NULLFILE":
+            if full == "NULLFILE":
+                continue
+            if full.startswith("*."):
+                add("update", "dataset", None, Evidence(dd.repo, dd.path, dd.line, dd.text),
+                    "IDCAMS control statements in %s (a backward reference) not worked out"
+                    % full, {"ddname": dd.ddname, "via": "idcams", "sysin": full})
                 continue
             _name, _gdg, member = _split_dsn(full)
             found, why = self.control_member(member) if member else (None, None)

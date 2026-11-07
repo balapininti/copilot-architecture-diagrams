@@ -606,3 +606,18 @@ def test_collect_procs_reads_jcl_proc_and_untyped_files(ftype):
     ctx = ScanContext()
     collect_procs("r", "src/MYPROC", "//MYPROC PROC\n//S1 EXEC OTHERP\n", ctx, ftype)
     assert "MYPROC" in ctx.proc_defs and ctx.proc_calls == {"OTHERP"}
+
+
+def test_continued_quoted_parm_keeps_blanks_from_column_16():
+    # review of A11: a quoted value continues in column 16, blanks included
+    from archdiag.scan.jcl import parse_statements
+    text = "//J1 JOB (A),'X'\n//S1 EXEC PGM=X,PARM='A,\n//                B C'\n"
+    assert parse_statements(text)[1].operands == "PGM=X,PARM='A,   B C'"  # columns 16-18 are blank
+
+
+def test_idcams_sysin_backward_reference_is_a_partial_note(tmp_path):
+    text = ("//J1 JOB (A),'X'\n//S0 EXEC PGM=IEBGENER\n//SYSUT2 DD DSN=CTL.CARDS,DISP=SHR\n"
+            "//S1 EXEC PGM=IDCAMS\n//SYSIN DD DSN=*.S0.SYSUT2,DISP=SHR\n")
+    notes = [r for r in step_refs(scan_text(tmp_path, text), "r/J1.jcl#S1")
+             if r.target_name is None and r.attrs.get("via") == "idcams"]
+    assert len(notes) == 1 and "*.S0.SYSUT2" in notes[0].reason
