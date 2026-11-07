@@ -1,0 +1,8 @@
+[project]
+name = "archdiag"
+version = "0.1.0"
+description = "Scan mainframe/Java/Angular repos and draw architecture diagrams"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
