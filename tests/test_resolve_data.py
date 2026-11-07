@@ -825,3 +825,39 @@ def test_b6_handler_class_defined_twice_is_partial():
                [_ev(3, "C.java", "api"), _ev(3, "copy/C.java", "api")], {})
     e = edge("endpoint:GET /a", "runs", "class:api/C", _run([ep, cls], []))
     assert e.status == "partial" and e.reason
+
+
+# B7: missing nodes keep every creator's reason and candidates; maybe_same names the real
+# differing qualifier ------------------------------------------------------------------------
+
+def test_b7_missing_node_merges_reasons_and_candidates_of_every_ref():
+    from archdiag.resolve.common import missing
+    nodes = {}
+    nid = missing(nodes, "endpoint", "?GET /a", "r1", ["endpoint:A"])
+    assert missing(nodes, "endpoint", "?GET /a", "r2", ["endpoint:B", "endpoint:A"]) == nid
+    missing(nodes, "endpoint", "?GET /a")
+    missing(nodes, "endpoint", "?GET /a", "r1")
+    assert nodes[nid].attrs["reason"] == "r1; r2"
+    assert nodes[nid].attrs["candidates"] == ["endpoint:A", "endpoint:B"]
+    nid = missing(nodes, "class", "x/Y")
+    missing(nodes, "class", "x/Y", "later")
+    assert nodes[nid].attrs["reason"] == "later"
+
+
+def test_b7_ambiguous_http_missing_node_has_both_callers_reasons():
+    r = _run([_ep("ANY", "/a"), _ep("GET", "/a")],
+             [_http("GET /a", 4, "first why", src="component:web/S"),
+              _http("GET /a", 5, "second why", src="component:web/T")])
+    (nid,) = {e.dst for e in edges(op="http", r=r)}
+    assert "first why" in r.nodes[nid].attrs["reason"]
+    assert "second why" in r.nodes[nid].attrs["reason"]
+
+
+def test_b7_maybe_same_names_the_qualifier_that_differs_not_the_env_one():
+    s1, s2 = _step("a.jcl", "S1", "P"), _step("b.jcl", "S1", "P")
+    refs = [_ds(s1.id, "write", "PROD.A.X.Y", 2), _ds(s2.id, "read", "B.X.Y", 3)]
+    r = _run([s1, s2], refs, ["PROD"])
+    (e,) = edges(op="maybe_same", r=r)
+    assert {e.src, e.dst} == {"dataset:A.X.Y", "dataset:B.X.Y"}
+    assert e.reason in ("names differ only by first qualifier: A vs B",
+                        "names differ only by first qualifier: B vs A")

@@ -231,9 +231,17 @@ class _Data:
             for form in {key, rest} if dot and rest else {key}:
                 index.setdefault(form, []).append(dst)
 
-        def first_qual(dst: str) -> str:
-            names = self.nodes[dst].attrs.get("names") or [dst.split(":", 1)[1]]
-            return str(names[0]).partition(".")[0]
+        def first_qual(dst: str, other: str) -> str:
+            """The qualifier where ``dst``'s name differs from ``other``'s (B7): its first
+            key qualifier, or for the shorter name the environment qualifier its raw
+            names dropped ("(none)" if none), never an environment qualifier both share."""
+            key, okey = dst.split(":", 1)[1], other.split(":", 1)[1]
+            if key.count(".") >= okey.count("."):
+                return key.partition(".")[0]
+            names = self.nodes[dst].attrs.get("names") or [key]
+            dropped = sorted(set(d for d in (norm_dataset(str(n), list(self.quals))[1]
+                                             for n in names) if d))
+            return "/".join(dropped) or "(none)"
 
         paired: Set[frozenset] = set()
         for dst in order:
@@ -258,7 +266,7 @@ class _Data:
                 if pair not in paired:
                     paired.add(pair)
                     why = "names differ only by first qualifier: %s vs %s" % (
-                        first_qual(dst), first_qual(other))
+                        first_qual(dst, other), first_qual(other, dst))
                     self.edges.append(Edge(dst, "maybe_same", other, PARTIAL, why,
                                            list(side) + list(supply[other])))
             elif cands:

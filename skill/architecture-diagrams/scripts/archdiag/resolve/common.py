@@ -29,7 +29,8 @@ def unknown_name(src: str, ev: Evidence) -> str:
 
 def missing(nodes: Dict[str, Node], kind: str, name: str, reason: Optional[str] = None,
             candidates: Optional[List[str]] = None) -> str:
-    """Id of the ``missing:<kind>:<name>`` node, creating it on first use."""
+    """Id of the ``missing:<kind>:<name>`` node, creating it on first use. Every ref that
+    reaches the node adds its reason and candidates (B7: not only the first one's)."""
     nid = "missing:%s:%s" % (kind, name)
     if nid not in nodes:
         attrs = {"target_kind": kind}
@@ -37,6 +38,19 @@ def missing(nodes: Dict[str, Node], kind: str, name: str, reason: Optional[str] 
             attrs["reason"] = reason
             attrs["candidates"] = list(candidates or [])
         nodes[nid] = Node(nid, "missing", name, None, [], attrs)
+        return nid
+    attrs = nodes[nid].attrs
+    if reason:
+        have = attrs.get("reason")
+        parts = have.split("; ") if have else []
+        new = [p for p in reason.split("; ") if p and p not in parts]
+        if new:
+            attrs["reason"] = "; ".join(parts + new)
+    if candidates:
+        cands = attrs.setdefault("candidates", [])
+        cands.extend(c for c in candidates if c not in cands)
+    if (reason or candidates) and "candidates" not in attrs:
+        attrs["candidates"] = []
     return nid
 
 
