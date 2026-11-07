@@ -688,6 +688,21 @@ class _Scan:
             return
         if kind == "DECLARE" and "CURSOR" not in up[:6]:
             return
+        if kind == "CALL" and len(toks) > 1:
+            # a DB2 stored procedure: a call to the program behind it (spec §7.6 registers
+            # stored procedures by name); the SQL name may differ from its EXTERNAL NAME
+            t = toks[1][0]
+            if t.startswith(":"):
+                self.add(pid, "call", "program", None, toks[1][1],
+                         "stored procedure name set at run time (%s)" % t[1:])
+                return
+            n = name_at(1)
+            if n:
+                sql_name = n.replace('"', "")
+                self.add(pid, "call", "program", sql_name.split(".")[-1].upper(), toks[1][1],
+                         "DB2 stored procedure %s: its program (EXTERNAL NAME) may have "
+                         "another name" % sql_name, attrs={"sql_call": sql_name})
+            return
         if kind in ("LOCK", "FETCH", "OPEN", "CLOSE", "COMMIT", "ROLLBACK", "WHENEVER",
                     "CONNECT", "CALL", "GRANT", "REVOKE", "SAVEPOINT", "RELEASE"):
             return
@@ -828,6 +843,10 @@ class _Scan:
 
         if cmd == "LINK":
             emit("link", "program", "PROGRAM", "LINK PROGRAM")
+        elif cmd == "HANDLE" and any(n == "ABEND" for n, _s, _e in opts):
+            # the abend handler program is LINKed to when the task abends
+            cmd = "HANDLE ABEND"
+            emit("link", "program", "PROGRAM", "HANDLE ABEND PROGRAM")
         elif cmd == "XCTL":
             emit("xctl", "program", "PROGRAM", "XCTL PROGRAM")
         elif cmd == "START":

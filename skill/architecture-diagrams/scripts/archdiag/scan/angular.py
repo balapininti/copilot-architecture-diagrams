@@ -320,6 +320,22 @@ def _routes(s: _Src, open_idx: int, prefix: str, repo: str, nodes: List[Node],
             _routes(s, cpos, full, repo, nodes, refs, cursor)
 
 
+_INJECT_CALL = re.compile(
+    r"\binject\s*\(\s*HttpClient\s*\)\s*\.\s*(get|post|put|delete|patch|head|options|request)"
+    r"\s*(?:<[^()]*?>)?\s*\(")
+_FUNCTION = re.compile(
+    r"(?:\bfunction\s+([A-Za-z_$][\w$]*)|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*"
+    r"(?::[^=]*)?=\s*(?:async\s*)?(?:function\b|\([^()]*\)\s*(?::[^=]*)?=>|[\w$]+\s*=>))")
+
+
+def _enclosing_function(masked: str, off: int) -> Optional[str]:
+    """Name of the last top-level function or arrow-function const declared before ``off``."""
+    name = None
+    for m in _FUNCTION.finditer(masked, 0, off):
+        name = m.group(1) or m.group(2)
+    return name
+
+
 def scan_angular(repo: str, rel: str, text: str,
                  ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
     s = _Src(repo, rel, text, ctx)
@@ -371,18 +387,25 @@ def scan_angular(repo: str, rel: str, text: str,
                 refs.append(Ref(cid(name), "uses", "component",
                                 got[0][len("component:"):], s.ev(off)))
 
-    # HTTP calls
+    # HTTP calls: in a class, or in a function using inject(HttpClient) (functional
+    # interceptors, resolvers and API helpers), owned by that function
+    calls = []
     for m in re.finditer(
             r"(?<![\w$])((?:[\w$]+\s*\.\s*)*([\w$]+))\s*\.\s*(get|post|put|delete|patch|head|"
             r"options|request)\s*(?:<[^()]*?>)?\s*\(", s.masked):
-        if m.group(2) not in s.http_names and not _ENDS_HTTP.match(m.group(2)):
-            continue
+        if m.group(2) in s.http_names or _ENDS_HTTP.match(m.group(2)):
+            calls.append(m)
+    calls += list(_INJECT_CALL.finditer(s.masked))
+    calls.sort(key=lambda m: m.start())
+    for m in calls:
         cls = s.class_at(m.start())
         if cls is None:
-            continue
+            fn = _enclosing_function(s.masked, m.start()) or own_stem
+            cls = (m.start(), 0, 0, fn)
         args, _ = args_at(s.clean, m.end() - 1)
-        meth = m.group(3).upper()
-        if m.group(3) == "request":
+        mname = m.group(m.re.groups)  # the method: last group of either pattern
+        meth = mname.upper()
+        if mname == "request":
             lit = _unquote(args[0]) if args else None
             if lit is None:
                 ensure(cls[3], cls[0], None)

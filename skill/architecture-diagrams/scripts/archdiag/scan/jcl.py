@@ -382,6 +382,7 @@ class _Step:
         self.missing_proc: Optional[str] = None
         self.dds: List[_DD] = []
         self.amb: Optional[str] = None  # the step comes from an ambiguous PROC / INCLUDE
+        self.dd_modes: Dict[str, str] = {}  # IDCAMS INFILE / OUTFILE: ddname -> read/write
 
 
 class _Scanner:
@@ -662,7 +663,9 @@ class _Scanner:
                 add("runs", "utility", pgm, ev, st.pgm_reason)
             return
         add("runs", "utility" if pgm in UTILITIES else "program", pgm, ev, st.pgm_reason)
-        if pgm == "DMBATCH":
+        if pgm == "IDCAMS":
+            self.emit_idcams(st, add)
+        elif pgm == "DMBATCH":
             self.emit_ndm(st, ev, add)
         elif pgm == "FTP":
             self.emit_ftp(st, ev, add)
@@ -697,6 +700,48 @@ class _Scanner:
             a["temp"] = True
         a.update(extra)
         add(op, "dataset", name, ev, _reason(_unres_names(name)), a)
+
+    def emit_idcams(self, st: _Step, add) -> None:
+        """IDCAMS control statements in SYSIN: REPRO / PRINT INDATASET (read) and
+        OUTDATASET (write), DEFINE ... NAME (write: it creates the dataset), DELETE
+        (delete), and INFILE / OUTFILE ddnames, which set how the step's DDs are used."""
+        for dd in st.dds:
+            if dd.ddname != "SYSIN" or not dd.data:
+                continue
+            text, offs = self._join_data(dd)
+            text = _IDC_COMMENT.sub(lambda m: " " * len(m.group(0)), text)
+            cmds = list(_IDC_CMD.finditer(text))
+            for k, m in enumerate(cmds):
+                cmd = m.group(1).upper()
+                end = cmds[k + 1].start() if k + 1 < len(cmds) else len(text)
+                seg_at, seg = m.end(), text[m.end():end]
+
+                def ref(op: str, raw: str, pos: int) -> None:
+                    line, evtext = self._line_at(offs, seg_at + pos)
+                    self._dataset_ref(add, dd, op, raw.strip("'"),
+                                      Evidence(dd.repo, dd.path, line, evtext), {"via": "idcams"})
+                if cmd in ("REPRO", "PRINT"):
+                    for o in _IDC_OPT.finditer(seg):
+                        kw, val = o.group(1).upper(), o.group(2).strip()
+                        if kw in ("INDATASET", "IDS"):
+                            ref("read", val, o.start())
+                        elif kw in ("OUTDATASET", "ODS"):
+                            ref("write", val, o.start())
+                        elif kw in ("INFILE", "IFILE"):
+                            st.dd_modes[val.split()[0].upper()] = "read"
+                        elif kw in ("OUTFILE", "OFILE"):
+                            st.dd_modes[val.split()[0].upper()] = "write"
+                elif cmd == "DEFINE":
+                    n = _IDC_NAME.search(seg)
+                    if n:
+                        ref("write", n.group(1), n.start())
+                elif cmd == "DELETE":
+                    d = _IDC_DELETE.match(seg)
+                    if d:
+                        names = d.group(1) or d.group(2)
+                        for nm in re.finditer(r"'?([A-Za-z0-9#$@&][A-Za-z0-9#$@&.()+-]*)'?",
+                                              names):
+                            ref("delete", nm.group(1), d.start())
 
     def emit_ndm(self, st: _Step, ev: Evidence, add) -> None:
         got = False
@@ -832,6 +877,8 @@ class _Scanner:
             op = "read" if referback else "write"
         if temp and op == "update" and not disp_names:
             op = "read"
+        if dd.ddname in st.dd_modes:
+            op = st.dd_modes[dd.ddname]  # IDCAMS INFILE / OUTFILE says how it is used
         a = {"ddname": dd.ddname, "disp": disp_raw, "gdg": gdg}
         if temp:
             a["temp"] = True
@@ -845,6 +892,14 @@ class _Scanner:
 
 
 _COPY = re.compile(r"\bCOPY\b\s+FROM\s*\((.*?)\)\s*TO\s*\((.*?)\)", re.I | re.S)
+_IDC_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_IDC_CMD = re.compile(r"(?<![\w.&#$@-])(REPRO|PRINT|DEFINE|DELETE|ALTER|LISTCAT|VERIFY|EXPORT|"
+                      r"IMPORT|BLDINDEX|EXAMINE|DIAGNOSE|IF|SET)(?![\w.#$@-])", re.I)
+_IDC_OPT = re.compile(r"(?<![\w-])(INDATASET|IDS|OUTDATASET|ODS|INFILE|IFILE|OUTFILE|OFILE)"
+                      r"\s*\(\s*([^)]*?)\s*\)", re.I)
+_IDC_NAME = re.compile(r"(?<![\w-])NAME\s*\(\s*'?([A-Za-z0-9#$@&][A-Za-z0-9#$@&.+-]*)'?\s*\)",
+                       re.I)
+_IDC_DELETE = re.compile(r"\s*(?:\(([^)]*)\)|('?[A-Za-z0-9#$@&][A-Za-z0-9#$@&.()+-]*'?))")
 _DSN = re.compile(r"\bDSN(?:AME)?\s*=\s*([^\s,]+)", re.I)
 _DSN_NAME = re.compile(r"^[A-Z#$@&][A-Z0-9#$@&]{0,7}(?:\.[A-Z#$@&][A-Z0-9#$@&]{0,7})+(?:\([A-Z0-9#$@+\-]*\))?$")
 _FILE_EXTS = frozenset(["TXT", "CSV", "DAT", "XML", "JSON", "ZIP", "PDF", "LOG", "TSV", "GZ"])

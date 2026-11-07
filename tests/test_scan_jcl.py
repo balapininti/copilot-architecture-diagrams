@@ -403,3 +403,28 @@ def test_java_and_ts_files_starting_with_slashes_are_not_procs(tmp_path):
                                     "jcl/JOBX.jcl": job}})
     r = one_ref(i, "r/jcl/JOBX.jcl#STEP1", "runs")
     assert r.target_name is None and "PROC MYPROC is not in these repos" in r.reason
+
+
+# ------------------------------------------------------------------ IDCAMS control statements (I9)
+
+def test_idcams_repro_define_delete(tmp_path):
+    text = ("//J1 JOB (A),'X'\n//S1 EXEC PGM=IDCAMS\n"
+            "//IN DD DSN=CLM.SRC,DISP=OLD\n//OUT DD DSN=CLM.TGT,DISP=OLD\n"
+            "//SYSIN DD *\n"
+            "  DELETE CLM.KSDS CLUSTER PURGE\n"
+            "  DEFINE CLUSTER (NAME(CLM.KSDS) INDEXED -\n"
+            "         KEYS(10 0)) DATA (NAME(CLM.KSDS.DATA))\n"
+            "  REPRO INDATASET(CLM.FLAT) OUTDATASET(CLM.KSDS)\n"
+            "  REPRO INFILE(IN) OUTFILE(OUT)\n"
+            "  REPRO IDS(CLM.A) ODS(CLM.B) /* short forms */\n"
+            "/*\n")
+    i = scan_text(tmp_path, text)
+    got = refs_of(i, "r/J1.jcl#S1")
+    assert {("read", "dataset", "CLM.FLAT"), ("write", "dataset", "CLM.KSDS"),
+            ("delete", "dataset", "CLM.KSDS"), ("read", "dataset", "CLM.A"),
+            ("write", "dataset", "CLM.B"), ("read", "dataset", "CLM.SRC"),
+            ("write", "dataset", "CLM.TGT")} <= got
+    assert ("write", "dataset", "CLM.KSDS.DATA") not in got
+    assert ("update", "dataset", "CLM.SRC") not in got  # INFILE says it is read
+    rep = [r for r in step_refs(i, "r/J1.jcl#S1") if r.target_name == "CLM.FLAT"][0]
+    assert rep.evidence.line == 9 and "INDATASET" in rep.evidence.text

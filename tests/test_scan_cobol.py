@@ -376,3 +376,23 @@ def test_contents_of_a_copybook_defined_twice_are_partial(tmp_path):
     call = [r for r in i.refs if r.src == "program:PGMA" and r.op == "call"]
     assert call and all(r.reason and "CLMPROC" in r.reason and "2 places" in r.reason
                         for r in call)
+
+
+# ------------------------------------------------------------------ SQL CALL and HANDLE ABEND (I9)
+
+def test_exec_sql_call_is_a_call_to_the_stored_procedure():
+    _, refs = scan("       PROGRAM-ID. P1.\n       PROCEDURE DIVISION.\n"
+                   "           EXEC SQL CALL CLMS.CLMSP01 (:A, :B) END-EXEC.\n"
+                   "           EXEC SQL CALL :WS-PROC END-EXEC.\n")
+    calls = [r for r in refs if r.op == "call"]
+    assert [(r.target_kind, r.target_name) for r in calls] == [("program", "CLMSP01"),
+                                                               ("program", None)]
+    assert calls[0].reason and "stored procedure" in calls[0].reason
+    assert "WS-PROC" in calls[1].reason
+
+
+def test_handle_abend_program_is_a_link():
+    _, refs = scan("       PROGRAM-ID. P1.\n       PROCEDURE DIVISION.\n"
+                   "           EXEC CICS HANDLE ABEND PROGRAM('CLMABND') END-EXEC.\n"
+                   "           EXEC CICS HANDLE ABEND LABEL(X-ERR) END-EXEC.\n")
+    assert [(r.op, r.target_name) for r in refs] == [("link", "CLMABND")]

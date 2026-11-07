@@ -396,3 +396,20 @@ def test_unresolved_context_path_gives_unresolved_endpoint(tmp_path):
     eps = [n for n in i.nodes.values() if n.kind == "endpoint"]
     assert len(eps) == 1 and eps[0].id.startswith("endpoint:?")
     assert "context path" in eps[0].attrs["unresolved"]
+
+
+# ------------------------------------------------------------------ functional HTTP calls (I9)
+
+def test_angular_http_calls_outside_classes(tmp_path):
+    inv = ws(tmp_path, {"claims.api.ts": (
+        "import { HttpClient } from '@angular/common/http';\n"
+        "import { inject } from '@angular/core';\n"
+        "export const loadClaim = (id: string) => inject(HttpClient).get(`/api/claims/${id}`);\n"
+        "export function saveClaim(body: any) {\n"
+        "  const http = inject(HttpClient);\n"
+        "  return http.post('/api/claims', body);\n"
+        "}\n")})
+    got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
+    assert got == {("component:r/loadClaim", "GET /api/claims/${id}"),
+                   ("component:r/saveClaim", "POST /api/claims")}
+    assert inv.nodes["component:r/saveClaim"].evidence[0].path == "claims.api.ts"
