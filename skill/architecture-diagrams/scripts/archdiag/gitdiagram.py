@@ -5,8 +5,9 @@ the CLI. Reading it is tolerant: every problem is listed in ``GitDiagram.problem
 nothing raises. Without the file, files are grouped by top-level folder.
 
 Patterns: repo-relative, case-insensitive, ``\\`` read as ``/``, a leading ``./`` dropped. A
-pattern with no glob matches that file or everything under that folder. Globs use fnmatch,
-so ``*`` also crosses ``/`` and ``**`` behaves like ``*``."""
+pattern is first taken literally (that file, or everything under that folder), so a name
+with ``[ ] * ?`` in it matches itself; then as a glob. Globs use fnmatch, so ``*`` also
+crosses ``/`` and ``**`` behaves like ``*``; ``[[]`` matches a literal ``[``."""
 from __future__ import annotations
 
 import json
@@ -14,6 +15,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -80,11 +82,20 @@ def _norm(p: str) -> str:
 
 
 def _matches(pattern: str, path: str) -> bool:
-    """``pattern`` and ``path`` are already normalised. No glob: the file itself or a folder."""
-    if any(c in pattern for c in _GLOB):
-        return fnmatchcase(path, pattern)
+    """``pattern`` and ``path`` are already normalised. Taken literally first (the file
+    itself or a folder), so a name with ``[ ] * ?`` in it matches itself; then as a glob."""
     pat = pattern.rstrip("/")
-    return path == pat or path.startswith(pat + "/")
+    if path == pat or path.startswith(pat + "/"):
+        return True
+    return any(c in pattern for c in _GLOB) and fnmatchcase(path, pattern)
+
+
+def _literal(name: str, folder: bool) -> str:
+    """A pattern matching only ``name`` (a folder: everything under it), even when the name
+    has glob characters: those become ``[[]``-style sets, so no other file matches."""
+    if not any(c in name for c in _GLOB):
+        return name
+    return glob_escape(name) + ("/*" if folder else "")
 
 
 def group_of(gd: GitDiagram, path: str) -> Optional[str]:
@@ -111,12 +122,12 @@ def default_gitdiagram(r: Resolved, repo: str) -> GitDiagram:
         c = Counter(f["kind"] for f in fs)
         return sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if c else ""
 
-    groups = [GitGroup(name, tech(fs), [name]) for name, fs in sorted(folders.items())]
+    groups = [GitGroup(name, tech(fs), [_literal(name, True)]) for name, fs in sorted(folders.items())]
     if root:
         name = repo
         while name in folders:
             name += " (root)"
-        groups.append(GitGroup(name, tech(root), [f["path"] for f in root]))
+        groups.append(GitGroup(name, tech(root), [_literal(f["path"], False) for f in root]))
     return GitDiagram(repo, "", groups, [], [FALLBACK_NOTE], False, "missing")
 
 

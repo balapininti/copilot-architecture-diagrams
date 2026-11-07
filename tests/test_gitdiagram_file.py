@@ -176,3 +176,20 @@ def test_group_whose_files_are_all_taken_earlier_is_a_problem(tmp_path):
         "(first match wins)" in gd.problems
     assert not any("'Partly new'" in p for p in gd.problems)
     assert not any("'All COBOL':" in p or "'Jobs':" in p for p in gd.problems)
+
+
+def test_folder_and_file_names_with_glob_characters_match_themselves():
+    files = [("r", p, "cobol") for p in ("[ab]/A.cbl", "x*y/B.cbl", "q?/C.cbl", "a", "qz",
+                                          "x[1].cbl", "x1.cbl", "plain/D.cbl")]
+    gd = default_gitdiagram(_FakeR(files), "r")
+    assert group_of(gd, "[ab]/A.cbl") == "[ab]"
+    assert group_of(gd, "x*y/B.cbl") == "x*y"
+    assert group_of(gd, "q?/C.cbl") == "q?"
+    assert group_of(gd, "plain/D.cbl") == "plain"
+    for root in ("a", "qz", "x[1].cbl", "x1.cbl"):  # never taken by a folder's glob
+        assert group_of(gd, root) == "r", root
+    # a pattern written by hand: a literal name is tried first, "[[]" is a literal "["
+    hand = GitDiagram("r", "", [GitGroup("Lit", files=["[ab]/"]), GitGroup("Esc", files=["x[[]1].cbl"])],
+                      [], [], True)
+    assert group_of(hand, "[ab]/A.cbl") == "Lit" and group_of(hand, "a") is None
+    assert group_of(hand, "x[1].cbl") == "Esc" and group_of(hand, "x1.cbl") is None

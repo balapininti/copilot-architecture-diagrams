@@ -117,8 +117,10 @@ for a connection you have a real reason to believe in.
 | `suggested_links[]` | `from` and `to` (group names, or an entry box such as `Scheduler`, `CICS transactions`, `REST endpoints`, `Angular pages`, `z/OS Connect APIs`), `label`, and `note` (why). |
 
 Patterns: relative to the repo, case-insensitive, `\` read as `/`, a leading `./` dropped.
-A pattern with no glob matches that file, or everything under that folder. Globs use `*`,
-`?` and `[ABC]`; `*` also crosses `/`, so `**` works like `*`. A file belongs to the first
+A pattern is first read literally: that file, or everything under that folder, so a name
+with `[ ] * ?` in it matches itself. Then it is read as a glob. Globs use `*`, `?` and
+`[ABC]`; `*` also crosses `/`, so `**` works like `*`. To match a literal `[` inside a glob,
+write `[[]` (`src/v[[]2]/*` matches everything under `src/v[2]/`). A file belongs to the first
 group, in list order, with a matching pattern. A file no group claims goes into the box
 "Not yet grouped", so nothing disappears.
 
