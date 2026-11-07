@@ -301,11 +301,19 @@ def _runs_ref(src: str, ev: Evidence, label: str,
                    "z/OS Connect %s names no CICS program" % label, [], dict(attrs))
     at = [f[2] for f in use if f[1]]
     attrs = dict(attrs, service_at="%s:%d" % (at[0].path, at[0].line))
-    if len(progs) == 1:
+    every = sorted({f[1] for f in found if f[1]})
+    if len(progs) == 1 and len(every) == 1:
         return Ref(src, "runs", "program", progs[0], ev, None, [], attrs)
+    if len(progs) == 1:
+        # the nearest definition must not hide a conflict: another copy (a stale build
+        # archive, another repo) names a different program
+        where = sorted({"%s/%s" % (f[0], f[2].path) for f in found if f[1]})
+        return Ref(src, "runs", "program", None, ev,
+                   "z/OS Connect %s maps to different programs in different places: %s (%s)"
+                   % (label, ", ".join(every), ", ".join(where)), every, attrs)
     return Ref(src, "runs", "program", None, ev,
-               "z/OS Connect %s maps to more than one program: %s" % (label, ", ".join(progs)),
-               progs, attrs)
+               "z/OS Connect %s maps to more than one program: %s" % (label, ", ".join(every)),
+               every, attrs)
 
 
 def _scan_package(repo: str, rel: str, text: str,

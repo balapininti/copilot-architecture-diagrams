@@ -260,9 +260,27 @@ def test_zosconnect_build_toolkit_properties_and_ambiguity(tmp_path):
     (a / "zosconnect" / "package.xml").write_text(PKG.replace("CSaccenq", "Health"))
     (b / "package.xml").write_text(PKG.replace("CSaccenq", "Health"))
     inv = scan_workspace(tmp_path, Config())
-    got = [(r.evidence.repo, r.target_name) for r in inv.refs
+    got = [(r.evidence.repo, r.target_name, tuple(r.candidates)) for r in inv.refs
            if r.src == "zosapi:GET /acct/enquiry/{}"]
-    assert sorted(got) == [("a", "HLTH01"), ("b", "HLTH02")]  # same repo wins
+    # the nearest definition no longer hides the other one (final review I6): the service
+    # names a different program in each repo, so both APIs are partial with both candidates
+    assert sorted(got) == [("a", None, ("HLTH01", "HLTH02")), ("b", None, ("HLTH01", "HLTH02"))]
+
+
+def test_zosconnect_stale_archive_with_another_program_is_partial(tmp_path):
+    repo = mark(tmp_path, "zc")
+    (repo / "zosconnect" / "apis" / "acct").mkdir(parents=True)
+    (repo / "zosconnect" / "apis" / "acct" / "package.xml").write_text(PKG)
+    (repo / "zosconnect" / "services").mkdir()
+    (repo / "zosconnect" / "services" / "e.properties").write_text(
+        "name=CSaccenq\nprovider=cics\nprogram=INQACC\n")
+    (repo / "deploy").mkdir()
+    (repo / "deploy" / "CSaccenq.sar").write_bytes(
+        _zip([("manifest.yml", MANIFEST % ("CSaccenq", "INQOLD"))]))
+    inv = scan_workspace(tmp_path, Config())
+    r = one_ref(inv, "zosapi:GET /acct/enquiry/{}", "runs")
+    assert r.target_name is None and r.candidates == ["INQACC", "INQOLD"]
+    assert "CSaccenq" in r.reason
 
 
 def test_zosconnect_ambiguous_service(tmp_path):
@@ -427,9 +445,11 @@ def test_zosconnect_project_and_its_build_in_one_repo(tmp_path):
     assert n.attrs["also_built_as"] == ["deploy/acct.aar!/package.xml"]
     r = one_ref(inv, nid, "runs")
     assert r.evidence.path == "zosconnect/apis/acct/package.xml" and r.target_name == "INQACC"
-    # DELETE: the aar's own service maps to another program -> real ambiguity, both kept
+    # DELETE: the aar's own service maps to another program -> real ambiguity: each copy's
+    # ref is partial with both programs (I6), so the copies are one definition again
     d = refs_from(inv, "zosapi:DELETE /acct/enquiry/{}")
-    assert len(d) == 2 and len(inv.nodes["zosapi:DELETE /acct/enquiry/{}"].evidence) == 2
+    assert [(x.target_name, x.candidates) for x in d] == [(None, ["DELACC", "DELOLD"])]
+    assert "different programs" in d[0].reason
 
 
 def test_skipped_files_recorded_and_round_trip(tmp_path, monkeypatch):
