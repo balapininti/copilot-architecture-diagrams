@@ -389,7 +389,8 @@ class _Step:
         self.missing_proc: Optional[str] = None
         self.dds: List[_DD] = []
         self.amb: Optional[str] = None  # the step comes from an ambiguous PROC / INCLUDE
-        self.dd_modes: Dict[str, str] = {}  # IDCAMS INFILE / OUTFILE: ddname -> read/write
+        # IDCAMS INFILE / OUTFILE: ddname -> every use in command order (read / write)
+        self.dd_modes: Dict[str, List[str]] = {}
 
 
 class _Scanner:
@@ -820,10 +821,11 @@ class _Scanner:
                         ref("read", val, o.start())
                     elif kw in ("OUTDATASET", "ODS"):
                         ref("write", val, o.start())
-                    elif kw in ("INFILE", "IFILE"):
-                        st.dd_modes[val.split()[0].upper()] = "read"
-                    elif kw in ("OUTFILE", "OFILE"):
-                        st.dd_modes[val.split()[0].upper()] = "write"
+                    elif kw in ("INFILE", "IFILE", "OUTFILE", "OFILE") and val.split():
+                        mode = "read" if kw in ("INFILE", "IFILE") else "write"
+                        modes = st.dd_modes.setdefault(val.split()[0].upper(), [])
+                        if mode not in modes:
+                            modes.append(mode)
             elif cmd == "DEFINE":
                 n = _IDC_NAME.search(seg)
                 if n:
@@ -970,8 +972,9 @@ class _Scanner:
             op = "read" if referback else "write"
         if temp and op == "update" and not disp_names:
             op = "read"
+        ops = [op]
         if dd.ddname in st.dd_modes:
-            op = st.dd_modes[dd.ddname]  # IDCAMS INFILE / OUTFILE says how it is used
+            ops = st.dd_modes[dd.ddname]  # IDCAMS INFILE / OUTFILE: every way it is used
         a = {"ddname": dd.ddname, "disp": disp_raw, "gdg": gdg}
         if temp:
             a["temp"] = True
@@ -981,7 +984,8 @@ class _Scanner:
             a["library"] = True
         if name:
             dd_index[(st.name.upper(), dd.ddname)] = (name, temp, gdg)
-        add(op, "dataset", name, ev, reason, a)
+        for op in ops:
+            add(op, "dataset", name, ev, reason, dict(a))
 
 
 _COPY = re.compile(r"\bCOPY\b\s+FROM\s*\((.*?)\)\s*TO\s*\((.*?)\)", re.I | re.S)

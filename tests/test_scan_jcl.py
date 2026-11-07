@@ -530,3 +530,18 @@ def test_idcams_sysin_member_in_two_other_repos_is_a_partial_note(tmp_path):
     assert len(notes) == 1 and "found in 2 places" in notes[0].reason
     assert "s/cntl/IDCDEF" in notes[0].reason and "t/cntl/IDCDEF" in notes[0].reason
     assert not any(r.target_name in ("CLM.FLAT", "OTHER.KSDS") for r in refs)
+
+
+def test_idcams_dd_written_then_read_keeps_both_ops(tmp_path):
+    # A4: one DD is the OUTFILE of the first REPRO and the INFILE of the second
+    text = ("//J1 JOB (A),'X'\n//S1 EXEC PGM=IDCAMS\n"
+            "//IN DD DSN=CLM.SRC,DISP=OLD\n//WORK DD DSN=CLM.WORK,DISP=OLD\n"
+            "//OUT DD DSN=CLM.TGT,DISP=OLD\n//SYSIN DD *\n"
+            "  REPRO INFILE(IN) OUTFILE(WORK)\n"
+            "  REPRO INFILE(WORK) OUTFILE(OUT)\n/*\n")
+    i = scan_text(tmp_path, text)
+    work = sorted(r.op for r in step_refs(i, "r/J1.jcl#S1") if r.target_name == "CLM.WORK")
+    assert work == ["read", "write"]
+    got = refs_of(i, "r/J1.jcl#S1")
+    assert ("read", "dataset", "CLM.SRC") in got and ("write", "dataset", "CLM.TGT") in got
+    assert not any(r.op == "update" for r in step_refs(i, "r/J1.jcl#S1"))
