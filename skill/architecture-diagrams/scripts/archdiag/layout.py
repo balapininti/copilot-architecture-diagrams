@@ -57,7 +57,13 @@ MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
 BAND_WIDTH = 1940.0    # layered: a picture wider than this (plus margins: 2000px) wraps its
                        # layers into bands stacked top to bottom
 BEND_GAP = 10.0        # layered: least gap between two lines bending in one column gap
-CHANNEL_LANE = 10.0    # layered: gap between two lines running along one channel
+CHANNEL_LANE = 24.0    # layered: gap between two lines running along one channel (a pill fits)
+BUNDLE = 3             # layered: this many lines bending in one column gap make a bundle
+PILL_SLOT = 120.0      # ...which gets up to this much more gap, free of bends, for labels:
+LABEL_CHAR_W = 6.3     # ...a label's estimated width per character (10.5px font)
+LABEL_WRAP = 84.0      # ...a long label wraps to this width
+STEP_W = 19.0          # ...a step number's circle beside the label
+LABEL_END_ROOM = 34.0  # ...plus the clear stretch before the arrowhead
 CROSS_KEY = 1e7        # layered: port sort key offset for a line to a later band
 CHANNEL_PAD = 16.0     # layered: room above and below the lines in a channel between bands
 SPINE_GAP = 14.0       # layered: gap between lines going down the left of the picture
@@ -756,6 +762,9 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
         paths[k] = hop_list
     last_of_band = {bl[-1] for bl in band_layers}
     gap_w: Dict[Tuple[str, int], float] = {}
+    # a gap with a bundle of lines keeps a free stretch on its right, where the lines
+    # run level into their targets, so each can carry its label (E1)
+    slot: Dict[Tuple[str, int], float] = {}
     for g in range(nlayers):
         n = len(hops.get(("after", g), []))
         gap_w[("after", g)] = (BEND_GAP * (n + 1) if n else 0.0) if g in last_of_band \
@@ -763,6 +772,19 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     for b in range(nbands):
         n = len(hops.get(("pre", b), []))
         gap_w[("pre", b)] = BEND_GAP * (n + 1) if n else 0.0
+    # label room in bundled gaps, left to right, while the band stays within BAND_WIDTH
+    for b in range(nbands):
+        band_w = gap_w[("pre", b)] + sum(maxw + gap_w[("after", g)] for g in band_layers[b])
+        for g in band_layers[b]:
+            items = hops.get(("after", g), [])
+            if len(items) < BUNDLE or g in last_of_band:
+                continue
+            need = _label_room(view, items, paths, fanned, reversed_edges, sizes, maxw,
+                               gap_w[("after", g)])
+            if need > 0 and band_w + need <= BAND_WIDTH:
+                slot[("after", g)] = need
+                gap_w[("after", g)] += need
+                band_w += need
 
     # 9. Columns, boxes, and the routes: border to border, bends in the gaps.
     col_x = [0.0] * nlayers
@@ -789,7 +811,8 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
                                   and t[2] not in spine else 0,
                                   t[0] if t[2] in cross and t[3] == 1 and t[2] not in spine
                                   else (-t[0] if t[1] > t[0] else t[0]), t[1]))
-        for (_, _, k, h_i), x in zip(items, _spread(len(items), gap_lo[key], gap_w[key])):
+        for (_, _, k, h_i), x in zip(items, _spread(len(items), gap_lo[key],
+                                                          gap_w[key] - slot.get(key, 0.0))):
             bend_x[(k, h_i)] = x
     routes: List[List[Point]] = [[] for _ in view.edges]
     for k, e in enumerate(view.edges):
@@ -829,6 +852,28 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
             pts.append((boxes[v].x, port_in[k]))
         routes[k] = _simplify(pts[::-1] if k in reversed_edges else pts)
     return boxes, routes
+
+
+def _label_room(view: ViewGraph, items: List[Tuple[float, float, int, int]],
+                paths: Dict[int, list], fanned: Dict[Tuple[int, str], tuple],
+                reversed_edges: set, sizes: Dict[str, Tuple[float, float]], maxw: float,
+                gap: float) -> float:
+    """How much wider a column gap with a bundle of bends must be, on its right, so each
+    labeled line that bends there and runs level into its target has a stretch long
+    enough for its label clear of its arrowhead (E1); at most PILL_SLOT."""
+    spacing = gap / (len(items) + 1)
+    need = 0.0
+    for _, _, k, h_i in items:
+        e = view.edges[k]
+        if h_i != len(paths[k]) - 1 or (k, "in") in fanned or k in reversed_edges \
+                or (not e.label and e.number is None):
+            continue
+        dst = paths[k][h_i][1]
+        pill = min(LABEL_CHAR_W * len(e.label), LABEL_WRAP) + 14 \
+            + (STEP_W if e.number is not None else 0.0)
+        free = (maxw - sizes[dst][0]) / 2 + spacing
+        need = max(need, pill + LABEL_END_ROOM - free)
+    return min(PILL_SLOT, max(0.0, need))
 
 
 def _bands(dag: List[Tuple[str, str, int]], layer: Dict[str, int],

@@ -173,6 +173,7 @@ LINE_PAD = 1.5      # a pill keeps this far off any other line
 KEY_R = 8.0         # a marker's radius (circle for a step, rounded square otherwise)
 KEY_SIZE, KEY_LINE = 11.0, 20.0
 MARK_STEP = 1.0     # markers are tried every this many px along their line
+MARK_CLEAR = 5.0    # a marker keeps this far off other lines where its line allows
 
 
 def _mark_spots(route: List[Tuple[float, float]]) -> List[float]:
@@ -315,11 +316,16 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                 hits = float(lines.others(_line_rect(m), i))
                 if mark_cost is not None and hits > mark_cost[1]:
                     continue
+                # (E1) a spot with MARK_CLEAR px of room to the next line beats one that
+                # only just misses it
+                near = float(lines.others((m.x - MARK_CLEAR, m.y - MARK_CLEAR,
+                                           m.w + 2 * MARK_CLEAR, m.h + 2 * MARK_CLEAR), i))
                 r = (m.x - 3, m.y - 3, m.w + 6, m.h + 6)
-                cost = (sum(_overlap(r, o) for o in obstacles), hits)
-                if mark_cost is None or (cost[1], cost[0]) < (mark_cost[1], mark_cost[0]):
+                cost = (sum(_overlap(r, o) for o in obstacles), hits, near)
+                if mark_cost is None or (cost[1], cost[2], cost[0]) < \
+                        (mark_cost[1], mark_cost[2], mark_cost[0]):
                     mark_best, mark_cost = m, cost
-                if cost == (0.0, 0.0):
+                if cost == (0.0, 0.0, 0.0):
                     break
             # a pill over another line is never kept: the marker is, crowded or not
             if mark_best is not None and (best_cost[1] > 0 or mark_cost[0] < best_cost[0]):

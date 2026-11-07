@@ -122,3 +122,52 @@ def test_markers_in_every_style_are_keyed():
             for p in pills:
                 if p.marker:
                     assert " ".join(p.lines) in text, (level, mod.__name__)
+
+
+def _keyed(mod, v):
+    return [p for p in _placed(mod, v)[1] if p.marker]
+
+
+def test_channel_and_bundle_lines_carry_their_own_labels():
+    """E1: channel lanes are a pill apart and a gap with a bundle of bends keeps a free
+    stretch before the targets, so the claims/:id page flow keys few labels (it keyed 18
+    over the four styles) and never a line running along the channel between bands."""
+    v = fixture_view("flow_tx", "claims/:id")
+    total = 0
+    for mod in (style_a, style_b, style_c, style_d):
+        keyed = _keyed(mod, v)
+        total += len(keyed)
+        assert len(keyed) <= 2, (mod.__name__, [v.edges[p.i].label for p in keyed])
+        for p in keyed:
+            e = v.edges[p.i]
+            assert not (e.src.startswith("class:claims-api") and "claims-online" in e.dst
+                        or e.dst.startswith(("queue:", "zosapi:"))), (mod.__name__, e.label)
+    assert total <= 4, total
+
+
+def _rect_gap(a, b, rect):
+    """Least distance from segment a-b to rect (sampled every px)."""
+    x, y, w, h = rect
+    n = max(1, int(abs(b[0] - a[0]) + abs(b[1] - a[1])))
+    best = float("inf")
+    for k in range(n + 1):
+        px, py = a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n
+        dx, dy = max(x - px, 0, px - x - w), max(y - py, 0, py - y - h)
+        best = min(best, (dx * dx + dy * dy) ** 0.5)
+    return best
+
+
+def test_markers_keep_clear_of_other_lines():
+    """E1: a marker sits where it keeps at least 4px from every other line (it had 2px
+    on lines 10px apart)."""
+    for level, scope in LEVELS:
+        v = fixture_view(level, scope)
+        for mod in (style_a, style_b, style_c, style_d):
+            routes, pills = _placed(mod, v)
+            for p in pills:
+                if not p.marker:
+                    continue
+                rect = (p.x, p.y, p.w, p.h)
+                gap = min([_rect_gap(a, b, rect) for j, r in enumerate(routes) if j != p.i
+                           for a, b in zip(r, r[1:])] or [99.0])
+                assert gap >= 4.0, (level, mod.__name__, v.edges[p.i].label, gap)
