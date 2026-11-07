@@ -133,14 +133,23 @@ class _Src:
     def cid(self, c: Tuple[int, int, int, str, int]) -> str:
         return self.id_for(c[3], self.qual[c[0]])
 
-    def resolve_type(self, t: str) -> Optional[Tuple[Optional[str], List[str]]]:
+    def resolve_type(self, t: str, off: Optional[int] = None
+                     ) -> Optional[Tuple[Optional[str], List[str]]]:
         """(class id, []) for a type defined in this repo; (None, candidate ids) when two
-        same-named classes cannot be told apart; None when it is not a repo class."""
+        same-named classes cannot be told apart; None when it is not a repo class. A
+        member class of an enclosing class (innermost first) wins, as in Java (B5)."""
         quals = self.ctx.java_classes.get(self.repo, {}).get(t)
         if not quals:
             return None
         if len(quals) == 1:
             return self.id_for(t, next(iter(quals))), []
+        if off is not None:
+            for c in sorted((c for c in self.classes if c[1] < off < c[2]),
+                            key=lambda c: -c[1]):
+                q = self.qual[c[0]]
+                for cand in (q + "." + t, q if c[3] == t else None):
+                    if cand in quals:
+                        return self.id_for(t, cand), []
         for q in sorted(quals):
             if q in self.imports:
                 return self.id_for(t, q), []
@@ -675,7 +684,7 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
                 types.append((m.group(2), o + 1 + m.start()))
         done: Set[str] = set()
         for t, off in types:
-            got = s.resolve_type(t)
+            got = s.resolve_type(t, off)
             if got is None:
                 continue
             tid, cands = got

@@ -603,3 +603,25 @@ def test_b4_eci_request_program_by_known_constructor_shape(tmp_path):
     res = resolve(inv, Config())
     assert all(e.status != "confirmed" for e in res.edges
                if e.op == "ctg_call" and e.evidence[0].line >= 6)
+
+
+# ------------------------------------------------------------------ B5: nested same-named classes
+
+def test_b5_nested_same_named_class_resolves_via_the_enclosing_class(tmp_path):
+    inv = ws(tmp_path, {
+        "x/A.java": ("package x;\nclass A {\n  static class Repo {}\n"
+                     "  static class Svc {\n    @Autowired Repo repo;\n  }\n"
+                     "  @Autowired Repo r;\n}\n"),
+        "x/B.java": "package x;\nclass B {\n  static class Repo {}\n  @Autowired Repo r;\n}\n"})
+    uses = {(r.src, r.target_name, r.reason) for r in inv.refs if r.op == "uses"}
+    assert uses == {("class:r/A", "r/x.A.Repo", None), ("class:r/Svc", "r/x.A.Repo", None),
+                    ("class:r/B", "r/x.B.Repo", None)}
+
+
+def test_b5_other_nested_same_named_class_still_ambiguous_outside(tmp_path):
+    inv = ws(tmp_path, {
+        "x/A.java": "package x;\nclass A {\n  static class Repo {}\n}\n",
+        "x/B.java": "package x;\nclass B {\n  static class Repo {}\n}\n",
+        "x/C.java": "package x;\nclass C {\n  @Autowired Repo r;\n}\n"})
+    (u,) = [r for r in inv.refs if r.op == "uses"]
+    assert u.target_name is None and "more than one" in u.reason
