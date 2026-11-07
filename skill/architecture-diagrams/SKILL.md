@@ -211,6 +211,7 @@ What `draw` prints, and what to do:
 - `Grouped by folder. Ask Copilot to name groups for this repo.` No file yet. Do steps 1-4.
 - `The gitdiagram file couldn't be used (...); folders were used instead.` Say so, fix the
   file, **show the user the changed grouping and wait**, then draw again.
+- `No files to group in <repo>` The scan classified no file there; there is nothing to group.
 - `Not yet grouped: N files (see ...)` Offer to place them. Add patterns to the right
   groups, keep the rest as they were, draw again.
 - `Problem in gitdiagram-<repo>.json: ...` (a pattern that matches nothing, a dropped
