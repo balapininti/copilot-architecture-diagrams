@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<zosConnectApi xmlns="http://www.ibm.com/zosConnect/2.0/zosConnectApi" id="claimstatus">
+    <apiSpec title="claimstatus" basePath="/zos/claims" description="Claim status from CICS" version="1.0.0">
+        <path relativePath="/{id}/status">
+            <method type="GET" zosConnectServiceRef="ClaimStatus" httpXformFile="api/{id}/status/GET/mapping.xml" operationId="getClaimStatus"></method>
+        </path>
+        <apiDoc docType="SWAGGER">api-docs/swagger.json</apiDoc>
+    </apiSpec>
+</zosConnectApi>

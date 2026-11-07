@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 def read_source(path: Path) -> str:
@@ -39,6 +39,28 @@ _PLI = re.compile(r"\bPROCEDURE\s+OPTIONS\s*\(\s*MAIN\b", re.I)
 _REXX = re.compile(r"^\s*/\*\s*REXX", re.I)
 
 
+_ZC_API = re.compile(r"<\s*(?:\w+:)?zosConnectApi\b")
+_ZC_MANIFEST = re.compile(r"^provider:", re.M)
+_ZC_PROPS_PROVIDER = re.compile(r"^\s*provider\s*[=:]\s*cics\s*$", re.I | re.M)
+_ZC_PROPS_PROGRAM = re.compile(r"^\s*(?:program|executableName)\s*[=:]", re.M)
+
+
+def _is_zosconnect(parts: List[str], ext: str, text: str) -> bool:
+    """z/OS Connect project files, recognized by name and content (see scan/zosconnect.py)."""
+    name = parts[-1]
+    if name == "package.xml":
+        return bool(_ZC_API.search(text))
+    if name == "manifest.yml":
+        return bool(_ZC_MANIFEST.search(text)) and "providerProperties" in text
+    if name == "zosasset.yaml":
+        return True
+    if name == "operation.yaml":
+        return len(parts) >= 4 and parts[-4] == "operations"
+    if ext == ".properties":
+        return bool(_ZC_PROPS_PROVIDER.search(text) and _ZC_PROPS_PROGRAM.search(text))
+    return False
+
+
 def classify(relpath: str, text: str) -> Optional[str]:
     """Return the file type for a repo-relative path and its text, or None."""
     rel = relpath.replace("\\", "/")
@@ -47,6 +69,8 @@ def classify(relpath: str, text: str) -> Optional[str]:
     dot = parts[-1].rfind(".")
     if dot > 0:
         ext = parts[-1][dot:]
+    if _is_zosconnect(parts, ext, text):
+        return "zosconnect"
     if ext in _EXT:
         return _EXT[ext]
     if "zosconnect" in parts[:-1]:
