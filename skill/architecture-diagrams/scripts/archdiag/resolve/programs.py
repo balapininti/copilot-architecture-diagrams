@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Inventory, Node, Ref
 from ..scan.cobol import IBM_COPYBOOKS
+from .common import join as _join, missing as _missing, unknown_name, where
 
 PROGRAM_OPS = frozenset(["runs", "call", "link", "xctl", "ctg_call"])
 TRANSACTION_OPS = frozenset(["start", "return_transid"])
@@ -35,34 +36,8 @@ _RULES: Dict[str, Tuple[frozenset, Tuple[str, ...]]] = {
 }
 
 
-def _where(ev: Evidence) -> str:
-    return "%s/%s" % (ev.repo, ev.path) if ev.repo else ev.path
-
-
 def _ambiguous(defs: List[Evidence]) -> str:
-    return "ambiguous: defined in %d places: %s" % (len(defs), ", ".join(_where(e) for e in defs))
-
-
-def _join(*reasons: Optional[str]) -> Optional[str]:
-    parts = [r for r in reasons if r]
-    return "; ".join(parts) if parts else None
-
-
-def _src_label(src: str) -> str:
-    """The source node id without its kind prefix (unique, unlike a bare step name)."""
-    return src.split(":", 1)[1] if ":" in src else src
-
-
-def _missing(nodes: Dict[str, Node], kind: str, name: str, reason: Optional[str] = None,
-             candidates: Optional[List[str]] = None) -> str:
-    nid = "missing:%s:%s" % (kind, name)
-    if nid not in nodes:
-        attrs = {"target_kind": kind}
-        if reason is not None or candidates is not None:
-            attrs["reason"] = reason
-            attrs["candidates"] = list(candidates or [])
-        nodes[nid] = Node(nid, "missing", name, None, [], attrs)
-    return nid
+    return "ambiguous: defined in %d places: %s" % (len(defs), ", ".join(where(e) for e in defs))
 
 
 def _definitions(nodes: Dict[str, Node], kinds: Tuple[str, ...],
@@ -99,7 +74,7 @@ def _resolve_named(ref: Ref, kinds: Tuple[str, ...], nodes: Dict[str, Node],
             # the name still holds an unresolved symbol: only partly known, and keyed by
             # where it is written so unrelated `PGM=&PGM` steps don't share one box
             missing = _missing(nodes, ref.target_kind,
-                               "?%s:%d" % (_src_label(ref.src), ref.evidence.line),
+                               unknown_name(ref.src, ref.evidence),
                                ref.reason or "name not worked out", [])
             nodes[missing].attrs.setdefault("written_name", name)
             edges.append(Edge(ref.src, ref.op, missing, PARTIAL,
@@ -125,7 +100,7 @@ def _resolve_unknown(ref: Ref, kinds: Tuple[str, ...], nodes: Dict[str, Node],
                               [ref.evidence] + defs))
             return
     missing = _missing(nodes, ref.target_kind,
-                       "?%s:%d" % (_src_label(ref.src), ref.evidence.line),
+                       unknown_name(ref.src, ref.evidence),
                        reason, ref.candidates)
     edges.append(Edge(ref.src, ref.op, missing, PARTIAL, reason, [ref.evidence]))
 

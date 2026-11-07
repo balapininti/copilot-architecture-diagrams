@@ -158,7 +158,11 @@ def test_utilities_created_on_demand():
 
 
 def test_task8_kinds_not_handled_here():
-    assert not [e for e in resolved().edges if e.op in ("http", "uses", "transfer", "put")]
+    from archdiag.resolve.programs import resolve_programs
+    inv = resolved().inventory
+    nodes, out = dict(inv.nodes), []
+    resolve_programs(inv, nodes, out)
+    assert not [e for e in out if e.op in ("http", "uses", "transfer", "put", "read", "select")]
 
 
 def test_config_fixture_loaded():

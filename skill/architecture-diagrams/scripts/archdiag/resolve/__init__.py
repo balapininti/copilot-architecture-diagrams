@@ -5,6 +5,9 @@ from typing import Dict, List
 
 from ..config import Config
 from ..model import Edge, Inventory, Node, Resolved
+from .data import repo_links
+
+__all__ = ["resolve", "repo_links"]
 
 
 def resolve(inv: Inventory, config: Config) -> Resolved:
