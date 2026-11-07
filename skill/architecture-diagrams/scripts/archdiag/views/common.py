@@ -27,6 +27,10 @@ class VNode:
     highlight: int = 0  # repomap: the first N detail_lines are files holding link evidence
     # resolver edges this box stands for (a job step's "runs" edge), for the links report
     underlying: List[Edge] = field(default_factory=list)
+    # the resolver's own kind when ``kind`` is the icon kind it is drawn with (copybook is
+    # drawn as a program, zosapi as an endpoint, a neighbor keeps what it really is); "" means
+    # ``kind`` is the real kind
+    real_kind: str = ""
 
 
 @dataclass
@@ -256,7 +260,8 @@ class _Ctx:
     def vnode(self, nid: str, group: Optional[str] = None, row: Optional[str] = None) -> VNode:
         n = self.nodes.get(nid)
         if n is None:  # an application end of a suggested link
-            return VNode(nid, nid.split(":", 1)[-1], "application", "application", group, None)
+            return VNode(nid, nid.split(":", 1)[-1], "application", "application", group, None,
+                         real_kind="application")
         if n.kind == "missing":
             label, sub = _missing_label(n)
             ins = self.inn.get(nid, [])
@@ -278,7 +283,8 @@ class _Ctx:
                 kind, sub = "vsam", "VSAM dataset"
             elif nid in self.gdg_sets:
                 kind, sub = "gdg", "GDG"
-        return VNode(nid, _display(n), sub, kind, group, None, row=row)
+        return VNode(nid, _display(n), sub, kind, group, None, row=row,
+                     real_kind=n.kind if kind == n.kind or n.kind != "dataset" else kind)
 
 
 def _evidence(es: Iterable[Edge]) -> List[Evidence]:

@@ -46,7 +46,7 @@ def application(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
         elif n is None:
             if not nid.startswith("app:") or nid[4:] == name:
                 return None
-            vn = VNode(nid, nid[4:], "application", "neighbor")
+            vn = VNode(nid, nid[4:], "application", "neighbor", real_kind="application")
         elif n.kind == "missing":
             vn = ctx.vnode(nid, grp)
         elif n.kind == "external":

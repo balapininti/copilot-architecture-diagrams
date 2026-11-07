@@ -42,15 +42,22 @@ def test_mermaid_structure():
 
 def test_link_style_indexes_follow_link_order():
     v = fixture_view("landscape", None)
-    md = style_b.render(v)["md"]
-    links = [ln for ln in _fence(md).splitlines() if re.search(r"-->|-\.->|--x", ln)]
+    fence = _fence(style_b.render(v)["md"])
+    links = [ln for ln in fence.splitlines() if re.search(r"-->|-\.->|--x", ln)]
     assert len(links) == len(v.edges)
-    for i, ln in enumerate(links):
-        want = {"loose": "--x", "partial": "-.->"}.get(
-            style_b.line_style(v.edges[i].status, v.edges[i].kind), "-->")
-        assert want in ln
-        if want == "--x":
-            assert "linkStyle %d stroke:#dc2626" % i in md
+    full = {"confirmed": "stroke:#334155,stroke-width:2px",
+            "partial": "stroke:#d97706,stroke-width:2px",
+            "loose": "stroke:#dc2626,stroke-width:2px",
+            "shared_code": "stroke:#a16207,stroke-width:2px,stroke-dasharray:7 4"}
+    arrow = {"loose": "--x", "partial": "-.->", "confirmed": "-->", "shared_code": "-->"}
+    seen = set()
+    for i, (e, ln) in enumerate(zip(v.edges, links)):
+        st = style_b.line_style(e.status, e.kind)
+        seen.add(st)
+        assert arrow[st] in ln
+        assert "  linkStyle %d %s\n" % (i, full[st]) in fence + "\n"
+    assert seen == {"confirmed", "partial", "loose", "shared_code"}
+    assert fence.count("linkStyle") == len(v.edges)
 
 
 def _tricky():
@@ -105,16 +112,81 @@ def test_lines_keep_certainty_types():
     assert 'stroke-dasharray="7 4"' in svg
 
 
-def test_no_node_overlap_and_pills_inside_canvas():
+def _rects(root, pred):
+    out = []
+    for r in root.iter("{http://www.w3.org/2000/svg}rect"):
+        if pred(r):
+            out.append((float(r.get("x")), float(r.get("y")), float(r.get("width")),
+                        float(r.get("height"))))
+    return out
+
+
+def _hit(a, b):
+    return (min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]) > 0.5
+            and min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]) > 0.5)
+
+
+def test_pills_inside_canvas_and_boxes_do_not_overlap():
     for level, scope in CASES:
         v = fixture_view(level, scope)
         root = ET.fromstring(style_b.render(v)["svg"])
         w, h = float(root.get("width")), float(root.get("height"))
-        for r in root.iter("{http://www.w3.org/2000/svg}rect"):
-            if r.get("id", "").startswith("pill-"):
-                x, y = float(r.get("x")), float(r.get("y"))
-                assert 0 <= x and x + float(r.get("width")) <= w
-                assert 0 <= y and y + float(r.get("height")) <= h
+        for x, y, pw, ph in _rects(root, lambda r: r.get("id", "").startswith("pill-")):
+            assert 0 <= x and x + pw <= w and 0 <= y and y + ph <= h
+        # node boxes: filled rects with rx=6 (cylinders and persons are other shapes)
+        boxes = _rects(root, lambda r: r.get("rx") == "6")
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1:]:
+                assert not _hit(a, b), (level, a, b)
+
+
+def test_pill_covers_no_box():
+    for level, scope in CASES:
+        root = ET.fromstring(style_b.render(fixture_view(level, scope))["svg"])
+        boxes = _rects(root, lambda r: r.get("rx") == "6")
+        for p in _rects(root, lambda r: r.get("id", "").startswith("pill-")):
+            for b in boxes:
+                assert not _hit(p, b), (level, p, b)
+
+
+REAL_KINDS = [
+    # (id, kind drawn, real_kind, sublabel, expected second line)
+    ("copybook:CLMREC", "program", "copybook", "copybook · shared-copybooks", "[Copybook: COBOL]"),
+    ("zosapi:GET /z", "endpoint", "zosapi", "z/OS Connect API · claims-online",
+     "[API: z/OS Connect]"),
+    ("endpoint:GET /a", "endpoint", "", "REST endpoint · claims-api", "[Endpoint: REST]"),
+    ("transaction:CLMI", "transaction", "", "CICS transaction · claims-online",
+     "[CICS transaction]"),
+    ("map:CLMM01", "map", "", "3270 map · claims-online", "[BMS map]"),
+    ("utility:SORT", "utility", "", "STEP010", "[Utility]"),
+    ("program:P", "program", "", "COBOL program · claims-online", "[Program: COBOL]"),
+    ("mqprocess:Q", "queue", "mqprocess", "MQ process · claims-online", "[MQ process]"),
+    ("queue:Q", "queue", "", "IBM MQ queue", "[Queue: IBM MQ]"),
+    ("table:T", "table", "", "DB2 table", "[Table: DB2]"),
+    ("notanalyzed:D", "notanalyzed", "", "asm · not analyzed · claims-batch",
+     "[Not analyzed: asm]"),
+    ("program:N", "neighbor", "program", "COBOL program · claims-batch",
+     "[COBOL program · neighbor]"),
+    ("copybook:N", "neighbor", "copybook", "copybook · shared-copybooks",
+     "[COBOL copybook · neighbor]"),
+]
+
+
+def test_every_real_kind_is_labelled_by_what_it_is():
+    for nid, kind, real, sub, want in REAL_KINDS:
+        v = ViewGraph(title="K", level="landscape", scope=None,
+                      nodes=[VNode(id=nid, label="X", sublabel=sub, kind=kind, real_kind=real)],
+                      edges=[], groups=[], notes=[])
+        out = style_b.render(v)
+        assert want in _texts(out["svg"]), (nid, _texts(out["svg"]))
+        assert "<br/>%s" % want.replace("&", "#amp;") in out["md"], (nid, out["md"])
+
+
+def test_fixture_views_keep_real_kind():
+    texts = " ".join(_texts(style_b.render(fixture_view("application", "claims-online"))["svg"]))
+    assert "[API: z/OS Connect]" in texts and "[MQ process]" in texts
+    assert "[COBOL copybook · neighbor]" in texts
+    assert "[Neighbor]" not in texts
 
 
 def test_writes_samples():

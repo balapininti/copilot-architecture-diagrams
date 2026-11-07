@@ -13,13 +13,12 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.pills import (ARROW_LEN, PILL_LINE, PILL_MAX_W, PILL_SIZE, Pill, edge_svg,
-                                   end_zones, place_pills as _place_pills)
-from archdiag.render.common import (circled, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LOOSE_COLOR,
-                                    PARTIAL_COLOR, REPO_COLORS, arrowhead, esc, legend, legend_width,
-                                    line_attrs, line_color, line_style, loose_dot, notes_block,
+from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LOOSE_COLOR,
+                                    PARTIAL_COLOR, REPO_COLORS, circled, esc, legend,
+                                    legend_width, line_attrs, line_style, notes_block,
                                     notes_height, num, path_d, svg_doc, text, text_width, tint,
                                     wrap)
+from archdiag.render.pills import Pill, edge_svg, place_pills as _place_pills
 from archdiag.views import VNode, ViewGraph
 
 MIN_W, MIN_H = 120.0, 110.0
@@ -30,7 +29,6 @@ DETAIL_SIZE, DETAIL_LINE = 10.0, 13.0
 TOP_PAD = 6.0              # box top to icon area
 ICON_GAP = 8.0             # icon area to first label line
 TITLE_H = 44.0
-
 
 
 def shade(color: str) -> str:

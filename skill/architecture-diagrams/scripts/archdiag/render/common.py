@@ -121,7 +121,6 @@ def circled(n: Optional[int]) -> str:
     return "(%d)" % n
 
 
-
 # ------------------------------------------------------------------ lines
 
 def line_style(status: str, kind: str) -> str:

@@ -137,7 +137,6 @@ def _candidates(route: List[Tuple[float, float]], probe: "Pill", own: int = -1,
     return out
 
 
-
 Rect = Tuple[float, float, float, float]
 
 
@@ -209,5 +208,3 @@ def edge_svg(i: int, route: List[Tuple[float, float]], style: str, status: str, 
     body = pts[:-1] + [(tip[0] - dx / d * cut, tip[1] - dy / d * cut)]
     return '<path id="edge-%d" d="%s" %s/>%s' % (i, path_d(body), attrs,
                                                   arrowhead(prev, tip, line_color(status, kind)))
-
-

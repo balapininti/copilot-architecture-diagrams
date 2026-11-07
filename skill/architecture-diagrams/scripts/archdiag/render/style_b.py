@@ -42,49 +42,69 @@ SUB_TEXT = "#cfe0f5"
 
 CYLINDERS = ("table", "dataset", "vsam", "gdg", "datastore")
 
-_KIND_NAME = {
-    "application": "Application", "datastore": "Datastore", "program": "Program",
-    "utility": "Utility", "job": "Job", "step": "Job step", "dataset": "Dataset",
-    "gdg": "Generation dataset", "vsam": "VSAM dataset", "table": "Table", "queue": "Queue",
-    "transaction": "Transaction", "map": "Map", "cicsfile": "CICS file",
-    "external": "External system", "notanalyzed": "Not analyzed", "repo": "Repository",
-    "page": "Page", "component": "Component", "class": "Class", "endpoint": "Endpoint",
-    "person": "Person", "neighbor": "Neighbor", "missing": "Not found", "more": "More",
-    "sysout": "Output",
-}
+# (Kind, tech) per real kind; an empty tech gives "[Kind]"
 _KIND_TECH = {
-    "program": "COBOL", "job": "JCL", "step": "JCL", "utility": "z/OS utility",
-    "dataset": "z/OS", "gdg": "z/OS", "vsam": "VSAM", "table": "DB2", "queue": "IBM MQ",
-    "transaction": "CICS", "map": "BMS", "cicsfile": "CICS", "page": "Angular",
-    "component": "Angular", "class": "Java", "endpoint": "REST",
+    "application": ("Application", ""), "datastore": ("Datastore", ""),
+    "program": ("Program", "COBOL"), "copybook": ("Copybook", "COBOL"),
+    "utility": ("Utility", ""), "job": ("Job", "JCL"), "step": ("Job step", "JCL"),
+    "proc": ("JCL proc", ""), "dataset": ("Dataset", "z/OS"),
+    "gdg": ("Generation dataset", "z/OS"), "vsam": ("VSAM dataset", ""),
+    "table": ("Table", "DB2"), "queue": ("Queue", "IBM MQ"), "mqprocess": ("MQ process", ""),
+    "transaction": ("CICS transaction", ""), "map": ("BMS map", ""),
+    "cicsfile": ("CICS file", ""), "external": ("External system", ""),
+    "notanalyzed": ("Not analyzed", ""), "repo": ("Repository", ""),
+    "page": ("Page", "Angular"), "component": ("Component", "Angular"),
+    "class": ("Class", "Java"), "endpoint": ("Endpoint", "REST"),
+    "zosapi": ("API", "z/OS Connect"), "person": ("Person", ""), "more": ("More", ""),
+    "sysout": ("Output", ""),
+}
+# what a neighbor box says it is: "[COBOL program · neighbor]"
+_FULL = {
+    "program": "COBOL program", "copybook": "COBOL copybook", "zosapi": "z/OS Connect API",
+    "endpoint": "REST endpoint", "transaction": "CICS transaction", "map": "BMS map",
+    "queue": "IBM MQ queue", "table": "DB2 table", "dataset": "dataset",
+    "vsam": "VSAM dataset", "gdg": "GDG", "job": "JCL job", "class": "Java class",
+    "component": "Angular component", "page": "Angular page", "cicsfile": "CICS file",
+    "mqprocess": "MQ process", "proc": "JCL proc", "utility": "utility",
+    "application": "application", "external": "external system",
 }
 _FROM_SUBLABEL = ("application", "datastore", "repo")  # the sublabel is the technology
+
+
+def real_kind(n: VNode) -> str:
+    return n.real_kind or n.kind
 
 
 # ------------------------------------------------------------------ the three lines of text
 
 def _card(n: VNode) -> Tuple[str, str, List[str]]:
-    """(name, ``[Kind: tech]``, description lines) for one box."""
-    kind = _KIND_NAME.get(n.kind, n.kind.title())
-    tech = ""
+    """(name, ``[Kind: tech]``, description lines) for one box, from its real kind."""
+    k = real_kind(n)
+    sub = n.sublabel or ""
+    if n.kind == "missing":
+        return n.label, "", ([sub] if sub else [])
+    if n.kind == "neighbor":
+        owner = sub.split(" · ", 1)[1] if " · " in sub else ""
+        return (n.label, "[%s · neighbor]" % _FULL.get(k, k), [owner] if owner else [])
+    kind, tech = _KIND_TECH.get(k, (k.title(), ""))
     desc: List[str] = []
     if n.kind in _FROM_SUBLABEL:
-        tech = n.sublabel
+        tech = sub
         details = list(n.detail_lines)
         if n.kind == "repo" and len(details) > MAX_DESC_LINES:
             details = details[:MAX_DESC_LINES - 1] + ["+%d more" % (len(details) - MAX_DESC_LINES + 1)]
         desc = details
-    elif n.kind == "missing":
-        desc = [n.sublabel] if n.sublabel else []
+    elif n.kind == "notanalyzed":
+        parts = sub.split(" · ")
+        tech = parts[0] if parts and parts[0] != "code" else ""
+        desc = [parts[2]] if len(parts) > 2 else []
     else:
-        tech = _KIND_TECH.get(n.kind, "")
-        m = re.match(r"^(\S+) program", n.sublabel or "")
-        if n.kind == "program" and m:
+        m = re.match(r"^(\S+) program", sub)
+        if k == "program" and m:
             tech = m.group(1)
-        sub = n.sublabel or ""
         if " · " in sub:
             rest = sub.split(" · ", 1)[1]
-        elif tech and tech.lower() in sub.lower():
+        elif (tech and tech.lower() in sub.lower()) or sub.lower() == kind.lower():
             rest = ""
         else:
             rest = sub
@@ -92,10 +112,7 @@ def _card(n: VNode) -> Tuple[str, str, List[str]]:
             desc = [rest]
     if tech and tech.lower() in kind.lower():
         tech = ""
-    kind_line = "[%s: %s]" % (kind, tech) if tech else "[%s]" % kind
-    if n.kind == "missing":
-        kind_line = ""
-    return n.label, kind_line, desc
+    return n.label, "[%s: %s]" % (kind, tech) if tech else "[%s]" % kind, desc
 
 
 class _Text:

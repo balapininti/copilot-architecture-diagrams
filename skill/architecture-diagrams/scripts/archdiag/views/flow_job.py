@@ -94,7 +94,7 @@ def flow_job(ctx: _Ctx, scope: Optional[str]) -> ViewGraph:
         sub = st.name + (" (proc %s)" % st.attrs["proc"] if st.attrs.get("proc") else "")
         status = combine_status(e.status for e in runs) if runs else PARTIAL
         add(VNode(st.id, label, sub, kind, None, None if status == CONFIRMED else status,
-                  row="lane", underlying=list(runs)))
+                  row="lane", underlying=list(runs), real_kind=kind))
 
     keyed: List[Tuple[tuple, Edge]] = []
     written: Set[str] = set()
