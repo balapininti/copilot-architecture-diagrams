@@ -45,7 +45,13 @@ class Stmt:
 
 def _split_operand(rest: str) -> Tuple[str, str]:
     """Split the operand field from the trailing comment (first blank outside quotes/parens)."""
-    quote = False
+    opnd, comment, _q = _split_operand_q(rest)
+    return opnd, comment
+
+
+def _split_operand_q(rest: str, quote: bool = False) -> Tuple[str, str, bool]:
+    """_split_operand that starts inside a quoted value when ``quote`` is set (a continued
+    quoted parameter) and also says whether a quote is still open at the end."""
     depth = 0
     for i, ch in enumerate(rest):
         if ch == "'":
@@ -57,8 +63,8 @@ def _split_operand(rest: str) -> Tuple[str, str]:
         elif ch == ")":
             depth = max(0, depth - 1)
         elif ch in " \t" and depth == 0:
-            return rest[:i], rest[i + 1:].strip()
-    return rest, ""
+            return rest[:i], rest[i + 1:].strip(), False
+    return rest, "", quote
 
 
 def parse_params(operands: str) -> List[Tuple[Optional[str], str]]:
@@ -120,6 +126,7 @@ def parse_statements(text: str) -> List[Stmt]:
     stmts: List[Stmt] = []
     cur: Optional[Stmt] = None
     cont = False
+    in_quote = False  # the statement continues inside a quoted value (PARM='...)
     data_stmt: Optional[Stmt] = None
     data_dlm: Optional[str] = None
     for idx, raw in enumerate(text.split("\n"), 1):
@@ -141,10 +148,13 @@ def parse_statements(text: str) -> List[Stmt]:
         if ln.startswith("//*") or ln.startswith("/*") or not ln.startswith("//"):
             continue
         body = ln[2:]
+        if cont and cur is not None and in_quote and body[:1] not in ("", " "):
+            cont = in_quote = False  # an unclosed quote: a named statement is a new one
         if cont and cur is not None:
-            opnd, _ = _split_operand(body.strip())
+            # a quoted value continues in column 16 of the next line, blanks and all
+            opnd, _, in_quote = _split_operand_q(body.lstrip(), in_quote)
             cur.operands += opnd
-            cont = opnd.endswith(",")
+            cont = opnd.endswith(",") or in_quote
             if not cont:
                 starts, data_dlm = _starts_data(cur)
                 if starts:
@@ -161,13 +171,14 @@ def parse_statements(text: str) -> List[Stmt]:
         op, _, rest = rest.partition(" ")
         rest = rest.strip()
         op = op.upper()
+        in_quote = False
         if op == "IF":
             opnd = rest
         else:
-            opnd, _comment = _split_operand(rest)
+            opnd, _comment, in_quote = _split_operand_q(rest)
         cur = Stmt(idx, name.upper(), op, opnd, ln.strip())
         stmts.append(cur)
-        cont = op != "IF" and opnd.endswith(",")
+        cont = op != "IF" and (opnd.endswith(",") or in_quote)
         if not cont:
             starts, data_dlm = _starts_data(cur)
             if starts:
@@ -530,7 +541,7 @@ class _Scanner:
         procname = None
         condv = None
         parm = None
-        overrides: Dict[str, str] = {}
+        overrides: Dict[str, Optional[str]] = {}  # None: an empty override, "not set"
         for k, v in parse_params(s.operands):
             if k is None:
                 if procname is None and pgm is None:
@@ -546,7 +557,8 @@ class _Scanner:
             elif "." in k or k in EXEC_KEYWORDS:
                 continue
             else:
-                overrides[k] = _resolve(_unquote(v), scope)[0]
+                v = _unquote(v)
+                overrides[k] = _resolve(v, scope)[0] if v != "" else None
         self.dd_target = None
         self.dd_last = ""
         order = len(self.steps) + 1
@@ -594,7 +606,11 @@ class _Scanner:
             return
         defaults, body = found
         own = dict(defaults)
-        own.update(overrides)
+        for k, v in overrides.items():
+            if v is None:
+                own.pop(k, None)  # ENV= : not set, so an outer SET (if any) applies
+            else:
+                own[k] = v
         before = len(self.steps)
         self.active_procs.append(pname)
         self.amb.append(amb)

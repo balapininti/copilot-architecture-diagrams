@@ -545,3 +545,45 @@ def test_idcams_dd_written_then_read_keeps_both_ops(tmp_path):
     got = refs_of(i, "r/J1.jcl#S1")
     assert ("read", "dataset", "CLM.SRC") in got and ("write", "dataset", "CLM.TGT") in got
     assert not any(r.op == "update" for r in step_refs(i, "r/J1.jcl#S1"))
+
+
+_ENV_PROC = "//P1 PROC ENV=PROD\n//RUN EXEC PGM=X\n//IN DD DSN=&ENV..DS,DISP=SHR\n// PEND\n"
+
+
+def test_quoted_parm_continued_with_blanks_keeps_later_keywords(tmp_path):
+    # A11: the continued part of a quoted PARM holds a blank; ENV=QA after it still counts
+    text = ("//J1 JOB (A),'X'\n//S1 EXEC P1,PARM.RUN='A B,\n"
+            "//             C D',ENV=QA\n")
+    i = scan_text(tmp_path, text, extra={"P1.proc": _ENV_PROC})
+    assert ("read", "dataset", "QA.DS") in refs_of(i, "r/J1.jcl#RUN")
+
+
+def test_quoted_parm_continued_from_column_71_without_comma(tmp_path):
+    first = "//S1 EXEC PGM=FTP,PARM='FTPHOST.EXAMPLE.COM (EXIT TIMEOUT 20"
+    first = first + "X" * (71 - len(first))
+    text = ("//J1 JOB (A),'X'\n" + first + "\n"
+            "//             9',COND=(4,LT)\n//OUT DD DSN=A.B,DISP=SHR\n")
+    i = scan_text(tmp_path, text)
+    st = i.nodes["step:r/J1.jcl#S1"]
+    assert st.attrs["cond"] == "COND=(4,LT)"
+    assert ("transfer", "external", "FTP:FTPHOST.EXAMPLE.COM") in refs_of(i, "r/J1.jcl#S1")
+    assert ("read", "dataset", "A.B") in refs_of(i, "r/J1.jcl#S1")
+
+
+def test_unclosed_quote_does_not_swallow_the_next_statement(tmp_path):
+    text = "//J1 JOB (A),'X'\n//S1 EXEC PGM=X,PARM='A\n//OUT DD DSN=A.B,DISP=SHR\n"
+    assert ("read", "dataset", "A.B") in refs_of(scan_text(tmp_path, text), "r/J1.jcl#S1")
+
+
+def test_empty_exec_override_does_not_shadow_an_outer_set(tmp_path):
+    # A11: ENV= on the EXEC is "not set": the job's SET ENV=QA applies, not the default
+    text = "//J1 JOB (A),'X'\n// SET ENV=QA\n//S1 EXEC P1,ENV=\n"
+    i = scan_text(tmp_path, text, extra={"P1.proc": _ENV_PROC})
+    assert ("read", "dataset", "QA.DS") in refs_of(i, "r/J1.jcl#RUN")
+
+
+def test_empty_exec_override_with_no_outer_set_is_unresolved(tmp_path):
+    text = "//J1 JOB (A),'X'\n//S1 EXEC P1,ENV=''\n"
+    i = scan_text(tmp_path, text, extra={"P1.proc": _ENV_PROC})
+    r = one_ref(i, "r/J1.jcl#RUN", "read")
+    assert r.target_name == "&ENV..DS" and r.reason == "symbol &ENV has no value in these repos"
