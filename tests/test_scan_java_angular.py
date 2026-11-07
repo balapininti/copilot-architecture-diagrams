@@ -324,3 +324,49 @@ def test_placeholder_defaults():
     assert expand_placeholders("${a:dflt}/x", {}) == ("dflt/x", None)
     assert expand_placeholders("${a}", {"a": "${b}", "b": "B"}) == ("B", None)
     assert expand_placeholders("${a}", {}) == (None, "property a not found")
+
+
+# ---------------------------------------------------------------- fix round 2
+
+
+def test_this_other_object_field_is_not_resolved(tmp_path):
+    inv = ws(tmp_path, {"T.java": (
+        'class T { JmsTemplate j; Cfg cfg; String url = "FIELD.Q";\n'
+        ' void f() { j.convertAndSend(this.cfg.url, 1);\n j.convertAndSend(cfg.url, 1);\n'
+        ' j.convertAndSend(this.url, 1); } }')})
+    rs = sorted(refs_of(inv, "class:r/T", "put"), key=lambda r: r.evidence.line)
+    assert rs[0].target_name is None and "another object" in rs[0].reason
+    assert rs[1].target_name is None and "another object" in rs[1].reason
+    assert rs[2].target_name == "FIELD.Q"
+
+
+def test_same_rank_profile_and_env_disagreement_dropped(tmp_path):
+    inv = ws(tmp_path, {
+        "application-dev.yml": "q: DEV.Q\nsame: S\nonly: O\n",
+        "application-prod.yml": "q: PROD.Q\nsame: S\n",
+        "T.java": ('class T { JmsTemplate j; @Value("${q}") String q; @Value("${same}") String s;\n'
+                   '@Value("${only}") String o;\n'
+                   ' void f() { j.convertAndSend(q, 1);\n j.convertAndSend(s, 1);\n'
+                   ' j.convertAndSend(o, 1); } }'),
+        "src/environments/environment.dev.ts": "export const environment = { a: '/d', b: '/b' };",
+        "src/environments/environment.staging.ts": "export const environment = { a: '/s', b: '/b' };",
+        "s.ts": ("@Injectable()\nexport class S {\n  constructor(private http: HttpClient) {}\n"
+                 "  x() { this.http.get(environment.a + '/x');\n this.http.get(environment.b + '/y'); }\n}\n")})
+    rs = sorted(refs_of(inv, "class:r/T", "put"), key=lambda r: r.evidence.line)
+    assert rs[0].target_name is None and "different values in" in rs[0].reason
+    assert [r.target_name for r in rs[1:]] == ["S", "O"]
+    hs = sorted(refs_of(inv, "component:r/S", "http"), key=lambda r: r.evidence.line)
+    assert hs[0].target_name is None and "different values in" in hs[0].reason
+    assert hs[1].target_name == "GET /b/y"
+
+
+def test_jms_types_and_inherited_template(tmp_path):
+    inv = ws(tmp_path, {
+        "Base.java": "class Base { protected JmsOperations ops; }",
+        "Kid.java": 'class Kid extends Base { void f() { ops.convertAndSend("K.Q", 1); } }',
+        "C.java": 'class C { MessageConsumer mc; QueueSender qs; Stranger s;\n'
+                  ' void f() { mc.receive("C.IN"); qs.send("C.OUT", 1); s.send("NO.Q", 1); } }'})
+    assert ("put", "queue", "K.Q") in triples(inv, "class:r/Kid")
+    t = triples(inv, "class:r/C")
+    assert ("get", "queue", "C.IN") in t and ("put", "queue", "C.OUT") in t
+    assert not any(n == "NO.Q" for _, _, n in t)

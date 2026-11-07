@@ -31,6 +31,9 @@ class ScanContext:
     props_src: Dict[str, Dict[str, Tuple[str, str]]] = field(default_factory=dict)
     props_conflicts: Dict[str, Dict[str, str]] = field(default_factory=dict)
     ts_env_rank: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    ts_env_src: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    props_prof: Dict[str, Dict[str, Tuple[str, str]]] = field(default_factory=dict)
+    java_jms: Dict[str, Dict[str, Tuple[Set[str], Optional[str]]]] = field(default_factory=dict)
     # MQ (pass 1): processes whose APPLICID is CKBR, and queues named in a CKBR start (Q=...)
     ckbr_processes: Set[str] = field(default_factory=set)
     ckbr_queues: Set[str] = field(default_factory=set)
@@ -119,7 +122,9 @@ def _load_props(repo: str, rel: str, text: str, ftype: str, ctx: ScanContext) ->
     for i, doc in enumerate(docs):
         for k, v in doc.items():
             if k in conflicts:
-                continue
+                if not (base and i == 0 and k not in src):
+                    continue
+                del conflicts[k]  # a profile-level disagreement; the base file decides
             if base and i == 0:
                 if k in src and src[k][1] != v:
                     conflicts[k] = "property %s has different values in %s, %s" % (
@@ -128,8 +133,17 @@ def _load_props(repo: str, rel: str, text: str, ftype: str, ctx: ScanContext) ->
                     continue
                 src[k] = (rel, v)
                 props[k] = v
+            elif k in src:
+                continue  # base value wins over profiles
             else:
-                props.setdefault(k, v)
+                prof = ctx.props_prof.setdefault(repo, {})
+                if k in prof and prof[k][1] != v:
+                    conflicts[k] = "property %s has different values in %s, %s" % (
+                        k, prof[k][0], rel)
+                    props.pop(k, None)
+                else:
+                    prof[k] = (rel, v)
+                    props[k] = v
 
 
 def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
@@ -147,10 +161,15 @@ def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
         1 if name == "environment.ts" else 0
     env = ctx.ts_env.setdefault(repo, {})
     ranks = ctx.ts_env_rank.setdefault(repo, {})
+    srcs = ctx.ts_env_src.setdefault(repo, {})
     for k, v in parse_ts_object(clean, m.end() - 1).items():
         if k not in env or rank > ranks.get(k, -1):
             env[k] = v
             ranks[k] = rank
+            srcs[k] = rel
+        elif rank == ranks[k] and env[k] != v and not env[k].startswith("\0conflict:"):
+            env[k] = "\0conflict:environment.%s has different values in %s, %s" % (
+                k, srcs[k], rel)
 
 
 def scan_workspace(workspace: Path, config: Config) -> Inventory:

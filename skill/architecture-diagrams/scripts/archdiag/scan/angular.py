@@ -179,6 +179,8 @@ class _Src:
         if chain.startswith("environment."):
             key = chain[len("environment."):]
             v = self.env.get(key)
+            if v is not None and v.startswith("\0conflict:"):
+                return None, v[len("\0conflict:"):]
             if v == NONLIT:
                 return None, "environment.%s is not a literal" % key
             return ("'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'", None) \

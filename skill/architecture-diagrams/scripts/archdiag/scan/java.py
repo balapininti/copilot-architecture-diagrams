@@ -62,6 +62,10 @@ def collect_java(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
     classes = ctx.java_classes.setdefault(repo, {})
     for c in s.classes:
         classes.setdefault(c[3], set()).add(s.qual[c[0]])
+    jms = ctx.java_jms.setdefault(repo, {})
+    for c in s.classes:
+        ext = re.match(r"[^{]*?\bextends\s+([A-Za-z_]\w*)", s.masked[c[0]:c[1]])
+        jms[c[3]] = (_jms_receivers(s.masked[c[1]:c[2]]), ext.group(1) if ext else None)
     consts = ctx.java_consts.setdefault(repo, {})
     for m in _CONST.finditer(s.clean):
         cls = s.class_at(m.start())
@@ -225,7 +229,11 @@ class _Src:
         """Source expression for a name: ``NAME``, ``this.NAME`` or ``Class.NAME``."""
         consts = self.ctx.java_consts.get(self.repo, {})
         parts = chain[5:].split(".") if chain.startswith("this.") else chain.split(".")
-        if len(parts) > 1 and not chain.startswith("this."):
+        if chain.startswith("this.") and len(parts) > 1 or (
+                len(parts) > 1 and (not parts[-2][:1].isupper()
+                                    or any(x[:1].isupper() for x in parts[:-2]))):
+            return None, "value read from another object: %s" % chain
+        if len(parts) > 1:
             got = consts.get("%s.%s" % (parts[-2], parts[-1]))  # Other.NAME looks only there
             return (got, None) if got is not None else \
                 (None, "cannot work out the value of %s" % chain)
@@ -451,13 +459,26 @@ _HTTP_CALLS = {
 }
 
 
-_JMS_TYPES = re.compile(r"\b(?:JmsTemplate|JmsMessagingTemplate|JMSContext|JMSProducer|"
-                        r"MessageProducer|MQQueue)\s*(?:<[^>]*>)?\s+(\w+)")
+_JMS_TYPES = re.compile(r"\b(?:JmsTemplate|JmsOperations|JmsMessagingTemplate|JMSContext|"
+                        r"JMSProducer|MessageProducer|MessageConsumer|QueueReceiver|QueueSender|"
+                        r"MQQueue)\s*(?:<[^>]*>)?\s+(\w+)")
 
 
 def _jms_receivers(masked: str) -> Set[str]:
     """Names of fields, parameters and variables typed as a JMS sender / receiver."""
     return {m.group(1) for m in _JMS_TYPES.finditer(masked)}
+
+
+def _inherited_jms(table: Dict[str, Tuple[Set[str], Optional[str]]], cls: str) -> Set[str]:
+    """JMS field names a class gets from superclasses declared in the same repo."""
+    out: Set[str] = set()
+    cur = table.get(cls, (set(), None))[1]
+    for _ in range(10):
+        if cur is None or cur not in table:
+            break
+        out |= table[cur][0]
+        cur = table[cur][1]
+    return out
 
 
 def split_generic(params: List[str]) -> List[str]:
@@ -644,9 +665,11 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
             out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url))
 
     # queues -----------------------------------------------------------------------------------
-    jms = _jms_receivers(s.masked)
+    jms_file = _jms_receivers(s.masked)
     for m in _JMS.finditer(s.masked):
-        if m.group(1) not in jms:
+        cls = s.class_at(m.start())
+        if m.group(1) not in jms_file and not (
+                cls and m.group(1) in _inherited_jms(ctx.java_jms.get(repo, {}), cls[3])):
             continue
         op = "put" if m.group(2) in ("convertAndSend", "send") else "get"
         args, _ = args_at(s.clean, m.end() - 1)
