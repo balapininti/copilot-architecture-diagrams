@@ -420,3 +420,45 @@ def test_mq_address_of_and_length_of_are_one_argument_each():
            "           CALL 'MQGET' USING HCONN, HRSP, MQMD, GMO, LENGTH OF BUF,\n"
            "                BUF, DLEN, CC, RC.\n")
     assert {(r.op, r.target_name) for r in q} == {("put", "CLM.REQ.Q"), ("get", "CLM.RSP.Q")}
+
+
+_NESTED = ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. OUTER.\n"
+           "       DATA DIVISION.\n       WORKING-STORAGE SECTION.\n"
+           "       01  WS-P PIC X(8) VALUE 'OUTVAL'.\n"
+           "       PROCEDURE DIVISION.\n           CALL 'PGMA'.\n"
+           "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. INNER.\n"
+           "       DATA DIVISION.\n       WORKING-STORAGE SECTION.\n"
+           "       01  WS-P PIC X(8) VALUE 'INVAL'.\n"
+           "       PROCEDURE DIVISION.\n           CALL 'PGMB'.\n"
+           "           EXEC SQL SELECT A INTO :B FROM TBLB END-EXEC.\n"
+           "       END PROGRAM INNER.\n"
+           "           CALL 'PGMC'.\n           CALL WS-P.\n"
+           "           EXEC SQL SELECT A INTO :B FROM TBLC END-EXEC.\n"
+           "       END PROGRAM OUTER.\n"
+           "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. SECOND.\n"
+           "       PROCEDURE DIVISION.\n           CALL 'PGMD'.\n"
+           "       END PROGRAM SECOND.\n")
+
+
+def test_nested_program_code_after_end_program_belongs_to_the_outer_program():
+    # A9: a program stack, not "until the next PROGRAM-ID"
+    nodes, refs = scan(_NESTED)
+    assert [n.id for n in nodes] == ["program:OUTER", "program:INNER", "program:SECOND"]
+    by = {}
+    for r in refs:
+        by.setdefault(r.src, set()).add((r.op, r.target_name))
+    assert by["program:OUTER"] == {("call", "PGMA"), ("call", "PGMC"), ("call", None),
+                                   ("select", "TBLC")}
+    assert by["program:INNER"] == {("call", "PGMB"), ("select", "TBLB")}
+    assert by["program:SECOND"] == {("call", "PGMD")}
+    var = [r for r in refs if r.src == "program:OUTER" and r.target_name is None][0]
+    assert var.candidates == ["OUTVAL"]
+    pgmc = [r for r in refs if r.target_name == "PGMC"][0]
+    assert pgmc.evidence.line == 17
+
+
+def test_programs_without_end_program_still_split_at_each_program_id():
+    text = ("       PROGRAM-ID. P1.\n       PROCEDURE DIVISION.\n           CALL 'A'.\n"
+            "       PROGRAM-ID. P2.\n       PROCEDURE DIVISION.\n           CALL 'B'.\n")
+    _, refs = scan(text)
+    assert {(r.src, r.target_name) for r in refs} == {("program:P1", "A"), ("program:P2", "B")}

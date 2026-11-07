@@ -188,6 +188,7 @@ _NB = r"(?<![\w-])"
 _LIT = r"(['\"])_*\1"
 
 _PROGRAM_ID = re.compile(_NB + r"PROGRAM-ID\b", _I)
+_END_PROGRAM = re.compile(_NB + r"END\s+PROGRAM\s+['\"]?([A-Za-z0-9#$@][\w#$@-]*)['\"]?\s*\.?", _I)
 _PROGRAM_NAME = re.compile(r"\s*\.?\s*['\"]?([A-Za-z0-9#$@][\w#$@-]*)")
 _EXEC = re.compile(_NB + r"EXEC\s+(SQL|CICS)\b", _I)
 _END_EXEC = re.compile(_NB + r"END-EXEC\b", _I)
@@ -310,6 +311,7 @@ class _Scan:
                     cm[i] = " "
             pos = max(after, m.end())
         self.cm = "".join(cm)
+        self.segs: Optional[List[Tuple[int, int]]] = None  # pieces of the program scanned
 
     # -- helpers --------------------------------------------------------
     def ev(self, off: int) -> Evidence:
@@ -330,20 +332,80 @@ class _Scan:
                              list(candidates or []), at))
 
     # -- program discovery ----------------------------------------------
-    def programs(self, stem: str) -> List[Tuple[str, int, int, int]]:
+    def programs(self, stem: str) -> List[Tuple[str, List[Tuple[int, int]], int]]:
+        """(PROGRAM-ID, text segments, offset of PROGRAM-ID) per program. With END PROGRAM
+        markers, programs nest (a stack): the outer program's code after END PROGRAM of a
+        nested one is the outer program's again. Without them each program runs to the
+        next PROGRAM-ID."""
         s = self.src
+        n = len(s.masked)
         found: List[Tuple[str, int]] = []
         for m in _PROGRAM_ID.finditer(s.masked):
             nm = _PROGRAM_NAME.match(s.blob, m.end())
             if nm:
                 found.append((nm.group(1).upper(), m.start()))
         if not found:
-            return [(stem.upper(), 0, len(s.masked), 0)]
-        out = []
-        for i, (pid, start) in enumerate(found):
-            end = found[i + 1][1] if i + 1 < len(found) else len(s.masked)
-            out.append((pid, start if i else 0, end, start))
-        return out
+            return [(stem.upper(), [(0, n)], 0)]
+        ends = [(m.group(1).upper(), m.start(), m.end()) for m in _END_PROGRAM.finditer(self.cm)]
+        if not ends:
+            out = []
+            for i, (pid, start) in enumerate(found):
+                end = found[i + 1][1] if i + 1 < len(found) else n
+                out.append((pid, [(start if i else 0, end)], start))
+            return out
+        events = sorted([(at, 0, pid, at) for pid, at in found]
+                        + [(a0, 1, pid, b0) for pid, a0, b0 in ends])
+        segs: Dict[int, List[Tuple[int, int]]] = {}
+        order: List[Tuple[str, int]] = []
+        stack: List[Tuple[int, int]] = []  # (program index, start of its open segment)
+        for at, kind, pid, end in events:
+            if kind == 0:
+                if stack:
+                    k, st = stack[-1]
+                    segs[k].append((st, at))
+                idx = len(order)
+                order.append((pid, at))
+                segs[idx] = []
+                stack.append((idx, 0 if idx == 0 else at))
+            else:
+                names = [order[k][0] for k, _st in stack]
+                if pid not in names:
+                    continue  # END PROGRAM of a name not open: ignore it
+                while stack:
+                    k, st = stack.pop()
+                    segs[k].append((st, end))
+                    if order[k][0] == pid:
+                        break
+                if stack:
+                    k, _st = stack[-1]
+                    stack[-1] = (k, end)
+        last = n
+        while stack:
+            k, st = stack.pop()
+            segs[k].append((st, last))
+        return [(pid, sorted(x for x in segs[i] if x[1] > x[0]) or [(at, at)], at)
+                for i, (pid, at) in enumerate(order)]
+
+    def scan_segments(self, pid: str, segs: List[Tuple[int, int]]) -> Dict[str, str]:
+        """scan_program over a program made of several pieces of the file: the text of
+        every other program is blanked out while it runs."""
+        if len(segs) == 1:
+            return self.scan_program(pid, segs[0][0], segs[0][1])
+        keep = list(self.cm)
+        full = self.cm
+        out = [" "] * len(full)
+        for a, b in segs:
+            out[a:b] = keep[a:b]
+        for i, ch in enumerate(full):
+            if ch == "\n":
+                out[i] = "\n"
+        self.cm = "".join(out)
+        self.segs = segs
+        try:
+            return self.scan_program(pid, segs[0][0], segs[-1][1])
+        finally:
+            self.cm = full
+            self.segs = None
 
     # -- one program ----------------------------------------------------
     def scan_program(self, pid: str, a: int, b: int) -> Dict[str, str]:
@@ -391,6 +453,8 @@ class _Scan:
         # EXEC blocks
         for kind, bs, be in self.execs:
             if bs < a or bs >= b:
+                continue
+            if self.segs and not any(x <= bs < y for x, y in self.segs):
                 continue
             if kind == "SQL":
                 self.sql(pid, bs, be, values)
@@ -895,8 +959,8 @@ def scan_cobol(repo: str, relpath: str, text: str,
         # whatever its extension (copylib/CLMREC.cbl)
         return scan_copybook(repo, relpath, text, ctx)
     nodes: List[Node] = []
-    for pid, a, b, at in sc.programs(_stem(relpath)):
-        files = sc.scan_program("program:" + pid, a, b)
+    for pid, segs, at in sc.programs(_stem(relpath)):
+        files = sc.scan_segments("program:" + pid, segs)
         nodes.append(Node("program:" + pid, "program", pid, repo,
                           [sc.ev(at)], {"files": files}))
     return nodes, sc.refs
