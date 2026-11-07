@@ -324,3 +324,43 @@ def test_job_rows_route_row_lines_around_boxes():
         for nid, b in L.boxes.items():
             if nid not in (e.src, e.dst):
                 assert not _crosses_box(L.routes[k], b), (e.src, e.dst, nid)
+
+
+FIXTURE_LEVELS = (("landscape", None), ("application", "claims-online"), ("flow_job", "CLMD100"),
+                  ("flow_tx", "claims/:id"), ("flow_tx", "CLMI"), ("repomap", None))
+
+
+def _style_sizes():
+    from archdiag.render import style_a, style_b, style_c, style_d
+    return [m.node_size for m in (style_a, style_b, style_c, style_d)]
+
+
+def shared_runs(routes, horizontal=True, near=8.0, longest=200.0):
+    """Pairs of different lines whose horizontal (or vertical) runs lie within ``near`` px
+    of each other along more than ``longest`` px."""
+    runs = []
+    for k, r in enumerate(routes):
+        for (x0, y0), (x1, y1) in zip(r, r[1:]):
+            if horizontal and abs(y0 - y1) < 1e-6:
+                runs.append((k, y0, min(x0, x1), max(x0, x1)))
+            elif not horizontal and abs(x0 - x1) < 1e-6:
+                runs.append((k, x0, min(y0, y1), max(y0, y1)))
+    bad = []
+    for i in range(len(runs)):
+        for j in range(i + 1, len(runs)):
+            a, b = runs[i], runs[j]
+            if a[0] != b[0] and abs(a[1] - b[1]) <= near \
+                    and min(a[3], b[3]) - max(a[2], b[2]) > longest:
+                bad.append((a, b))
+    return bad
+
+
+def test_no_two_lines_share_a_horizontal_run():
+    """C1: two lines never run side by side within 8px for more than 200px."""
+    from conftest import fixture_view
+    views = [fixture_view(lv, sc) for lv, sc in FIXTURE_LEVELS]
+    views += [claims_landscape(), app_with_neighbors(), claims_job()]
+    for v in views:
+        for size in _style_sizes():
+            L = layout_for(v, size)
+            assert not shared_runs(L.routes), (v.title, size.__module__)

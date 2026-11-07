@@ -52,6 +52,7 @@ DETOUR_RATIO = 1.6     # layered: a line this much longer than the direct distan
 DETOUR_SLACK = 200.0   # ...plus this, is tried through the middle instead
 DETOUR_GAIN = 0.75     # ...and rerouted when that is at most this share of its length
 MAZE_LANE = 4.0        # layered: extra cost per px of running along a line already drawn
+MAZE_NEAR = 8.5        # ...within this many px of it, across or along
 MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
 CONTEXT_COLS = 5       # context: most columns for the application's own boxes
 CONTEXT_GAP = 110.0    # context: gap between the members and an outside column
@@ -240,8 +241,13 @@ def _avoid_groups(view: ViewGraph, boxes: Dict[str, Box], groups: Dict[str, Box]
     out: List[List[Point]] = []
     rerouted = 0
     budget = MAZE_BUDGET
-    for e, route in zip(view.edges, routes):
+    for k, (e, route) in enumerate(zip(view.edges, routes)):
         pts = list(route)
+
+        def lanes() -> List[Tuple[Point, Point]]:
+            # the lines already settled and the rest as they stand: a reroute keeps its own lane
+            return [seg for r in out + routes[k + 1:] for seg in zip(r, r[1:])]
+
         mine = {group_of.get(e.src), group_of.get(e.dst)}
         foreign = [g for gid, g in groups.items() if gid not in mine]
         for _ in range(4):
@@ -279,7 +285,7 @@ def _avoid_groups(view: ViewGraph, boxes: Dict[str, Box], groups: Dict[str, Box]
             # a line going round the outside: take a corridor through the middle if one
             # is much shorter
             rerouted += 1
-            alt, spent = _maze(pts, list(boxes.values()) + foreign, budget)
+            alt, spent = _maze(pts, list(boxes.values()) + foreign, budget, lanes())
             budget -= spent
             if alt is not None and sum(abs(q[0] - p[0]) + abs(q[1] - p[1])
                                        for p, q in zip(alt, alt[1:])) < DETOUR_GAIN * length:
@@ -288,7 +294,7 @@ def _avoid_groups(view: ViewGraph, boxes: Dict[str, Box], groups: Dict[str, Box]
                 and rerouted < MAZE_LIMIT and budget > 0:
             rerouted += 1
             blocks = list(boxes.values()) + foreign
-            alt, spent = _maze(pts, blocks, budget)
+            alt, spent = _maze(pts, blocks, budget, lanes())
             budget -= spent
             if alt is not None:
                 pts = alt
@@ -303,13 +309,15 @@ def _unit(p: Point, q: Point) -> Tuple[float, float]:
     return (0.0, 1.0 if dy >= 0 else -1.0)
 
 
-def _maze(route: List[Point], blocks: List[Box], budget: int
+def _maze(route: List[Point], blocks: List[Box], budget: int,
+          lanes: Optional[List[Tuple[Point, Point]]] = None
           ) -> Tuple[Optional[List[Point]], int]:
     """An orthogonal path with few bends from the route's first point to its last, leaving
     and arriving the way the route does, clear of every block (by MAZE_CLEAR), and the
-    search steps it took (at most ``budget``; None when none was found within it)."""
+    search steps it took (at most ``budget``; None when none was found within it). Running
+    along a segment of ``lanes`` costs extra, horizontally as vertically."""
     return _maze_dirs(route[0], _unit(route[0], route[1]), route[-1],
-                      _unit(route[-2], route[-1]), blocks, budget)
+                      _unit(route[-2], route[-1]), blocks, budget, lanes)
 
 
 def _maze_dirs(a: Point, da: Tuple[float, float], b: Point, db: Tuple[float, float],
@@ -353,12 +361,14 @@ def _maze_dirs(a: Point, da: Tuple[float, float], b: Point, db: Tuple[float, flo
     hlane: set = set()
     for p, q in lanes or []:
         if abs(p[0] - q[0]) < 1e-6:  # vertical
-            i0, i1 = bisect.bisect_left(xs, p[0] - 6), bisect.bisect_right(xs, p[0] + 6)
+            i0 = bisect.bisect_left(xs, p[0] - MAZE_NEAR)
+            i1 = bisect.bisect_right(xs, p[0] + MAZE_NEAR)
             j0 = bisect.bisect_left(ys, min(p[1], q[1]))
             j1 = bisect.bisect_right(ys, max(p[1], q[1]))
             vlane.update((i, j) for i in range(i0, i1) for j in range(j0, j1))
         elif abs(p[1] - q[1]) < 1e-6:  # horizontal
-            j0, j1 = bisect.bisect_left(ys, p[1] - 6), bisect.bisect_right(ys, p[1] + 6)
+            j0 = bisect.bisect_left(ys, p[1] - MAZE_NEAR)
+            j1 = bisect.bisect_right(ys, p[1] + MAZE_NEAR)
             i0 = bisect.bisect_left(xs, min(p[0], q[0]))
             i1 = bisect.bisect_right(xs, max(p[0], q[0]))
             hlane.update((i, j) for i in range(i0, i1) for j in range(j0, j1))
