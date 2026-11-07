@@ -214,6 +214,30 @@ def _servers_urls(text: str) -> List[str]:
     return out
 
 
+def _spec_paths(text: str) -> List[str]:
+    """The keys of an OpenAPI document's ``paths`` (YAML or JSON), as written."""
+    m = re.search(r'"paths"\s*:\s*\{', text)
+    if m:
+        return re.findall(r'"(/[^"]*)"\s*:\s*\{', text[m.end():])
+    out: List[str] = []
+    lines = text.split("\n")
+    for i, raw in enumerate(lines):
+        if re.match(r"^paths\s*:", raw):
+            indent = None
+            for nxt in lines[i + 1:]:
+                if not nxt.strip() or nxt.lstrip().startswith("#"):
+                    continue
+                if not nxt[:1].isspace():
+                    break  # next top-level key
+                ind = len(nxt) - len(nxt.lstrip())
+                indent = ind if indent is None else indent
+                k = re.match(r"^\s*['\"]?(/[^'\":]*)['\"]?\s*:", nxt)
+                if ind == indent and k:
+                    out.append(k.group(1))
+            break
+    return out
+
+
 def _servers_url(text: str) -> Optional[str]:
     """First ``servers[].url`` of an OpenAPI document (YAML or JSON)."""
     urls = _servers_urls(text)
@@ -238,10 +262,10 @@ def collect_zosconnect(repo: str, rel: str, text: str, ftype: Optional[str],
         urls = _servers_urls(text)
         if urls and prefix is not None:
             ctx.zc_servers[(repo, prefix)] = urls[0]
-        parts = rel.lower().split("/")
-        if urls and "test" not in parts[:-1] and "tests" not in parts[:-1]:
-            # the repo's own API definition: where it is served (Ruling 38)
-            ctx.api_servers.setdefault(repo, []).extend(urls)
+        if urls and ("/" + rel.lower()).find("/src/main/resources/") >= 0:
+            # perhaps served by a Spring app: counted only if its paths hold one of the
+            # repo's own endpoints (Ruling 39, checked once all endpoints are known)
+            ctx.api_specs.append((repo, urls, _spec_paths(text)))
         return
     if ftype != "zosconnect":
         return

@@ -48,8 +48,9 @@ class ScanContext:
         default_factory=dict)
     # z/OS Connect OpenAPI 3: (repo, project prefix) -> first servers[].url of openapi.yaml/json
     zc_servers: Dict[Tuple[str, str], str] = field(default_factory=dict)
-    # OpenAPI documents of any kind: repo -> every servers[].url (its own address, Ruling 38)
-    api_servers: Dict[str, List[str]] = field(default_factory=dict)
+    # OpenAPI documents under src/main/resources: (repo, every servers[].url, paths keys);
+    # their servers count as the repo's address only if the repo serves them (Ruling 39)
+    api_specs: List[Tuple[str, List[str], List[str]]] = field(default_factory=list)
     # COBOL copybooks (pass 2): NAME -> the Refs their own text makes (CALL, SQL, CICS, MQ,
     # nested COPY), with src "copybook:NAME"; attributed to every program that COPYs them
     copybook_refs: Dict[str, List[Ref]] = field(default_factory=dict)
@@ -212,11 +213,13 @@ def _value_hosts(value: str, bare: bool) -> List[str]:
     return hosts
 
 
-def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
+def _config_hosts(ctx: ScanContext, nodes: Dict[str, Node]) -> Dict[str, List[str]]:
     """Per repo, the hosts its config names as its OWN address (Rulings 36 and 38): hosts
     in Spring keys that name the service (server.*, spring.application.*,
-    management.server.address, eureka.instance.hostname) and servers[].url of its OpenAPI
-    documents. Client base URLs and Angular environment values are outbound: never counted."""
+    management.server.address, eureka.instance.hostname), servers[].url of its z/OS Connect
+    API projects, and servers[].url of a spec under src/main/resources whose paths hold one
+    of its own endpoints (Ruling 39). Client base URLs, client specs and Angular environment
+    values are outbound: never counted."""
     found: Dict[str, Set[str]] = {}
     for repo in set(ctx.props) | set(ctx.props_src) | set(ctx.props_prof):
         entries = list(ctx.props.get(repo, {}).items())
@@ -228,9 +231,18 @@ def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
                 found.setdefault(repo, set()).update(_value_hosts(v, own in _OWN_ADDRESS_KEYS))
     for (repo, _prefix), url in ctx.zc_servers.items():
         found.setdefault(repo, set()).update(_value_hosts(url, False))
-    for repo, urls in ctx.api_servers.items():
+    from ..resolve.names import norm_path
+    served: Dict[str, Set[str]] = {}
+    for n in nodes.values():
+        if n.kind == "endpoint" and n.repo and " " in n.name and not n.name.startswith("?"):
+            served.setdefault(n.repo, set()).add(n.name.split(" ", 1)[1])
+    for repo, urls, paths in ctx.api_specs:
+        own = served.get(repo, set())
         for url in urls:
-            found.setdefault(repo, set()).update(_value_hosts(url, False))
+            base = norm_path(url)  # the server URL's path: specs' paths are relative to it
+            base = "" if base == "/" else base
+            if any(norm_path(p) in own or norm_path(base + p) in own for p in paths):
+                found.setdefault(repo, set()).update(_value_hosts(url, False))
     return {repo: sorted(hs) for repo, hs in found.items() if hs}
 
 
@@ -479,7 +491,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
-                     _config_hosts(ctx), not_scanned, __version__, SCHEMA_VERSION)
+                     _config_hosts(ctx, nodes), not_scanned, __version__, SCHEMA_VERSION)
 
 
 _register_builtin_scanners()

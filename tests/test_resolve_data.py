@@ -552,7 +552,8 @@ def test_scan_collects_config_hosts_per_repo(tmp_path):
     for repo, rel, text in (
             ("svc", "src/main/resources/application.yml",
              "server:\n  public-url: https://Claims.Internal:9443/claims\n"),
-            ("svc", "zosconnect/openapi.yaml", "servers:\n  - url: http://zcee.internal/x\n"),
+            ("svc", "zosconnect/claims/src/main/api/openapi.yaml",
+             "servers:\n  - url: http://zcee.internal/x\n"),
             ("web", "src/environments/environment.ts",
              "export const environment = { apiBase: 'https://web.example/api' };\n")):
         root = tmp_path / repo
@@ -633,12 +634,41 @@ def test_scan_counts_only_the_repos_own_address_keys(tmp_path):
         "dev.svc.internal"])
 
 
-def test_openapi_servers_tie_the_host(tmp_path):
+def test_served_openapi_servers_tie_the_host(tmp_path):
+    # Ruling 39: a spec under src/main/resources whose paths include one of the repo's own
+    # endpoints is served by the app, so its servers are the repo's address
     e = _health_link(tmp_path, "", "https://api.repob.example",
                      [("repob", "src/main/resources/static/openapi.yaml",
                        "openapi: 3.0.0\nservers:\n  - url: https://dev.repob.example\n"
-                       "  - url: https://api.repob.example/v1\npaths: {}\n")])
+                       "  - url: https://api.repob.example/v1\npaths:\n  /health:\n"
+                       "    get: {}\n")])
     assert e.status == "confirmed"
+
+
+def test_served_openapi_json_paths_tie_the_host(tmp_path):
+    e = _health_link(tmp_path, "", "https://api.repob.example",
+                     [("repob", "src/main/resources/openapi.json",
+                       '{"openapi": "3.0.0", "servers": [{"url": "https://api.repob.example"}],'
+                       ' "paths": {"/health": {"get": {}}}}')])
+    assert e.status == "confirmed"
+
+
+def test_client_spec_for_another_service_does_not_tie_the_host(tmp_path):
+    # Ruling 39: a generated-client spec (openapi-generator input) names the host repob
+    # CALLS; its path /health happening to equal repob's own endpoint proves nothing
+    e = _health_link(tmp_path, "", "https://partner.example.com",
+                     [("repob", "src/main/openapi/partner/openapi.yaml",
+                       "openapi: 3.0.0\nservers:\n  - url: https://partner.example.com\n"
+                       "paths:\n  /health:\n    get: {}\n")])
+    assert e.status == "partial" and "host partner.example.com" in e.reason
+
+
+def test_resources_spec_without_the_repos_endpoints_does_not_tie_the_host(tmp_path):
+    e = _health_link(tmp_path, "", "https://partner.example.com",
+                     [("repob", "src/main/resources/openapi/swagger.json",
+                       '{"servers": [{"url": "https://partner.example.com"}],'
+                       ' "paths": {"/partner/orders": {"get": {}}}}')])
+    assert e.status == "partial"
 
 
 def test_angular_api_base_does_not_tie_the_host(tmp_path):
