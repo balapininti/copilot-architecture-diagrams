@@ -30,8 +30,8 @@ _EXT = {
     ".clist": "rexx", ".sar": "zosconnect", ".aar": "zosconnect",
 }
 
-_JOB = re.compile(r"^//\S+\s+JOB\b", re.I)
-_PROC = re.compile(r"^//\S*\s+PROC\b", re.I)
+_JOB = re.compile(r"^//(?!\*)\S+\s+JOB\b", re.I)
+_PROC = re.compile(r"^//(?!\*)\S*\s+PROC\b", re.I)
 _PROGID = re.compile(r"\bPROGRAM-ID\b", re.I)
 _CSECT = re.compile(r"^\S*\s+CSECT\b", re.I)
 _DFHMSD = re.compile(r"\bDFHMSD\b", re.I)

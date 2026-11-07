@@ -17,9 +17,17 @@ SKIP_EXTS = frozenset([
 MAX_BYTES = 5 * 1024 * 1024
 
 
+REPO_MARKER_FILE = ".archdiag-repo"
+
+
+def _is_repo(path: Path) -> bool:
+    """A repo has a .git entry, or a plain .archdiag-repo marker file (test-friendly)."""
+    return (path / ".git").exists() or (path / REPO_MARKER_FILE).is_file()
+
+
 def discover_repos(workspace: Path) -> List[Repo]:
     workspace = Path(workspace)
-    if (workspace / ".git").exists():
+    if _is_repo(workspace):
         return [Repo(workspace.resolve().name, ".")]
     repos = []
     try:
@@ -27,7 +35,7 @@ def discover_repos(workspace: Path) -> List[Repo]:
     except OSError:
         return []
     for child in children:
-        if child.is_dir() and (child / ".git").exists():
+        if child.is_dir() and _is_repo(child):
             repos.append(Repo(child.name, child.name))
     return repos
 

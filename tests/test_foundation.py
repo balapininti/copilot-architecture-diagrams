@@ -124,3 +124,17 @@ def test_inventory_and_resolved_round_trip(tmp_path):
     save_json(tmp_path / "r.json", res)
     assert load_inventory(tmp_path / "i.json") == inv
     assert load_resolved(tmp_path / "r.json") == res
+
+
+def test_marker_file_makes_a_repo(tmp_path):
+    (tmp_path / "r1").mkdir()
+    (tmp_path / "r1" / ".archdiag-repo").write_text("")
+    (tmp_path / "plain").mkdir()
+    assert [r.name for r in discover_repos(tmp_path)] == ["r1"]
+    (tmp_path / ".archdiag-repo").write_text("")
+    assert [r.path for r in discover_repos(tmp_path)] == ["."]
+
+
+def test_comment_lines_are_not_job_or_proc_cards():
+    assert classify("x/README", "//* JOB TO RUN NIGHTLY\n//* MYPROC PROC\n") is None
+    assert classify("x/J", "//* header\n//MYJOB JOB (A),'X'\n") == "jcl"
