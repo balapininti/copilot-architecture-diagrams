@@ -74,6 +74,13 @@ def test_every_edge_listed():
         text = "\n".join(rows)
         assert text.count("also in:") >= len(edges) - len(rows)
         assert re.search(r"\(%d resolver edges incl\. copies\)" % len(edges), t) or len(rows) == len(edges)
+        # each reachable (src, op, dst) has a row of its own: From, Link and To as the
+        # report writes them (copies of a file elsewhere share their original's row)
+        from archdiag.render.report import _cell, _display, _link_text
+        cells = {tuple(c.strip() for c in row.strip("|").split(" | ")[:3]) for row in rows}
+        for e in edges:
+            want = (_cell(_display(r, e.src)), _cell(_link_text(e, r)), _cell(_display(r, e.dst)))
+            assert want in cells, (level, scope, e.src, e.op, e.dst)
 
 
 def test_edges_without_evidence_listed():
