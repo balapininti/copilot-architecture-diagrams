@@ -222,18 +222,36 @@ def _file_link(view: ViewGraph, path: str) -> str:
     return "[%s](%s)" % (md(path), href(view.repo_path or view.scope or "", path))
 
 
+def _boxes(view: ViewGraph) -> List[Tuple[object, Optional[object]]]:
+    """Every box with the "… N more" box it was folded into by the size cap (None when it is
+    drawn), so a folded group, shared or outside box is still listed in full."""
+    out: List[Tuple[object, Optional[object]]] = []
+    for n in view.nodes:
+        if n.folded:
+            out += [(m, n) for m in n.folded]
+        else:
+            out.append((n, None))
+    return out
+
+
+def _folded_mark(more: Optional[object]) -> List[str]:
+    return ["folded into '%s'" % more.label] if more is not None else []  # type: ignore
+
+
 def _gd_head(view: ViewGraph) -> List[str]:
     """Overview, Groups, Entry points, Job structure and the outside/shared boxes."""
     o: List[str] = ["## Overview", "", md(view.overview.strip()) if view.overview.strip() else "No overview was written.", ""]
     o += ["## Groups", ""]
-    groups = [n for n in view.nodes if n.kind == "group" and n.role != "ungrouped"]
+    boxes = _boxes(view)
+    groups = [(n, m) for n, m in boxes if n.kind == "group" and n.role != "ungrouped"]
     if not groups:
         o += ["No groups.", ""]
-    for n in groups:
+    for n, more in groups:
         o.append("### %s%s" % (md(n.label), " %s" % md(n.sublabel) if n.sublabel else ""))
         o.append("")
         if n.desc_line >= 0 and n.desc_line < len(n.detail_lines):
             o += [md(n.detail_lines[n.desc_line]), ""]
+        o += ["- %s" % md(i) for i in _folded_mark(more)]
         o += ["- %s" % md(i) for i in n.info]
         o += ["- %s" % _file_link(view, p) for p in n.members] or ["- No files."]
         o.append("")
@@ -253,13 +271,13 @@ def _gd_head(view: ViewGraph) -> List[str]:
         o += ["- %s %s %s" % (md(names.get(e.src, e.src)), md(e.label), md(names.get(e.dst, e.dst)))
               for e in struct]
         o.append("")
-    other = [n for n in view.nodes if n.role == "shared" or n.id.startswith("out:")]
+    other = [(n, m) for n, m in boxes if n.role == "shared" or n.id.startswith("out:")]
     if other:
         o += ["## Shared resources and outside this repo", ""]
-        for n in other:
+        for n, more in other:
             o.append("- %s (%s)" % (md(n.label), md(n.sublabel)) if n.sublabel
                      else "- %s" % md(n.label))
-            o += ["  - %s" % md(i) for i in n.info]
+            o += ["  - %s" % md(i) for i in _folded_mark(more) + n.info]
             o += ["  - %s" % md(m) for m in (n.members if n.id.startswith("out:") else [])]
         o.append("")
     return o

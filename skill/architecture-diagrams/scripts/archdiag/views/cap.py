@@ -86,7 +86,7 @@ def cap(ctx: _Ctx, v: ViewGraph) -> None:
                                kind, k[0], _least_certain(sts) if sts else None,
                                row=rows.pop() if len(rows) == 1 else None,
                                underlying=[u for m in ms for u in m.underlying],
-                               members=[x for m in ms for x in m.members]))
+                               members=[x for m in ms for x in m.members], folded=list(ms)))
     remap = {nid: more_id(k) for nid, k in fold.items()}
     new_by_id = {n.id: n for n in new_nodes}
     order: List[tuple] = []

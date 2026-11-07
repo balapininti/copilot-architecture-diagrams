@@ -49,6 +49,9 @@ class VNode:
     # gitdiagram: "shared" for a resource box between groups (name and short kind only),
     # "ungrouped" for the "Not yet grouped" box
     role: str = ""
+    # a "… N more" box made by the size cap: the boxes it stands for, kept whole so the
+    # links report can still list each one (a folded group with all its files)
+    folded: List["VNode"] = field(default_factory=list)
 
 
 @dataclass

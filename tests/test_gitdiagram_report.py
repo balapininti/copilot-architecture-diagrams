@@ -160,3 +160,64 @@ def test_redirected_handler_lines_are_complete():
     table = text.split("## Links on this diagram")[1].split("\n## ")[0]
     assert sum(1 for ln in table.splitlines() if ln.startswith("| ")) - 1 == len(rows)
     assert "GET /x" in table
+
+
+# ------------------------------------------------------------------ final review fixes
+
+def _sec(text, name):
+    return text.split("## %s\n" % name)[1].split("\n## ")[0]
+
+
+def test_folded_groups_are_listed_with_all_their_files():
+    """Under the 40-box cap, groups folded into '… N more groups' are still listed under
+    Groups with every file linked, so the 'lists every one' note is true."""
+    from test_gitdiagram_view import _ev, prog, synthetic
+    from archdiag.model import CONFIRMED, Edge
+    from archdiag.views import MAX_NODES
+    files = [("g%02d/P%02d.cbl" % (i, i), "cobol") for i in range(50)]
+    a, b = prog("P00", "g00/P00.cbl"), prog("P01", "g01/P01.cbl")
+    r = synthetic([a, b], [Edge(a.id, "call", b.id, CONFIRMED, None, [_ev("r1", "g00/P00.cbl", 5)])],
+                  files)
+    groups = [GitGroup("Group %02d" % i, "COBOL", ["g%02d/" % i]) for i in range(50)]
+    v = view_of(GitDiagram("r1", "", groups, [], [], True, "ok"), r)
+    assert len(v.nodes) <= MAX_NODES
+    assert any(n.kind == "more" for n in v.nodes)
+    assert any("lists every one" in n for n in v.notes)
+    text = links_report(v, r)
+    sec = _sec(text, "Groups")
+    for i in range(50):
+        assert "### Group %02d" % i in sec, i
+        assert "](%s)" % href(v.repo_path, "g%02d/P%02d.cbl" % (i, i)) in sec, i
+    more = [n for n in v.nodes if n.kind == "more"][0]
+    assert "Group 02" in more.sublabel  # a zero-link group, folded
+    folded = sec.split("### Group 02")[1].split("\n### ")[0]
+    assert "folded into '%s'" % md(more.label) in folded
+
+
+def test_folded_outside_and_shared_boxes_are_listed():
+    from test_gitdiagram_view import _ev, prog, synthetic
+    from archdiag.model import CONFIRMED, Edge, Node, Repo
+    from archdiag.views import MAX_NODES
+    a, b = prog("A", "a/A.cbl"), prog("B", "b/B.cbl")
+    nodes, edges = [a, b], []
+    for i in range(25):
+        far = prog("X%02d" % i, "x/X%02d.cbl" % i, repo="o%02d" % i)
+        nodes.append(far)
+        edges.append(Edge(a.id, "call", far.id, CONFIRMED, None, [_ev("r1", "a/A.cbl", i + 1)]))
+        d = Node("dataset:D%02d" % i, "dataset", "D%02d" % i, None, [], {"names": ["D%02d" % i]})
+        nodes.append(d)
+        edges.append(Edge(a.id, "write", d.id, CONFIRMED, None, [_ev("r1", "a/A.cbl", 50 + i)]))
+        edges.append(Edge(b.id, "read", d.id, CONFIRMED, None, [_ev("r1", "b/B.cbl", 50 + i)]))
+    r = synthetic(nodes, edges, [("a/A.cbl", "cobol"), ("b/B.cbl", "cobol")])
+    r.inventory.repos += [Repo("o%02d" % i, "o%02d" % i) for i in range(25)]
+    gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"]), GitGroup("B", "", ["b/"])], [], [],
+                    True, "ok")
+    v = view_of(gd, r)
+    assert len(v.nodes) <= MAX_NODES
+    mores = [n for n in v.nodes if n.kind == "more"]
+    assert mores
+    sec = _sec(links_report(v, r), "Shared resources and outside this repo")
+    for i in range(25):
+        assert "o%02d (" % i in sec, i
+        assert "D%02d" % i in sec, i
+    assert all("folded into '%s'" % md(m.label) in sec for m in mores)
