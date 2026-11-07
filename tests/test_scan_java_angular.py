@@ -413,3 +413,34 @@ def test_angular_http_calls_outside_classes(tmp_path):
     assert got == {("component:r/loadClaim", "GET /api/claims/${id}"),
                    ("component:r/saveClaim", "POST /api/claims")}
     assert inv.nodes["component:r/saveClaim"].evidence[0].path == "claims.api.ts"
+
+
+# ------------------------------------------------------------------ B2: containing function
+
+def test_b2_call_is_credited_to_the_containing_function_not_the_last_declared(tmp_path):
+    inv = ws(tmp_path, {"src/app/claims.api.ts": (
+        "import { HttpClient } from '@angular/common/http';\n"
+        "import { inject } from '@angular/core';\n"
+        "export function outer(id: string) {\n"
+        "  const http = inject(HttpClient);\n"
+        "  function helper(x: string): string { return x.trim(); }\n"
+        "  const fmt = (y: string) => y + '!';\n"
+        "  return http.get('/api/outer/' + helper(id));\n"
+        "}\n"
+        "export const short = () => 1;\n"
+        "export const top = inject(HttpClient).get('/api/top');\n")})
+    got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
+    assert got == {("component:r/outer", "GET /api/outer/${helper(id)}"),
+                   ("component:r/src/app/claims.api", "GET /api/top")}
+    assert inv.nodes["component:r/src/app/claims.api"].evidence[0].path == \
+        "src/app/claims.api.ts"
+
+
+def test_b2_arrow_expression_body_ends_at_the_statement(tmp_path):
+    inv = ws(tmp_path, {"a.ts": (
+        "import { HttpClient } from '@angular/common/http';\n"
+        "export const one = (id: string) => inject(HttpClient).get(`/api/one/${id}`);\n"
+        "const done = inject(HttpClient).post('/api/two', {});\n")})
+    got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
+    assert got == {("component:r/one", "GET /api/one/${id}"),
+                   ("component:r/a", "POST /api/two")}

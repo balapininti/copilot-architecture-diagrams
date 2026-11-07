@@ -91,7 +91,7 @@ class _Src:
             elif ch == "}" and stack:
                 self.pairs.append((stack.pop(), i, len(stack)))
         self.pairs.sort()
-        close_of = {o: c for o, c, _ in self.pairs}
+        close_of = self.close_of = {o: c for o, c, _ in self.pairs}
         self.classes: List[Tuple[int, int, int, str]] = []  # keyword, open, close, name
         for m in _CLASS.finditer(self.masked):
             o = self.masked.find("{", m.end())
@@ -328,12 +328,40 @@ _FUNCTION = re.compile(
     r"(?::[^=]*)?=\s*(?:async\s*)?(?:function\b|\([^()]*\)\s*(?::[^=]*)?=>|[\w$]+\s*=>))")
 
 
-def _enclosing_function(masked: str, off: int) -> Optional[str]:
-    """Name of the last top-level function or arrow-function const declared before ``off``."""
-    name = None
-    for m in _FUNCTION.finditer(masked, 0, off):
-        name = m.group(1) or m.group(2)
-    return name
+def _function_body(s: "_Src", m: "re.Match") -> Optional[Tuple[int, int]]:
+    """(start, end) offsets of the body of the function declared by ``m``: the matching
+    braces of a block body, or an arrow's expression up to the end of its statement."""
+    masked = s.masked
+    j = m.end()
+    if m.group(1) or masked[m.start():m.end()].rstrip().endswith("function"):
+        o = masked.find("(", j)
+        if o < 0:
+            return None
+        _, close = args_at(s.clean, o)
+        j = close + 1
+        k = j
+        while k < len(masked) and masked[k] not in "{;":
+            k += 1  # skip a return type annotation (and a later `=>` of a function form)
+        if k >= len(masked) or masked[k] != "{":
+            return None
+        j = k
+    while j < len(masked) and masked[j] in " \t\r\n":
+        j += 1
+    if j < len(masked) and masked[j] == "{":
+        close = s.close_of.get(j)
+        return (j, close if close is not None else len(masked))
+    return (j, j + len(_read_ts_expr(s.clean, j)))
+
+
+def _enclosing_function(s: "_Src", off: int) -> Optional[str]:
+    """Name of the innermost function or arrow-function const whose body holds ``off``
+    (B2: by brace matching, not the last one declared before it); None at file level."""
+    best: Optional[Tuple[int, str]] = None
+    for m in _FUNCTION.finditer(s.masked, 0, off):
+        body = _function_body(s, m)
+        if body and body[0] <= off < body[1] and (best is None or body[0] > best[0]):
+            best = (body[0], m.group(1) or m.group(2))
+    return best[1] if best else None
 
 
 def scan_angular(repo: str, rel: str, text: str,
@@ -400,7 +428,8 @@ def scan_angular(repo: str, rel: str, text: str,
     for m in calls:
         cls = s.class_at(m.start())
         if cls is None:
-            fn = _enclosing_function(s.masked, m.start()) or own_stem
+            # top-level calls belong to a file-level component named by the file's path stem
+            fn = _enclosing_function(s, m.start()) or own_stem
             cls = (m.start(), 0, 0, fn)
         args, _ = args_at(s.clean, m.end() - 1)
         mname = m.group(m.re.groups)  # the method: last group of either pattern
