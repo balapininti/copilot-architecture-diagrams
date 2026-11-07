@@ -38,3 +38,8 @@ def missing(nodes: Dict[str, Node], kind: str, name: str, reason: Optional[str] 
             attrs["candidates"] = list(candidates or [])
         nodes[nid] = Node(nid, "missing", name, None, [], attrs)
     return nid
+
+
+def ambiguous(defs: List[Evidence]) -> str:
+    """``ambiguous: defined in N places: <repo/path>, ...`` for several definitions."""
+    return "ambiguous: defined in %d places: %s" % (len(defs), ", ".join(where(e) for e in defs))

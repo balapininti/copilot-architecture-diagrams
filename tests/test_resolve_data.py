@@ -65,7 +65,7 @@ def test_env_copies_share_dataset_key():
     assert edge(PROD + "STEP020", "write", "dataset:CLAIMS.DAILY").status == "confirmed"
     assert edge(TEST + "STEP020", "write", "dataset:CLAIMS.DAILY").status == "confirmed"
     node = resolved().nodes["dataset:CLAIMS.DAILY"]
-    assert node.attrs["names"] == {"PROD.CLAIMS.DAILY", "TEST.CLAIMS.DAILY"}
+    assert node.attrs["names"] == ["PROD.CLAIMS.DAILY", "TEST.CLAIMS.DAILY"]
     assert node.attrs["env_dropped"] is True
     assert node.kind == "dataset" and node.repo is None
 
@@ -254,13 +254,51 @@ def test_proc_default_and_library_never_loose():
     assert not edges(op="loose", r=r)
 
 
-def test_non_env_qualifier_is_a_different_key():
+def test_non_env_qualifier_is_partly_known_not_two_loose_ends():
     s1, s2 = _step("a.jcl", "S1", "P"), _step("b.jcl", "S1", "P")
-    refs = [_ds(s1.id, "write", "QA.X.Y", 2), _ds(s2.id, "read", "PROD.X.Y", 3)]
-    r = _run([s1, s2], refs, ["PROD"])
-    assert edge(s1.id, "write", "dataset:QA.X.Y", r).dst == "dataset:QA.X.Y"
-    assert edge(s2.id, "read", "dataset:X.Y", r).status == "confirmed"
-    assert len(edges(op="loose", r=r)) == 2
+    for quals, other in ((["PROD"], "dataset:X.Y"), ([], "dataset:PROD.X.Y")):
+        refs = [_ds(s1.id, "write", "QA.X.Y", 2), _ds(s2.id, "read", "PROD.X.Y", 3)]
+        r = _run([s1, s2], refs, quals)
+        # a different key: the step edges don't merge
+        assert edge(s1.id, "write", "dataset:QA.X.Y", r).status == "confirmed"
+        assert edge(s2.id, "read", other, r).status == "confirmed"
+        (e,) = edges(op="maybe_same", r=r)
+        assert {e.src, e.dst} == {"dataset:QA.X.Y", other} and e.status == "partial"
+        assert e.reason == "names differ only by first qualifier: QA vs PROD"
+        assert not edges(op="loose", r=r)
+
+
+def test_several_first_qualifier_candidates():
+    s1, s2, s3 = (_step(j, "S1", "P") for j in ("a.jcl", "b.jcl", "c.jcl"))
+    refs = [_ds(s1.id, "write", "QA.X.Y", 2), _ds(s2.id, "read", "DEV.X.Y", 3),
+            _ds(s3.id, "read", "UAT.X.Y", 4)]
+    r = _run([s1, s2, s3], refs)
+    e = edge("dataset:QA.X.Y", "maybe_same", "missing:dataset:?QA.X.Y", r)
+    assert e.status == "partial"
+    assert r.nodes[e.dst].attrs["candidates"] == ["DEV.X.Y", "UAT.X.Y"]
+    assert not edges("dataset:QA.X.Y", "loose", r=r)
+
+
+def test_last_qualifier_difference_is_not_paired():
+    s1, s2 = _step("a.jcl", "S1", "P"), _step("b.jcl", "S1", "P")
+    r = _run([s1, s2], [_ds(s1.id, "write", "A.X.Y", 2), _ds(s2.id, "read", "A.X.Z", 3)])
+    assert not edges(op="maybe_same", r=r) and len(edges(op="loose", r=r)) == 2
+
+
+def test_library_writes_never_loose():
+    s1 = _step("a.jcl", "LKED", "IEWL")
+    r = _run([s1], [_ds(s1.id, "write", "PROD.LOADLIB", 2, ddname="SYSLMOD"),
+                    _ds(s1.id, "write", "PROD.OTHER.LIB", 3, ddname="STEPLIB", library=True)])
+    assert len(edges(s1.id, "write", r=r)) == 2
+    assert not edges(op="loose", r=r)
+
+
+def test_save_load_round_trip(tmp_path):
+    from archdiag.store import load_resolved, save_json
+    r = resolved()
+    save_json(tmp_path / "links.json", r)
+    back = load_resolved(tmp_path / "links.json")
+    assert back.edges == r.edges and back.nodes == r.nodes
 
 
 def test_transfer_write_counts_as_writer():
@@ -336,6 +374,12 @@ def test_table_reason_and_unknown_name():
     assert e.status == "partial" and e.reason == "dynamic SQL"
 
 
+def test_three_part_table_name_is_partial():
+    r = _run([_prog("P"), _table("S.T")], [_sel("LOC1.S.T")])
+    e = edge("program:P", "select", "table:S.T", r)
+    assert e.status == "partial" and e.reason == "table on DB2 location LOC1"
+
+
 def test_alias_chain_followed():
     r = _run([_prog("P"), _table("S.A", type="alias", alias_of="S.B"),
               _table("S.B", type="alias", alias_of="S.T"), _table("S.T")], [_sel("S.A")])
@@ -360,11 +404,68 @@ def test_get_only_queue():
     assert e.reason == "nothing in these repos puts to this queue"
 
 
-def test_open_counts_both_sides_but_is_partial():
-    r = _run([_prog("P")], [_q("class:r/C", "open", "X.Q", 3, "queue open mode not worked out")])
-    e = edge("class:r/C", "open", "queue:X.Q", r)
-    assert e.status == "partial"
+def test_open_is_partial_and_satisfies_neither_side():
+    why = "queue open mode not worked out"
+    r = _run([_prog("P")], [_q("class:r/C", "open", "X.Q", 3, why)])
+    assert edge("class:r/C", "open", "queue:X.Q", r).status == "partial"
     assert not edges("queue:X.Q", "partial", r=r)
+    r = _run([_prog("P")], [_q("program:P", "put", "X.Q"), _q("class:r/C", "open", "X.Q", 4, why)])
+    assert edge("queue:X.Q", "partial", "missing:queue-consumer:X.Q", r).status == "partial"
+
+
+def test_guessed_queue_use_does_not_satisfy_the_other_side():
+    refs = [_q("program:P", "put", "A.Q"),
+            Ref("program:P", "get", "queue", None, _ev(8), "MOVE from WS-Q", ["A.Q"])]
+    r = _run([_prog("P")], refs)
+    assert edge("program:P", "get", "queue:A.Q", r).status == "partial"
+    assert edge("queue:A.Q", "partial", "missing:queue-consumer:A.Q", r).status == "partial"
+
+
+def _alias_case(put_first):
+    nodes = [_prog("P"), _queue("A.ALIAS", type="alias", target="T.LOCAL", targtype="QUEUE")]
+    refs = [_q("class:r/C", "put", "A.ALIAS", 3), _q("program:P", "get", "T.LOCAL", 4)]
+    return _run(nodes, refs if put_first else refs[::-1])
+
+
+def test_alias_to_undefined_queue_put_before_get():
+    r = _alias_case(True)
+    assert edge("class:r/C", "put", "queue:T.LOCAL", r).status == "confirmed"
+    assert edge("program:P", "get", "queue:T.LOCAL", r).status == "confirmed"
+    assert not edges(op="partial", r=r)
+
+
+def test_alias_follow_does_not_depend_on_ref_order():
+    key = lambda r: sorted((e.src, e.op, e.dst, e.status, e.reason) for e in r.edges)
+    assert key(_alias_case(True)) == key(_alias_case(False))
+
+
+def test_remote_queue_target_must_be_defined():
+    nodes = [_prog("P"), _queue("R.Q", type="remote", target="FAR.Q")]
+    r = _run(nodes, [_q("program:P", "put", "R.Q"), _q("program:P", "get", "FAR.Q", 4)])
+    assert edge_from("program:P", "put", r).dst == "queue:R.Q"
+
+
+def test_queue_names_upper_cased():
+    r = _run([_prog("P"), _queue("CLM.X")], [_q("class:r/C", "put", "clm.x"),
+                                             _q("program:P", "get", "CLM.X", 4)])
+    assert edge("class:r/C", "put", "queue:CLM.X", r).status == "confirmed"
+    assert not edges(op="partial", r=r)
+    # a quoted mixed-case MQSC definition keeps its case and is matched exactly
+    r = _run([_prog("P"), _queue("Mixed.Q")], [_q("class:r/C", "put", "Mixed.Q")])
+    assert edge_from("class:r/C", "put", r).dst == "queue:Mixed.Q"
+
+
+def test_mqsc_scanner_upper_cases_unquoted_names():
+    from archdiag.scan import ScanContext
+    from archdiag.scan.mq import scan_mqsc
+    nodes, _ = scan_mqsc("r", "q.mqsc", "DEFINE QLOCAL(clm.low)\nDEFINE QLOCAL('Keep.Case')\n",
+                         ScanContext())
+    assert [n.id for n in nodes] == ["queue:CLM.LOW", "queue:Keep.Case"]
+
+
+def test_repo_links_sorted():
+    links = repo_links(resolved())
+    assert [l[:3] for l in links] == sorted(l[:3] for l in links)
 
 
 def test_put_plus_trigger_has_no_consumer_gap_and_missing_process():

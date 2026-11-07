@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Inventory, Node, Ref
 from ..scan.cobol import IBM_COPYBOOKS
-from .common import join as _join, missing as _missing, unknown_name, where
+from .common import ambiguous as _ambiguous, join as _join, missing as _missing, unknown_name
 
 PROGRAM_OPS = frozenset(["runs", "call", "link", "xctl", "ctg_call"])
 TRANSACTION_OPS = frozenset(["start", "return_transid"])
@@ -34,10 +34,6 @@ _RULES: Dict[str, Tuple[frozenset, Tuple[str, ...]]] = {
     "transaction": (TRANSACTION_OPS, ("transaction",)),
     "map": (frozenset(["send_map"]), ("map",)),
 }
-
-
-def _ambiguous(defs: List[Evidence]) -> str:
-    return "ambiguous: defined in %d places: %s" % (len(defs), ", ".join(where(e) for e in defs))
 
 
 def _definitions(nodes: Dict[str, Node], kinds: Tuple[str, ...],

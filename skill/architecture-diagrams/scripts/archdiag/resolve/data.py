@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..config import Config
 from ..model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Inventory, Node, Ref, Resolved
-from .common import join, missing, src_label, unknown_name, where
+from .common import ambiguous, join, missing, src_label, unknown_name
 from .names import norm_dataset, norm_path, split_http
 
 TRANSFER_REASON = "file transfer target is outside these repos"
@@ -37,15 +37,14 @@ NO_CONSUMER = "how this queue reaches CICS isn't in these repos"
 NO_PRODUCER = "nothing in these repos puts to this queue"
 # the IBM-supplied CICS-MQ bridge monitor: never defined in a user CSD
 BRIDGE_MONITOR = "CKBR"
+# load-library DDs: built and read outside the code, never a loose end
+LIBRARY_DDS = frozenset(["STEPLIB", "JOBLIB", "JOBCAT", "STEPCAT", "ISPLLIB", "SYSLMOD", "SYSLIB"])
 # resources that, without a definition, belong to no repo and link every repo using them
 SHARED_KINDS = ("dataset", "queue")
 
 
 def _defs_reason(node: Node) -> Optional[str]:
-    if len(node.evidence) > 1:
-        return "ambiguous: defined in %d places: %s" % (
-            len(node.evidence), ", ".join(where(e) for e in node.evidence))
-    return None
+    return ambiguous(node.evidence) if len(node.evidence) > 1 else None
 
 
 def _status(*reasons: Optional[str]) -> Tuple[str, Optional[str]]:
@@ -115,11 +114,14 @@ class _Data:
         node = self.nodes.get(nid)
         if node is None:
             node = Node(nid, "dataset", key if temp_scope is None else name, None, [],
-                        {"names": set(), "env_dropped": False})
+                        {"names": [], "env_dropped": False})
             if temp_scope is not None:
                 node.attrs["temp"] = True
             self.nodes[nid] = node
-        node.attrs.setdefault("names", set()).add(name)
+        names = node.attrs.setdefault("names", [])
+        if name not in names:
+            names.append(name)
+            names.sort()
         if dropped:
             node.attrs["env_dropped"] = True
         if "&" in name and temp_scope is None:
@@ -165,8 +167,9 @@ class _Data:
         unresolved = not temp and "&" in name
         status, reason = _status(ref.reason or (_unresolved_reason(name) if unresolved else None))
         self.add(ref, op, dst, status, reason)
-        if not (temp or unresolved or ref.attrs.get("proc_default") is True
-                or ref.attrs.get("library") is True):
+        library = ref.attrs.get("library") is True or \
+            str(ref.attrs.get("ddname") or "").upper() in LIBRARY_DDS
+        if not (temp or unresolved or library or ref.attrs.get("proc_default") is True):
             self.count(dst, op, ref.evidence)
 
     def cics_file(self, ref: Ref) -> None:
@@ -209,16 +212,71 @@ class _Data:
             self.count(dst, op, ref.evidence)
 
     def dataset_loose(self) -> None:
-        for dst in list(self.ds_writes) + [d for d in self.ds_reads if d not in self.ds_writes]:
+        """Loose ends for datasets only written or only read (counted uses only).
+
+        Spec §7.4: names that differ only by a first qualifier that is not a listed
+        environment qualifier may be the same dataset, so that pairing is partly known
+        (``maybe_same``) rather than two loose ends.
+        """
+        order = list(self.ds_writes) + [d for d in self.ds_reads if d not in self.ds_writes]
+        # each dataset is indexed by its key and by its key without the first qualifier
+        index: Dict[str, List[str]] = {}
+        for dst in order:
+            key = dst.split(":", 1)[1]
+            _, dot, rest = key.partition(".")
+            for form in {key, rest} if dot and rest else {key}:
+                index.setdefault(form, []).append(dst)
+
+        def first_qual(dst: str) -> str:
+            names = self.nodes[dst].attrs.get("names") or [dst.split(":", 1)[1]]
+            return str(names[0]).partition(".")[0]
+
+        paired: Set[frozenset] = set()
+        for dst in order:
             key = dst.split(":", 1)[1]
             if dst not in self.ds_reads:
-                side, kind, reason = self.ds_writes[dst], "reader", NO_READER
+                side, kind, reason, supply = self.ds_writes[dst], "reader", NO_READER, self.ds_reads
             elif dst not in self.ds_writes:
-                side, kind, reason = self.ds_reads[dst], "writer", NO_WRITER
+                side, kind, reason, supply = self.ds_reads[dst], "writer", NO_WRITER, self.ds_writes
             else:
                 continue
-            self.edges.append(Edge(dst, "loose", missing(self.nodes, kind, key), LOOSE, reason,
-                                   list(side)))
+            _, dot, rest = key.partition(".")
+            near: List[str] = []
+            for form in ([rest] if dot and rest else []) + [key]:
+                for d in index.get(form, []):
+                    if d != dst and d in supply and d not in near:
+                        near.append(d)
+            # only names differing by exactly one leading qualifier count
+            cands = [d for d in near if self._one_qualifier_apart(key, d.split(":", 1)[1])]
+            if len(cands) == 1:
+                other = cands[0]
+                pair = frozenset((dst, other))
+                if pair not in paired:
+                    paired.add(pair)
+                    why = "names differ only by first qualifier: %s vs %s" % (
+                        first_qual(dst), first_qual(other))
+                    self.edges.append(Edge(dst, "maybe_same", other, PARTIAL, why,
+                                           list(side) + list(supply[other])))
+            elif cands:
+                names = [c.split(":", 1)[1] for c in cands]
+                why = "ambiguous: names differ only by first qualifier: %s" % ", ".join(names)
+                nid = missing(self.nodes, "dataset", "?" + key, why, names)
+                self.edges.append(Edge(dst, "maybe_same", nid, PARTIAL, why, list(side)))
+            else:
+                self.edges.append(Edge(dst, "loose", missing(self.nodes, kind, key), LOOSE,
+                                       reason, list(side)))
+
+    @staticmethod
+    def _one_qualifier_apart(a: str, b: str) -> bool:
+        """True when ``a`` and ``b`` differ only by their first qualifier (or one of them
+        has one extra leading qualifier)."""
+        pa, pb = a.split("."), b.split(".")
+        if len(pa) == len(pb):
+            return len(pa) > 1 and pa[0] != pb[0] and pa[1:] == pb[1:]
+        if abs(len(pa) - len(pb)) == 1:
+            long_, short = (pa, pb) if len(pa) > len(pb) else (pb, pa)
+            return len(short) > 1 and long_[1:] == short
+        return False
 
     # -- transfers -----------------------------------------------------------------------
     def transfer(self, ref: Ref) -> None:
@@ -285,20 +343,22 @@ class _Data:
             return
         parts = [p.strip('"') for p in name.split(".")]
         full = ".".join(parts[-2:])  # LOCATION.SCHEMA.NAME: the location is dropped
+        # a table on another DB2 location is not certainly the one in these DDL files
+        loc = "table on DB2 location %s" % parts[-3] if len(parts) > 2 else None
         if len(parts) == 1:
             self.table_match(ref, self.tables_by_name.get(full, []), full, None)
             return
         if "table:" + full in self.nodes:
-            self.table_match(ref, ["table:" + full], full, None)
+            self.table_match(ref, ["table:" + full], full, loc)
             return
         schema, base = parts[-2], parts[-1]
         cands = self.tables_by_name.get(base, [])
         if schema in self.quals:
-            self.table_match(ref, cands, full, None)  # dropping a listed qualifier: confirmed
+            self.table_match(ref, cands, full, loc)  # dropping a listed qualifier: confirmed
         else:
             self.table_match(ref, cands, full,
-                             "matched only after dropping schema %s, which is not a listed "
-                             "environment qualifier" % schema)
+                             join(loc, "matched only after dropping schema %s, which is not a "
+                                  "listed environment qualifier" % schema))
 
     # -- queues --------------------------------------------------------------------------
     def follow_queue(self, name: str) -> Tuple[str, List[Evidence]]:
@@ -317,20 +377,25 @@ class _Data:
                     str(node.attrs.get("targtype") or "QUEUE").upper() != "QUEUE":
                 break  # an alias of a topic: no queue to follow
             nxt = "queue:" + str(target)
-            if nxt not in self.nodes:
+            if node.attrs.get("type") == "remote" and nxt not in self.inv.nodes:
                 break  # a remote queue whose target is on a queue manager not in these repos
-            cur = nxt
+            cur = nxt  # an alias always reaches its target queue, defined here or not
         if cur not in self.nodes:
             self.nodes[cur] = Node(cur, "queue", cur.split(":", 1)[1], None, [],
                                    {"defined": False})
         return cur, evid
 
+    def queue_name(self, name: str) -> str:
+        """MQSC folds unquoted names to upper case; a quoted mixed-case definition wins."""
+        name = name.strip()
+        return name if "queue:" + name in self.inv.nodes else name.upper()
+
     def queue(self, ref: Ref) -> None:
-        name = (ref.target_name or "").strip()
+        name = self.queue_name(ref.target_name or "")
         if not name and len(ref.candidates) == 1:
-            dst, evid = self.follow_queue(ref.candidates[0].strip())
+            # a guess: drawn, but not a certain use for one-sided detection
+            dst, evid = self.follow_queue(self.queue_name(ref.candidates[0]))
             self.add(ref, ref.op, dst, PARTIAL, ref.reason or "name not worked out", evid)
-            self.count_queue(dst, ref)
             return
         if not name:
             self.unknown(ref, "queue")
@@ -344,9 +409,10 @@ class _Data:
         self.count_queue(dst, ref)
 
     def count_queue(self, dst: str, ref: Ref) -> None:
-        if ref.op in ("put", "open"):
+        # "open" (direction not worked out) is drawn partial but satisfies neither side
+        if ref.op == "put":
             self.q_puts.setdefault(dst, []).append(ref.evidence)
-        if ref.op in ("get", "open"):
+        elif ref.op == "get":
             self.q_gets.setdefault(dst, []).append(ref.evidence)
 
     def triggers(self) -> None:
@@ -512,4 +578,4 @@ def repo_links(resolved: Resolved) -> List[Tuple[str, str, str, List[Edge]]]:
         for i, a in enumerate(repos):
             for b in repos[i + 1:]:
                 put(a, b, _label(nodes[rid]), by_repo[a] + by_repo[b])
-    return [(a, b, label, es) for (a, b, label), es in out.items()]
+    return [(a, b, label, out[(a, b, label)]) for a, b, label in sorted(out)]
