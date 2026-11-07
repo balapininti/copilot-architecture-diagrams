@@ -12,6 +12,11 @@ from .model import CONFIRMED, LOOSE, PARTIAL, Edge, Resolved
 MAX_LINES = 120
 
 
+def count_unanalyzed(inv) -> int:
+    """Files a scanner crashed on (as opposed to benign skips such as size or permissions)."""
+    return sum(1 for s in inv.skipped if "could not be analyzed" in s.get("reason", ""))
+
+
 def _env_pairs(r: Resolved, cfg: Config, kind: str) -> List[Tuple[str, str, int, str]]:
     """(q1, q2, shared tail count, example) for first-qualifier pairs of ``kind`` names that
     share at least two distinct tails and are not already configured."""
@@ -126,6 +131,10 @@ def build_summary(r: Resolved, g: Groups, cfg: Config) -> str:
     na = inv.languages_not_analyzed
     tail.append("- " + (", ".join("%s: %d files" % (k, v) for k, v in sorted(na.items())) if na else "none"))
     tail.append("- Skipped files: %d" % len(inv.skipped))
+    bad = count_unanalyzed(inv)
+    if bad:
+        tail.append("- WARNING: %d file(s) could not be analyzed; links involving them may be "
+                    "missing" % bad)
     for s in inv.skipped[:5]:
         tail.append("  - %s/%s (%s)" % (s.get("repo", ""), s.get("path", ""), s.get("reason", "")))
 

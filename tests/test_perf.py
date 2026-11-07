@@ -57,6 +57,12 @@ def test_large_estate_under_120s(tmp_path, capsys):
     assert main(["draw", "--workspace", str(tmp_path), "--level", "landscape"]) == 0
     elapsed = time.time() - t0
     out = capsys.readouterr().out
+    from archdiag.store import load_inventory
+    inv = load_inventory(tmp_path / "architecture-diagrams" / "inventory.json")
+    assert not [x for x in inv.skipped if "could not be analyzed" in x["reason"]]
+    from archdiag.store import load_resolved
+    r = load_resolved(tmp_path / "architecture-diagrams" / "links.json")
+    assert sum(1 for e in r.edges if e.status == "confirmed") > 0
     assert elapsed < 120, "took %.1fs" % elapsed
     import re
     n = int(re.search(r"Summary: (\d+) nodes", out).group(1))

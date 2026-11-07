@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Tuple
+from typing import Callable, Iterable, Iterator, List, Optional, Tuple
 
 from .model import Repo
 
@@ -15,7 +16,31 @@ SKIP_EXTS = frozenset([
     ".pdf", ".exe", ".dll", ".so", ".lock",
 ])
 MAX_BYTES = 5 * 1024 * 1024
-MAX_PATH = 260  # Windows MAX_PATH: longer paths cannot be opened without special prefixes
+MAX_PATH = 260  # Windows MAX_PATH: longer paths need the \\?\ prefix
+
+
+def extended_path(path: str, abspath: Callable[[str], str] = os.path.abspath) -> str:
+    """The Windows extended-length form of ``path`` (``\\\\?\\C:\\x`` or ``\\\\?\\UNC\\srv\\x``)."""
+    full = abspath(path)
+    if full.startswith("\\\\?\\"):
+        return full
+    if full.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + full[2:]
+    return "\\\\?\\" + full
+
+
+def with_long_path(func: Callable, path) -> object:
+    """``func(path)``; on Windows, when that fails for a path of 260 characters or more, once
+    more with the extended-length form (the original error is raised if that fails too)."""
+    try:
+        return func(path)
+    except OSError:
+        if os.name != "nt" or len(str(path)) < MAX_PATH:
+            raise
+        try:
+            return func(extended_path(str(path)))
+        except OSError as e2:
+            raise e2
 
 
 REPO_MARKER_FILE = ".archdiag-repo"
@@ -57,14 +82,13 @@ def iter_source_files(root: Path, exclude_dirs: Iterable[str] = (),
             if os.path.splitext(name)[1].lower() in SKIP_EXTS:
                 continue
             p = Path(dirpath) / name
-            if len(str(p)) > MAX_PATH:
-                if skipped is not None:
-                    skipped.append((p, "path longer than %d characters" % MAX_PATH))
-                continue
             try:
-                if not p.is_file():
+                st = with_long_path(os.stat, str(p))
+                if not stat.S_ISREG(st.st_mode):
                     continue
-                size = p.stat().st_size
+                size = st.st_size
+            except FileNotFoundError:
+                continue  # a broken link, or a file that went away
             except OSError as e:
                 if skipped is not None:
                     skipped.append((p, "cannot read file: %s" % (e.strerror or e)))

@@ -17,7 +17,7 @@ from .model import CONFIRMED, LOOSE, PARTIAL, Inventory, Resolved
 from .repos import discover_repos
 from .scan import scan_workspace
 from .store import fingerprint, load_inventory, load_resolved, save_json
-from .summary import _env_pairs, build_summary, list_items
+from .summary import _env_pairs, build_summary, count_unanalyzed, list_items
 
 OUT_DIR_NAME = "architecture-diagrams"
 CLI_LEVELS = ("landscape", "application", "flow", "repomap")
@@ -76,11 +76,20 @@ def _check_workspace(workspace: Path) -> None:
 
 
 def _scan_and_save(workspace: Path, out_dir: Path, config: Config) -> Tuple[Inventory, Resolved]:
+    """Scan, resolve, then write links.json and, last, inventory.json: a crash part way
+    never leaves a new inventory beside old links."""
     inventory = scan_workspace(workspace, config)
-    save_json(out_dir / "inventory.json", inventory)
     resolved = resolve(inventory, config)
     save_json(out_dir / "links.json", resolved)
+    save_json(out_dir / "inventory.json", inventory)
     return inventory, resolved
+
+
+def _warn_unanalyzed(inv: Inventory, see: Path) -> None:
+    n = count_unanalyzed(inv)
+    if n:
+        print("WARNING: %d file(s) could not be analyzed; links involving them may be missing "
+              "(see %s)" % (n, see))
 
 
 def _counts_line(inv: Inventory, r: Resolved) -> str:
@@ -96,32 +105,32 @@ def _counts_line(inv: Inventory, r: Resolved) -> str:
 
 def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
     """The resolved links for the workspace as it is now: the cache when the repos have not
-    changed, otherwise a fresh scan (stating so)."""
-    inv_path, links_path = out_dir / "inventory.json", out_dir / "links.json"
-    cached: Optional[Inventory] = None
-    if inv_path.is_file() and links_path.is_file():
+    changed, otherwise a fresh scan (stating so). The fingerprint inside links.json (its
+    inventory) decides, so links from an older scan are never served."""
+    links_path = out_dir / "links.json"
+    cached: Optional[Resolved] = None
+    if links_path.is_file():
         try:
-            cached = load_inventory(inv_path)
+            cached = load_resolved(links_path)
         except (OSError, ValueError, KeyError, TypeError):
             cached = None
     if cached is not None:
         repos = discover_repos(workspace)
-        if fingerprint(workspace, repos, config) == cached.fingerprint:
+        if fingerprint(workspace, repos, config) == cached.inventory.fingerprint:
             cfg_path = out_dir / CONFIG_NAME
             try:
-                config_newer = cfg_path.is_file() and cfg_path.stat().st_mtime > links_path.stat().st_mtime
-                if not config_newer:
-                    return load_resolved(links_path)
-            except (OSError, ValueError, KeyError, TypeError):
+                if not (cfg_path.is_file() and cfg_path.stat().st_mtime > links_path.stat().st_mtime):
+                    return cached
+            except OSError:
                 pass
-            resolved = resolve(cached, config)  # settings changed: re-resolve, no rescan
+            resolved = resolve(cached.inventory, config)  # settings changed: no rescan
             save_json(links_path, resolved)
             return resolved
-        print("Repos changed since last scan; rescanned.")
+        print("Repos changed since last scan; rescanned.", flush=True)
     else:
-        print("No earlier scan found; scanning.")
+        print("No earlier scan found; scanning.", file=sys.stderr)
     inv, resolved = _scan_and_save(workspace, out_dir, config)
-    print("Scanned: " + _counts_line(inv, resolved))
+    print("Scanned: " + _counts_line(inv, resolved), file=sys.stderr)
     return resolved
 
 
@@ -138,6 +147,7 @@ def _cmd_scan(args, workspace: Path, out_dir: Path) -> int:
     _check_workspace(workspace)
     inv, resolved = _scan_and_save(workspace, out_dir, load_config(out_dir))
     print("Scanned " + _counts_line(inv, resolved))
+    _warn_unanalyzed(inv, out_dir / "inventory.json")
     print("Wrote %s and %s" % (out_dir / "inventory.json", out_dir / "links.json"))
     return 0
 
@@ -149,6 +159,7 @@ def _cmd_summary(args, workspace: Path, out_dir: Path) -> int:
     text = build_summary(r, load_groups(out_dir / "groups.json", r), config)
     _write(out_dir / "summary.md", text)
     print(text, end="")
+    _warn_unanalyzed(r.inventory, out_dir / "summary.md")
     print("Wrote %s" % (out_dir / "summary.md"))
     return 0
 
@@ -282,6 +293,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:
         st[e.status] = st.get(e.status, 0) + 1
+    _warn_unanalyzed(r.inventory, links)
     print("Wrote:")
     for p in written:
         print("  %s" % p)
@@ -339,9 +351,10 @@ def main(argv: List[str]) -> int:
         print("Stopped.")
         return 1
     except Exception as e:  # never show a traceback
+        msg = " ".join(str(e).split())
         log = _log_error(out_dir) if workspace.is_dir() else None
         if log is not None:
-            print("Something went wrong (%s: %s). Details: %s" % (type(e).__name__, e, log))
+            print("Something went wrong (%s: %s). Details: %s" % (type(e).__name__, msg, log))
         else:
-            print("Something went wrong (%s: %s)." % (type(e).__name__, e))
+            print("Something went wrong (%s: %s)." % (type(e).__name__, msg))
         return 1

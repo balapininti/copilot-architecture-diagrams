@@ -20,7 +20,7 @@ STDLIB_39 = {
     "__future__", "argparse", "ast", "bisect", "collections", "contextlib", "copy", "dataclasses",
     "datetime", "difflib", "enum", "fnmatch", "functools", "hashlib", "heapq", "html", "io",
     "itertools", "json", "math", "os", "pathlib", "random", "re", "shutil", "string",
-    "sys", "textwrap", "time", "traceback", "typing", "unicodedata", "urllib", "xml", "zipfile",
+    "stat", "sys", "textwrap", "time", "traceback", "typing", "unicodedata", "urllib", "xml", "zipfile",
 }
 
 

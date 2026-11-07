@@ -3,12 +3,13 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
 from .config import Config
 from .model import Edge, Evidence, Inventory, Node, Ref, Repo, Resolved
-from .repos import iter_source_files
+from .repos import iter_source_files, with_long_path
 
 
 def fingerprint(workspace: Path, repos: Iterable[Repo], config: Config = None) -> str:
@@ -19,7 +20,7 @@ def fingerprint(workspace: Path, repos: Iterable[Repo], config: Config = None) -
         root = workspace / repo.path
         for p in iter_source_files(root, exclude):
             try:
-                st = p.stat()
+                st = with_long_path(os.stat, str(p))
             except OSError:
                 continue
             rel = p.relative_to(workspace).as_posix()
@@ -36,7 +37,9 @@ def save_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         obj = dataclasses.asdict(obj)
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
 
 def _evidence(d: dict) -> Evidence:

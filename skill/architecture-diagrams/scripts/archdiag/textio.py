@@ -4,10 +4,17 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from .repos import with_long_path
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
 
 def read_source(path: Path) -> str:
     """Read a source file as UTF-8, then Windows-1252, then Latin-1; LF line endings."""
-    data = Path(path).read_bytes()
+    data = with_long_path(_read_bytes, str(path))  # type: ignore[assignment]
     text = None
     for enc in ("utf-8-sig", "cp1252"):
         try:
@@ -33,9 +40,10 @@ _EXT = {
 # Extensions of files no scanner or collector looks at (data, docs, web assets): their text is
 # never read, which saves decoding most of a large Angular or Java repo. Files that z/OS
 # Connect needs (package.xml, openapi.json and anything under a zosconnect folder) are exempt.
+# .json and .xml are NOT listed: collect_mq looks for CKBR starts in any file, so they are read.
 _NO_TEXT_EXTS = frozenset([
-    ".json", ".md", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".svg", ".csv",
-    ".log", ".map", ".xml", ".xsd", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".webp",
+    ".md", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".svg", ".csv",
+    ".log", ".map", ".xsd", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".webp",
     ".bmp", ".tif", ".tiff", ".mp3", ".mp4", ".gz", ".tgz", ".7z", ".rar", ".tar", ".bin",
     ".pyc", ".o", ".obj", ".a", ".lib", ".db", ".sqlite", ".xlsx", ".xls", ".docx", ".doc",
     ".pptx", ".ppt",

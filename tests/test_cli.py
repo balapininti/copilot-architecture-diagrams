@@ -177,7 +177,7 @@ def test_skip_dirs_case_insensitive(tmp_path):
     assert got == []
 
 
-def test_long_path_is_skipped_not_fatal(tmp_path):
+def test_long_path_is_read_on_posix(tmp_path):
     deep = tmp_path
     while len(str(deep)) < 270:
         deep = deep / ("d" * 40)
@@ -187,8 +187,126 @@ def test_long_path_is_skipped_not_fatal(tmp_path):
     except OSError:
         pytest.skip("filesystem cannot make a path this long")
     skipped = []
-    assert list(iter_source_files(tmp_path, (), skipped)) == []
-    assert skipped and "260" in skipped[0][1]
+    got = list(iter_source_files(tmp_path, (), skipped))
+    assert [p.name for p in got] == ["x.cbl"] and skipped == []
+    from archdiag.textio import read_source
+    assert read_source(got[0]) == "x"
+
+
+def test_extended_path_helper():
+    from archdiag.repos import extended_path
+    ident = lambda p: p  # noqa: E731
+    assert extended_path("C:\\work\\a.cbl", ident) == "\\\\?\\C:\\work\\a.cbl"
+    assert extended_path("\\\\srv\\share\\a.cbl", ident) == "\\\\?\\UNC\\srv\\share\\a.cbl"
+    assert extended_path("\\\\?\\C:\\a", ident) == "\\\\?\\C:\\a"
+
+
+def test_long_path_fallback_only_on_windows_and_long_paths(monkeypatch):
+    from archdiag import repos
+    calls = []
+
+    def fn(p):
+        calls.append(p)
+        if not p.startswith("\\\\?\\"):
+            raise OSError("too long")
+        return "ok"
+    long_p = "C:\\" + "a" * 270
+    monkeypatch.setattr(repos.os, "name", "posix")
+    with pytest.raises(OSError):
+        repos.with_long_path(fn, long_p)
+    monkeypatch.setattr(repos.os, "name", "nt")
+    monkeypatch.setattr(repos, "extended_path", lambda p: "\\\\?\\" + p)
+    assert repos.with_long_path(fn, long_p) == "ok"
+    with pytest.raises(OSError):
+        repos.with_long_path(fn, "C:\\short")
+
+
+def test_crashed_rescan_never_serves_stale_links(tmp_path, monkeypatch, capsys):
+    w = _estate(tmp_path)
+    assert main(["scan", "--workspace", str(w)]) == 0
+    cbl = next(w.rglob("*.cbl"))
+    cbl.write_text(cbl.read_text(encoding="utf-8") + "\n      * touched\n", encoding="utf-8")
+    real = cli.resolve
+    monkeypatch.setattr(cli, "resolve", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 1
+    monkeypatch.setattr(cli, "resolve", real)
+    capsys.readouterr()
+    assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
+    assert "Repos changed since last scan; rescanned." in capsys.readouterr().out
+
+
+def test_stale_links_json_alone_triggers_rescan(tmp_path, capsys):
+    w = _estate(tmp_path)
+    assert main(["scan", "--workspace", str(w)]) == 0
+    (w / "architecture-diagrams" / "inventory.json").unlink()
+    cbl = next(w.rglob("*.cbl"))
+    cbl.write_text(cbl.read_text(encoding="utf-8") + "\n      * t\n", encoding="utf-8")
+    capsys.readouterr()
+    assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
+    assert "rescanned" in capsys.readouterr().out
+
+
+def test_save_json_is_atomic(tmp_path, monkeypatch):
+    from archdiag import store
+    target = tmp_path / "a.json"
+    store.save_json(target, {"a": 1})
+    monkeypatch.setattr(store.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("no")))
+    with pytest.raises(OSError):
+        store.save_json(target, {"a": 2})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
+
+
+def test_unanalyzed_warning_in_scan_draw_and_summary(tmp_path, monkeypatch, capsys):
+    import archdiag.scan as sc
+    w = _estate(tmp_path)
+
+    def bad(repo, rel, text, ctx):
+        raise ValueError("odd file")
+    monkeypatch.setitem(sc.SCANNERS, "bms", bad)
+    assert main(["scan", "--workspace", str(w)]) == 0
+    out = capsys.readouterr().out
+    assert "WARNING: 1 file(s) could not be analyzed; links involving them may be missing" in out
+    assert main(["draw", "--workspace", str(w), "--level", "landscape"]) == 0  # from cache
+    out = capsys.readouterr().out
+    assert "WARNING: 1 file(s) could not be analyzed" in out and "landscape-links.md" in out
+    assert out.index("WARNING") < out.index("Wrote:")
+    assert main(["summary", "--workspace", str(w)]) == 0
+    out = capsys.readouterr().out
+    assert out.count("could not be analyzed") >= 2
+    assert "(see " in out or "WARNING" in out
+
+
+def test_notices_go_to_stderr_and_list_stdout_is_clean(tmp_path, capsys):
+    w = _estate(tmp_path)
+    assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
+    cap = capsys.readouterr()
+    assert "scanning" in cap.err and "Scanned:" in cap.err
+    assert cap.out.splitlines()[0].startswith("CLMD100")
+
+
+def test_error_message_is_one_line(tmp_path, monkeypatch, capsys):
+    w = _estate(tmp_path)
+    monkeypatch.setattr(cli, "resolve", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("line one\nline two\n  line three")))
+    assert main(["scan", "--workspace", str(w)]) == 1
+    out = capsys.readouterr().out
+    assert len(out.strip().splitlines()) == 1 and "line one line two line three" in out
+
+
+def test_txt_exports_and_xml_json_are_read(tmp_path):
+    from archdiag.textio import needs_text
+    assert needs_text("a/x.xml") and needs_text("a/x.json") and needs_text("a/export.txt")
+    w = tmp_path / "ws"
+    (w / "r" / ".git").mkdir(parents=True)
+    (w / "r" / "export.txt").write_text(
+        "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. TXTPGM.\n"
+        "       PROCEDURE DIVISION.\n           STOP RUN.\n", encoding="utf-8")
+    (w / "r" / "job.txt").write_text("//TXTJOB JOB (A),'X'\n//S1 EXEC PGM=TXTPGM\n",
+                                     encoding="utf-8")
+    assert main(["scan", "--workspace", str(w)]) == 0
+    inv = load_inventory(w / "architecture-diagrams" / "inventory.json")
+    ids = set(inv.nodes)
+    assert any("TXTPGM" in i for i in ids) and any("TXTJOB" in i for i in ids)
 
 
 @pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
