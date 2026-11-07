@@ -10,6 +10,7 @@ so ``*`` also crosses ``/`` and ``**`` behaves like ``*``."""
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
@@ -22,6 +23,19 @@ FALLBACK_NOTE = "Grouped by folder. Ask Copilot to name groups for this repo."
 _GLOB = "*?["
 MAX_BYTES = 5 * 1024 * 1024
 _NO_FILE_NODES = ("dataset:", "missing:", "external:", "utility:")
+# the entry-point boxes the gitdiagram view draws on the left, by node kind ("job" is the
+# Scheduler). A suggested link may name one of these, in any case, with or without the
+# "(N)" count the box shows; the view says when the repo has no such box.
+ACTOR_NAMES = (("job", "Scheduler"), ("transaction", "CICS transactions"),
+               ("endpoint", "REST endpoints"), ("page", "Angular pages"),
+               ("zosapi", "z/OS Connect APIs"))
+
+
+def actor_kind(name: str) -> Optional[str]:
+    """The node kind of the entry actor ``name`` names ("Scheduler", "CICS transactions (12)",
+    any case), else None."""
+    bare = re.sub(r"\s*\(\d+\)\s*$", "", name.strip()).lower()
+    return next((k for k, label in ACTOR_NAMES if label.lower() == bare), None)
 
 
 @dataclass
@@ -190,7 +204,7 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
             problems.append("a suggested link that is not an object was dropped")
             continue
         ends = [str(link.get("from", "")), str(link.get("to", ""))]
-        bad = [e for e in ends if e not in names and e not in r.nodes]
+        bad = [e for e in ends if e not in names and e not in r.nodes and actor_kind(e) is None]
         if bad:
             problems.append("suggested link %s -> %s dropped: unknown %s"
                             % (ends[0], ends[1], ", ".join(repr(b) for b in bad)))

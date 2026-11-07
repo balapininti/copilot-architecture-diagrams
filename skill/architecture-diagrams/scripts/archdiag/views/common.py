@@ -7,7 +7,10 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from archdiag.model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Node, Resolved
 
-LEVELS = ("landscape", "application", "flow_job", "flow_tx", "repomap")
+LEVELS = ("landscape", "application", "flow_job", "flow_tx", "repomap", "gitdiagram")
+# a Scheduler "starts" line (gitdiagram): the job exists, who schedules it is not in the
+# repos. It is not a certainty: combining and least-certain ignore it (Ruling 2)
+STRUCTURAL = "structural"
 MAX_NODES = 40
 TX_DEPTH = 8  # flow_tx: hops followed from the start (a "runs" hop costs nothing)
 GROUP_COLORS = ("#3b82f6", "#16a34a", "#9333ea", "#ca8a04", "#ea580c", "#0891b2", "#db2777",
@@ -31,6 +34,11 @@ class VNode:
     # drawn as a program, zosapi as an endpoint, a neighbor keeps what it really is); "" means
     # ``kind`` is the real kind
     real_kind: str = ""
+    # gitdiagram: a repo-relative file or folder the box opens; renderers make it an href
+    link: str = ""
+    # gitdiagram: everything the box stands for in full (a group's file paths, an entry
+    # actor's names), for the links report and the completeness check
+    members: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -39,7 +47,9 @@ class VEdge:
     dst: str
     label: str = ""
     status: str = "confirmed"
-    kind: str = "runtime"  # "runtime", "shared_code" or "sequence" (job structure, no Edge)
+    # "runtime", "shared_code" or "sequence" (job structure, or a gitdiagram Scheduler
+    # "starts" line with status "structural"; no Edge)
+    kind: str = "runtime"
     evidence: List[Evidence] = field(default_factory=list)
     number: Optional[int] = None
     # the resolver edges drawn as this line (several when combined), for the links report
@@ -62,6 +72,8 @@ class ViewGraph:
     edges: List[VEdge]
     groups: List[VGroup]
     notes: List[str] = field(default_factory=list)
+    overview: str = ""  # gitdiagram: the paragraph drawn above the picture
+    repo_path: str = ""  # gitdiagram: the repo folder, relative to the workspace (Repo.path)
 
 
 class ScopeError(ValueError):
@@ -79,8 +91,12 @@ _RANK = {CONFIRMED: 0, PARTIAL: 1, LOOSE: 2}
 
 
 def combine_status(statuses: Iterable[str]) -> str:
-    """Confirmed if any is confirmed, else partial if any is partial, else loose."""
+    """Confirmed if any is confirmed, else partial if any is partial, else loose. Structural
+    statuses are ignored; only structural ones give structural."""
     s = set(statuses)
+    if s == {STRUCTURAL}:
+        return STRUCTURAL
+    s.discard(STRUCTURAL)
     if CONFIRMED in s:
         return CONFIRMED
     if PARTIAL in s:
@@ -89,7 +105,13 @@ def combine_status(statuses: Iterable[str]) -> str:
 
 
 def _least_certain(statuses: Iterable[str]) -> str:
-    return max(statuses, key=lambda x: _RANK.get(x, 2), default=CONFIRMED)
+    """The least certain status; structural ones are ignored (only structural ones give
+    structural)."""
+    sts = list(statuses)
+    rest = [x for x in sts if x != STRUCTURAL]
+    if sts and not rest:
+        return STRUCTURAL
+    return max(rest, key=lambda x: _RANK.get(x, 2), default=CONFIRMED)
 
 
 _SQL_OPS = ("select", "insert", "update", "delete", "fetch", "sql")

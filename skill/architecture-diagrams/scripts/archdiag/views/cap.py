@@ -79,7 +79,8 @@ def cap(ctx: _Ctx, v: ViewGraph) -> None:
                                ", ".join(m.label for m in ms[:3]) + (", …" if len(ms) > 3 else ""),
                                kind, k[0], _least_certain(sts) if sts else None,
                                row=rows.pop() if len(rows) == 1 else None,
-                               underlying=[u for m in ms for u in m.underlying]))
+                               underlying=[u for m in ms for u in m.underlying],
+                               members=[x for m in ms for x in m.members]))
     remap = {nid: more_id(k) for nid, k in fold.items()}
     new_by_id = {n.id: n for n in new_nodes}
     order: List[tuple] = []
@@ -128,6 +129,8 @@ def _too_big_note(ctx: _Ctx, v: ViewGraph) -> str:
             else grouped
     if v.level in ("flow_job", "flow_tx"):
         return grouped
+    if v.level == "gitdiagram":
+        return "%s; try fewer groups in gitdiagram-%s.json" % (grouped, v.scope)
     counts: Dict[str, int] = {}
     for nid, a in ctx.app.items():
         if a and not nid.startswith(("missing:", "utility:")):
