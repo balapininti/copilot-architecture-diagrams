@@ -38,6 +38,7 @@ SINK_REACH = 3         # layered: how many layers past its feeder a loose end ma
 COMPACT_GAIN = 0.8     # layered: rank rows are used when this much shorter than straight ones
 SWEEPS = 4             # down/up barycenter sweeps
 JOB_ROW_GAP = 60.0     # job_rows: vertical gap between the above row, lane and below row
+JOB_CROSS_ROOM = 40.0  # job_rows: added to both row gaps when two labeled lines cross there
 JOB_SPREAD_GAP = 30.0  # job_rows: least gap between two boxes in the above/below row
 JOB_DETOUR = 30.0      # job_rows: how far above the lane a step-skipping line runs
 JOB_DETOUR_STEP = 14.0 # job_rows: gap between two step-skipping lines that run side by side
@@ -1472,8 +1473,39 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
 
 # ------------------------------------------------------------------ job rows
 
-def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
+def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]], extra: float = 0.0
              ) -> Tuple[Dict[str, Box], List[List[Point]]]:
+    """A lane of steps, the data they read above, what they write below. When two labeled
+    lines between the lane and a row cross, that row moves ``JOB_CROSS_ROOM`` further off
+    the lane so each label can sit clear of the crossing (E6)."""
+    boxes, routes = _job_rows(view, sizes, extra)
+    if extra == 0.0 and _labeled_row_crossings(view, boxes, routes):
+        return _job_rows(view, sizes, JOB_CROSS_ROOM)
+    return boxes, routes
+
+
+def _labeled_row_crossings(view: ViewGraph, boxes: Dict[str, Box],
+                           routes: List[List[Point]]) -> bool:
+    """Do two labeled straight lines between the lane and a row cross?"""
+    rows = {n.id: n.row for n in view.nodes}
+    lines = [r for e, r in zip(view.edges, routes)
+             if e.label and len(r) == 2 and e.src != e.dst
+             and {rows.get(e.src), rows.get(e.dst)} & {"above", "below"}
+             and "lane" in (rows.get(e.src), rows.get(e.dst))]
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            (p1, p2), (p3, p4) = lines[i], lines[j]
+
+            def orient(a: Point, b: Point, c: Point) -> float:
+                return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            if orient(p3, p4, p1) * orient(p3, p4, p2) < 0 \
+                    and orient(p1, p2, p3) * orient(p1, p2, p4) < 0:
+                return True
+    return False
+
+
+def _job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]], extra: float
+              ) -> Tuple[Dict[str, Box], List[List[Point]]]:
     lane = [n.id for n in view.nodes if n.row == "lane"]
     above = [n.id for n in view.nodes if n.row == "above"]
     below = [n.id for n in view.nodes if n.row == "below"]
@@ -1513,7 +1545,8 @@ def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
         taken[lv].append((lo, hi))
         level[k] = lv
     detour_room = JOB_DETOUR + JOB_DETOUR_STEP * (len(taken) - 1) + JOB_DETOUR if taken else 0.0
-    lane_cy = above_h + (max(JOB_ROW_GAP, detour_room) if above else detour_room) + lane_h / 2
+    lane_cy = above_h + (max(JOB_ROW_GAP + extra, detour_room) if above else detour_room) \
+        + lane_h / 2
     boxes: Dict[str, Box] = {}
     lane_cx: Dict[str, float] = {}
     for k, i in enumerate(lane):
@@ -1558,7 +1591,7 @@ def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             boxes[i] = Box(cx - w / 2, cy - h / 2, w, h)
 
     place_row(above, above_h / 2)
-    place_row(below, lane_cy + lane_h / 2 + JOB_ROW_GAP + band_h(below) / 2)
+    place_row(below, lane_cy + lane_h / 2 + JOB_ROW_GAP + extra + band_h(below) / 2)
     # Nodes in no row (scheduler, job): a column left of the lane, the last one level
     # with the lane, the rest stacked upward.
     other.sort(key=lambda i: any(m in lane_cx for m in nbrs[i]))

@@ -173,6 +173,7 @@ LINE_PAD = 1.5      # a pill keeps this far off any other line
 KEY_R = 8.0         # a marker's radius (circle for a step, rounded square otherwise)
 KEY_SIZE, KEY_LINE = 11.0, 20.0
 MARK_STEP = 1.0     # markers are tried every this many px along their line
+PILL_CLEAR = 8.0    # a pill keeps this far off other lines where its line allows
 MARK_CLEAR = 5.0    # a marker keeps this far off other lines where its line allows
 
 
@@ -305,15 +306,21 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
             probe = Pill(i, s, (0.0, 0.0), styles[i], max_w, e.number)
             tries += [(max_w, at) for at in (_candidates(route, probe, i, routes)
                                              or [L.label_at[i]])]
+        best_near = 0.0
         for max_w, at in tries:
             p = Pill(i, s, at, styles[i], max_w, e.number)
             hits = float(lines.others(_line_rect(p), i))
             if best_cost is not None and hits > best_cost[1]:
                 continue
             cost = score(p)
-            if best_cost is None or (cost[1], cost[0]) < (best_cost[1], best_cost[0]):
-                best, best_cost = p, cost
-            if cost == (0.0, 0.0):
+            # (E6) then a spot PILL_CLEAR px off every other line: a pill at a crossing
+            # could be read as either line's
+            near = float(lines.others((p.x - PILL_CLEAR, p.y - PILL_CLEAR,
+                                       p.w + 2 * PILL_CLEAR, p.h + 2 * PILL_CLEAR), i))
+            if best_cost is None or (cost[1], cost[0], near) < \
+                    (best_cost[1], best_cost[0], best_near):
+                best, best_cost, best_near = p, cost, near
+            if cost == (0.0, 0.0) and near == 0.0:
                 break
         if best_cost != (0.0, 0.0) and len(route) >= 2:
             # nowhere free: a marker on a free stretch of the line, the label in the key

@@ -183,3 +183,36 @@ def test_a_line_free_pill_beats_a_marker_that_touches_a_line():
     assert P.prefer_marker(pill=(0.0, 2.0), marker=(0.0, 0.0))
     assert P.prefer_marker(pill=(120.0, 0.0), marker=(10.0, 0.0))
     assert not P.prefer_marker(pill=(10.0, 0.0), marker=(120.0, 0.0))
+
+
+def _crossings_of(i, routes):
+    """Points where line i crosses another line: (point, other line)."""
+    out = []
+    for j, r in enumerate(routes):
+        if j == i:
+            continue
+        for p1, p2 in zip(routes[i], routes[i][1:]):
+            for p3, p4 in zip(r, r[1:]):
+                d = (p2[0] - p1[0]) * (p4[1] - p3[1]) - (p2[1] - p1[1]) * (p4[0] - p3[0])
+                if abs(d) < 1e-9:
+                    continue
+                t = ((p3[0] - p1[0]) * (p4[1] - p3[1]) - (p3[1] - p1[1]) * (p4[0] - p3[0])) / d
+                u = ((p3[0] - p1[0]) * (p2[1] - p1[1]) - (p3[1] - p1[1]) * (p2[0] - p1[0])) / d
+                if 0 < t < 1 and 0 < u < 1:
+                    out.append(((p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1])), j))
+    return out
+
+
+def test_job_flow_pills_keep_off_crossings():
+    """E6: on the CLMD100 job flow no pill sits at a crossing of its line with another
+    (within 8px), where "write" and "read (0)" under CLMB300/IEBGENER could be read as
+    either line's: the row moves further off the lane and the pill away from the X."""
+    v = fixture_view("flow_job", "CLMD100")
+    for mod in (style_a, style_b, style_c, style_d):
+        routes, pills = _placed(mod, v)
+        for p in pills:
+            if p.marker:
+                continue
+            for (x, y), j in _crossings_of(p.i, routes):
+                assert not (p.x - 8 < x < p.x + p.w + 8 and p.y - 8 < y < p.y + p.h + 8), \
+                    (mod.__name__, v.edges[p.i].label, v.edges[j].label)
