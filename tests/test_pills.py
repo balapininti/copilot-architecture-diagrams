@@ -171,3 +171,15 @@ def test_markers_keep_clear_of_other_lines():
                 gap = min([_rect_gap(a, b, rect) for j, r in enumerate(routes) if j != p.i
                            for a, b in zip(r, r[1:])] or [99.0])
                 assert gap >= 4.0, (level, mod.__name__, v.edges[p.i].label, gap)
+
+
+def test_a_line_free_pill_beats_a_marker_that_touches_a_line():
+    """E4: the marker replaces the pill only on fewer other-line hits, or on equal (zero)
+    hits and less box overlap: a marker touching a line never beats a line-free pill
+    that overlaps a box more."""
+    # costs are (box/end overlap, other-line hits)
+    assert not P.prefer_marker(pill=(120.0, 0.0), marker=(0.0, 1.0))
+    assert P.prefer_marker(pill=(0.0, 1.0), marker=(500.0, 1.0))  # a pill on a line: never
+    assert P.prefer_marker(pill=(0.0, 2.0), marker=(0.0, 0.0))
+    assert P.prefer_marker(pill=(120.0, 0.0), marker=(10.0, 0.0))
+    assert not P.prefer_marker(pill=(10.0, 0.0), marker=(120.0, 0.0))

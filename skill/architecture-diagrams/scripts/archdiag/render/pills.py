@@ -245,6 +245,16 @@ def _line_rect(p: "Pill") -> Rect:
     return (p.x - LINE_PAD, p.y - LINE_PAD, p.w + 2 * LINE_PAD, p.h + 2 * LINE_PAD)
 
 
+def prefer_marker(pill: Tuple[float, float], marker: Tuple[float, float]) -> bool:
+    """Does a marker replace the best pill? Costs are (box/end overlap, other-line hits).
+    A pill over another line is never kept; otherwise line hits are compared first, so a
+    marker touching a line never beats a line-free pill, and on equal (zero) hits the
+    one covering less wins (E4)."""
+    if pill[1] > 0:
+        return True
+    return (marker[1], marker[0]) < (pill[1], pill[0])
+
+
 def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                 routes: List[List[Tuple[float, float]]],
                 edge_text: Callable[[object], str],
@@ -328,7 +338,7 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                 if cost == (0.0, 0.0, 0.0):
                     break
             # a pill over another line is never kept: the marker is, crowded or not
-            if mark_best is not None and (best_cost[1] > 0 or mark_cost[0] < best_cost[0]):
+            if mark_best is not None and prefer_marker(best_cost, mark_cost[:2]):
                 best = mark_best
         pills.append(best)
         obstacles.append((best.x, best.y, best.w, best.h))
