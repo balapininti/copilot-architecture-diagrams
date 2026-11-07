@@ -598,3 +598,19 @@ def test_group_box_shows_a_fifth_file_rather_than_one_more():
     n = node(view_of(gd, r), "grp:All")
     assert n.detail_lines[:5] == ["F00.cbl", "F01.cbl", "F02.cbl", "F03.cbl", "F04.cbl"]
     assert not any("more" in x for x in n.detail_lines)
+
+
+def test_not_yet_grouped_shows_its_links_inside_line():
+    a, b, c = prog("A", "u/A.cbl"), prog("B", "u/B.cbl"), prog("C", "u/C.cbl")
+    r = synthetic([a, b, c], [Edge(a.id, "call", b.id, CONFIRMED, None, [_ev("r1", "u/A.cbl", 3)]),
+                              Edge(a.id, "call", c.id, PARTIAL, "symbol", [_ev("r1", "u/A.cbl", 4)])],
+                  [("u/A.cbl", "cobol"), ("u/B.cbl", "cobol"), ("u/C.cbl", "cobol"),
+                   ("g/G.cbl", "cobol")])
+    v = view_of(GitDiagram("r1", "", [GitGroup("G", "", ["g/"])], [], [], True, "ok"), r)
+    u = node(v, "grp:?")
+    assert u.detail_lines[-1] == "+2 links (1 partly known)"
+    assert u.muted == 1
+    assert u.detail_lines[:-1] == ["A.cbl", "B.cbl", "C.cbl"]
+    from archdiag.render import style_a, style_b, style_c, style_d
+    for mod in (style_a, style_b, style_c, style_d):
+        assert "+2 links (1 partly known)" in mod.render(v)["svg"], mod.__name__

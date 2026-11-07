@@ -501,11 +501,12 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         under += other_edges(res_lines.get(UNGROUPED, []))
         label = "Not yet grouped · %d file%s" % (len(paths), _s(len(paths))) if paths \
             else "Not yet grouped"
+        summary = inside_summary(UNGROUPED)
         ungrouped = VNode(UNGROUPED, label, "", "group", None, None,
-                          _file_lines(paths, "", MAX_UNGROUPED), underlying=under,
+                          _file_lines(paths, "", MAX_UNGROUPED) + summary, underlying=under,
                           members=list(paths), link=_folder_link(paths),
                           info=more + res_detail(UNGROUPED) + temp_info.get(UNGROUPED, []),
-                          role="ungrouped")
+                          role="ungrouped", muted=len(summary))
         groups.append(ungrouped)
         if paths:
             notes.append("%d file%s not yet grouped" % (len(paths), _s(len(paths))))
