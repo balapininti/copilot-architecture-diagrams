@@ -139,15 +139,12 @@ def test_sql_forms():
 
 
 def test_literal_continuation():
-    text = ("       PROGRAM-ID. P1.\n"
-            "           CALL 'ABCD" + " " * 52 + "\n"
-            "      -    'EFGH'.\n")
-    text = text.replace("'ABCD" + " " * 52, ("           CALL 'ABCD").ljust(72)[11:], 1)
-    lines = ["       PROGRAM-ID. P1.", ("           CALL 'ABCD").ljust(72)[:-0 or None],
+    lines = ["       PROGRAM-ID. P1.",
+             ("           CALL 'ABCD").ljust(72),
              "      -    'EFGH'."]
-    lines[1] = ("           CALL 'ABCD" + "X" * 0).ljust(72)
     _, refs = scan("\n".join(lines) + "\n")
-    assert refs[0].target_name.startswith("ABCD") and refs[0].target_name.endswith("EFGH")
+    # the literal runs to column 72 (65 characters from column 8), then continues
+    assert [r.target_name for r in refs] == ["ABCD" + " " * 51 + "EFGH"]
 
 
 def test_mq_unresolved_and_cics_variable_with_value():
@@ -160,3 +157,90 @@ def test_mq_unresolved_and_cics_variable_with_value():
     assert q.target_name is None and q.reason == "queue name not found in program"
     t = [r for r in refs if r.op == "start"][0]
     assert t.target_name is None and t.candidates == ["TRN1"]
+
+
+def _q(body, data=""):
+    text = ("       PROGRAM-ID. P1.\n" + data + "       PROCEDURE DIVISION.\n"
+            "       0000-MAIN.\n" + body)
+    _, refs = scan(text)
+    return [r for r in refs if r.target_kind == "queue"]
+
+
+def test_mq_if_else_gives_both_candidates():
+    q = _q("           IF A\n               MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "           ELSE\n               MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           END-IF\n           CALL 'MQPUT' USING HCONN HOBJ.\n")[0]
+    assert q.target_name is None and q.candidates == ["Q.B", "Q.A"] or q.candidates == ["Q.A", "Q.B"]
+    assert q.reason.startswith("queue name depends on run-time path: ")
+
+
+def test_mq_evaluate_and_other_paragraph():
+    q = _q("           EVALUATE X WHEN 1 MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
+           "                     WHEN OTHER MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           END-EVALUATE\n           CALL 'MQGET' USING HCONN HOBJ.\n")[0]
+    assert q.target_name is None and sorted(q.candidates) == ["Q.A", "Q.B"]
+    q = _q("           PERFORM 1000-A\n           PERFORM 2000-B\n           GOBACK.\n"
+           "       1000-A.\n           MOVE 'Q.A' TO MQOD-OBJECTNAME.\n"
+           "       2000-B.\n           MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ.\n")[0]
+    assert q.target_name is None and sorted(q.candidates) == ["Q.A", "Q.B"]
+
+
+def test_mq_unconditional_move_overrides_earlier():
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n           MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ.\n")[0]
+    assert q.target_name == "Q.B"
+
+
+def test_mq_value_overwritten_at_run_time():
+    q = _q("           MOVE MQMD-REPLYTOQ TO WS-RSPQ\n           MOVE WS-RSPQ TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ.\n",
+           "       01  WS-RSPQ PIC X(48) VALUE 'CLM.RSP'.\n")[0]
+    assert q.target_name is None and q.candidates == ["CLM.RSP"]
+    assert q.reason == "queue name set at run time (WS-RSPQ)"
+    q = _q("           STRING 'A' 'B' INTO WS-RSPQ\n           MOVE WS-RSPQ TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQPUT' USING HCONN HOBJ.\n",
+           "       01  WS-RSPQ PIC X(48) VALUE 'CLM.RSP'.\n")[0]
+    assert q.target_name is None and "run time" in q.reason
+
+
+def test_cics_dataset_synonym():
+    _, refs = scan("       PROGRAM-ID. P1.\n           EXEC CICS WRITE DATASET('CLMLOG') FROM(X) END-EXEC.\n")
+    assert [(r.op, r.target_name, r.attrs) for r in refs] == [("cics_file", "CLMLOG", {"io": "write"})]
+
+
+def test_sort_using_giving_file_modes():
+    text = ("       PROGRAM-ID. P1.\n"
+            "           SELECT F1 ASSIGN TO DDIN.\n           SELECT F2 ASSIGN TO DDOUT.\n"
+            "           SELECT SW ASSIGN TO SORTWK.\n"
+            "           SORT SW ON ASCENDING KEY K USING F1 GIVING F2.\n")
+    nodes, _ = scan(text)
+    assert nodes[0].attrs["files"] == {"DDIN": "input", "DDOUT": "output"}
+
+
+def test_system_names_are_flagged_not_dropped():
+    text = ("       PROGRAM-ID. P1.\n           COPY SQLCA.\n           COPY MYCPY.\n"
+            "           EXEC SQL INCLUDE SQLDA END-EXEC.\n"
+            "           CALL 'DSNTIAR' USING X.\n           CALL 'CEE3ABD'.\n"
+            "           CALL 'MQOPEN' USING A.\n           CALL 'REALPGM'.\n")
+    _, refs = scan(text)
+    flags = {r.target_name: r.attrs.get("system", False) for r in refs}
+    assert flags == {"SQLCA": True, "MYCPY": False, "SQLDA": True, "DSNTIAR": True,
+                     "CEE3ABD": True, "MQOPEN": True, "REALPGM": False}
+
+
+def test_format_directive_and_alphanumeric_sequence_area():
+    _, refs = scan(">>SOURCE FORMAT IS FREE\n      * CALL 'X'\nPROGRAM-ID. P1.\n    CALL 'ABC'.\n")
+    assert [r.target_name for r in refs] == ["X", "ABC"]  # '*' at col 7 is not a comment in free format
+    line = "PRG001 " + "    CALL 'ABC'".ljust(65) + "ZZZ"
+    _, refs = scan("PRG000 PROGRAM-ID. P1.\n" + line + "\nPRG002*    CALL 'NO'\n")
+    assert [r.target_name for r in refs] == ["ABC"]
+
+
+def test_value_items_only_from_data_division():
+    text = ("       PROGRAM-ID. P1.\n       DATA DIVISION.\n"
+            "       01  WS-P PIC X(8) VALUE 'REAL'.\n"
+            "       PROCEDURE DIVISION.\n           MOVE 5 TO WS-X\n           CALL WS-Q\n"
+            "           IF A 01 WS-Q VALUE 'FAKE'.\n")
+    _, refs = scan(text)
+    assert refs[0].candidates == []

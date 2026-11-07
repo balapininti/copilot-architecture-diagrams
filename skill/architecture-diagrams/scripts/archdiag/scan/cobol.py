@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..model import Evidence, Node, Ref
 from . import ScanContext
@@ -32,6 +32,9 @@ def _is_fixed(lines: List[str]) -> bool:
             fixed += 1
         elif head.strip().isdigit():
             fixed += 1
+        elif (re.fullmatch(r"[A-Za-z0-9]*\d[A-Za-z0-9]*", head) and len(ln) > 6
+              and ln[6] in " */-dD"):
+            fixed += 1  # alphanumeric sequence area such as PRG001
         elif not head.strip():
             if not ln[6:7].strip():
                 blank7 += 1
@@ -62,6 +65,11 @@ def _cut(s: str, delim: Optional[str]) -> Tuple[str, Optional[str]]:
     return s.rstrip(), delim
 
 
+_FORMAT_DIRECTIVE = re.compile(
+    r"^\s*(?:>>\s*SOURCE\s+FORMAT(?:\s+IS)?\s+(FREE|FIXED)\b"
+    r"|\$SET\s+SOURCEFORMAT\s*\(?\s*[\"'](FREE|FIXED)[\"'])", re.I)
+
+
 class _Piece:
     __slots__ = ("line", "text", "glue", "delim")
 
@@ -82,6 +90,10 @@ class _Src:
         self.line_text: Dict[int, str] = {}
         for no, raw in enumerate(raw_lines, 1):
             raw = raw.rstrip("\r")
+            fm = _FORMAT_DIRECTIVE.match(raw)
+            if fm:
+                fixed = (fm.group(1) or fm.group(2)).upper() == "FIXED"
+                continue
             if fixed:
                 ind = raw[6] if len(raw) > 6 else " "
                 if ind in "*/":
@@ -193,6 +205,22 @@ _MOVE = re.compile(
 _IDENT = re.compile(r"\s*([A-Za-z][\w-]*)")
 _QUAL = re.compile(r"\s+(?:OF|IN)\s+[A-Za-z][\w-]*", _I)
 _SUBSCR = re.compile(r"\s*\([^)]*\)")
+_SORT = re.compile(_NB + r"(?:SORT|MERGE)\s+[A-Za-z][\w-]*", _I)
+_PARA = re.compile(r"(?m)^[ ]*([A-Za-z0-9][\w-]*)[ ]*\.[ ]*$")
+_IF = re.compile(_NB + r"IF\b", _I)
+_END_IF = re.compile(_NB + r"END-IF\b", _I)
+_EVAL = re.compile(_NB + r"EVALUATE\b", _I)
+_END_EVAL = re.compile(_NB + r"END-EVALUATE\b", _I)
+_FIGURATIVE = frozenset("""SPACE SPACES ZERO ZEROS ZEROES LOW-VALUE LOW-VALUES HIGH-VALUE
+HIGH-VALUES QUOTE QUOTES NULL NULLS""".split())
+_STRING_INTO = re.compile(_NB + r"STRING\b[^.]{0,600}?\bINTO\s+([A-Za-z][\w-]*)", _I)
+_UNSTRING_INTO = re.compile(_NB + r"UNSTRING\b[^.]{0,600}?\bINTO\s+([^.]{0,300})", _I)
+_READ_INTO = re.compile(_NB + r"READ\s+[A-Za-z][\w-]*[^.]{0,300}?\bINTO\s+([A-Za-z][\w-]*)", _I)
+_ACCEPT = re.compile(_NB + r"ACCEPT\s+([A-Za-z][\w-]*)", _I)
+_DATA_DIV = re.compile(_NB + r"DATA\s+DIVISION\b", _I)
+_PROC_DIV = re.compile(_NB + r"PROCEDURE\s+DIVISION\b", _I)
+_LINKAGE = re.compile(_NB + r"LINKAGE\s+SECTION\b", _I)
+_LEVEL_ITEM = re.compile(_NB + r"\d{1,2}\s+([A-Za-z][\w-]*)")
 _ARG_TOK = re.compile(r"(['\"])_*\1|[A-Za-z][\w-]*|\d+|\.")
 
 MQ_PUTGET = {"MQPUT": "put", "MQPUT1": "put", "MQGET": "get"}
@@ -221,6 +249,22 @@ _DUMMY_TABLES = frozenset(["SYSIBM.SYSDUMMY1", "SYSDUMMY1"])
 
 _CICS_READ = frozenset("READ STARTBR READNEXT READPREV RESETBR ENDBR".split())
 _CICS_WRITE = frozenset("WRITE REWRITE DELETE".split())
+
+
+IBM_COPYBOOKS = frozenset("""DFHAID DFHBMSCA DFHEIBLK DFHCOMMAREA SQLCA SQLDA CMQV CMQODV
+CMQMDV CMQPMOV CMQGMOV""".split())
+_SYSTEM_CALLS = frozenset("DSNTIAR DSNTIAC DSNHLI CBLTDLI AIBTDLI".split())
+
+
+def _is_system(op: str, name: str) -> bool:
+    """IBM-supplied copybooks and run-time routines: kept, but flagged for the resolver."""
+    n = name.upper()
+    if op == "copy":
+        return n in IBM_COPYBOOKS
+    if op == "call":
+        return (n in _SYSTEM_CALLS or n in MQ_API or n in MQ_PUTGET
+                or n.startswith(("CEE", "ILBO", "IGZ")))
+    return False
 
 
 def _unq(text: str) -> str:
@@ -278,8 +322,11 @@ class _Scan:
     def add(self, pid: str, op: str, kind: str, name: Optional[str], off: int,
             reason: Optional[str] = None, candidates: Optional[List[str]] = None,
             attrs: Optional[dict] = None) -> None:
+        at = dict(attrs or {})
+        if name and _is_system(op, name):
+            at["system"] = True
         self.refs.append(Ref(pid, op, kind, name, self.ev(off), reason,
-                             list(candidates or []), dict(attrs or {})))
+                             list(candidates or []), at))
 
     # -- program discovery ----------------------------------------------
     def programs(self, stem: str) -> List[Tuple[str, int, int, int]]:
@@ -302,7 +349,12 @@ class _Scan:
         s = self.src
         cm = self.cm
         values: Dict[str, List[str]] = {}
-        for m in _VALUE_ITEM.finditer(cm, a, b):
+        pm = _PROC_DIV.search(cm, a, b)
+        pstart = pm.start() if pm else b
+        dm = _DATA_DIV.search(cm, a, pstart)
+        dstart = dm.start() if dm else a
+        other_writes = self.runtime_writes(a, b, dstart, pstart)
+        for m in _VALUE_ITEM.finditer(cm, dstart, pstart):
             if m.group(1) == "88":
                 continue
             v = self.lit(m.start(4), m.end(4)).strip()
@@ -320,10 +372,9 @@ class _Scan:
         for m in _CALL.finditer(cm, a, b):
             if m.group(2):
                 name = self.lit(m.start(1), m.end(1)).strip().upper()
+                self.add(pid, "call", "program", name, m.start(1))
                 if name in MQ_PUTGET or name in MQ_API:
                     mq_calls.append((m.start(), name, m.end()))
-                    continue
-                self.add(pid, "call", "program", name, m.start(1))
             else:
                 var = m.group(1)
                 self.variable(pid, "call", "program", var, m.start(1),
@@ -331,7 +382,7 @@ class _Scan:
 
         # MOVEs (literal and identifier sources) for MQ queue resolution
         moves = self.collect_moves(a, b)
-        self.mq(pid, mq_calls, moves, values)
+        self.mq(pid, mq_calls, moves, values, other_writes, a, b)
 
         # file modes
         files = self.file_modes(a, b)
@@ -345,6 +396,27 @@ class _Scan:
             else:
                 self.cics(pid, bs, be, values)
         return files
+
+    def runtime_writes(self, a: int, b: int, dstart: int, pstart: int) -> Set[str]:
+        """Data items that run-time code can overwrite with something unknown."""
+        cm = self.cm
+        out: Set[str] = set()
+        lm = _LINKAGE.search(cm, dstart, pstart)
+        if lm:
+            for m in _LEVEL_ITEM.finditer(cm, lm.end(), pstart):
+                out.add(m.group(1).upper())
+        for rx in (_STRING_INTO, _READ_INTO, _ACCEPT):
+            for m in rx.finditer(cm, pstart, b):
+                out.add(m.group(1).upper())
+        for m in _UNSTRING_INTO.finditer(cm, pstart, b):
+            for t in re.finditer(r"[A-Za-z][\w-]*", re.sub(r"\([^)]*\)", " ", m.group(1))):
+                w = t.group(0).upper()
+                if w in _VERBS or w in ("DELIMITER", "COUNT", "IN", "TALLYING", "POINTER", "WITH"):
+                    if w in _VERBS:
+                        break
+                    continue
+                out.add(w)
+        return out
 
     def variable(self, pid: str, op: str, kind: str, var: str, off: int, reason: str,
                  values: Dict[str, List[str]]) -> None:
@@ -378,6 +450,17 @@ class _Scan:
                 pos = t.end()
                 if self.cm[pos:pos + 1] == ".":
                     break
+        for m in _SORT.finditer(self.cm, a, b):
+            end = self.cm.find(".", m.end(), b)
+            seg = self.cm[m.end(): end if end >= 0 else b]
+            for kw, mode in (("USING", "input"), ("GIVING", "output")):
+                u = re.search(r"(?<![\w-])" + kw + r"\s+((?:[A-Za-z][\w-]*\s*)+)", seg, _I)
+                if not u:
+                    continue
+                for w in re.findall(r"[A-Za-z][\w-]*", u.group(1)):
+                    if w.upper() not in dd_of:
+                        break
+                    seen.setdefault(w.upper(), set()).add(mode)
         out: Dict[str, str] = {}
         for fname, modes in seen.items():
             if len(modes) == 1:
@@ -419,44 +502,81 @@ class _Scan:
 
     def mq(self, pid: str, calls: List[Tuple[int, str, int]],
            moves: Dict[str, List[Tuple[int, str, str]]],
-           values: Dict[str, List[str]]) -> None:
+           values: Dict[str, List[str]], other_writes: Set[str], a: int, b: int) -> None:
         if not any(n in MQ_PUTGET for _, n, _ in calls):
             return
-        objmoves = sorted(
-            (off, kind, srcv)
-            for tgt, lst in moves.items() if tgt.endswith("OBJECTNAME")
-            for off, kind, srcv in lst)
-        obj_values: List[str] = []
+        cm = self.cm
+        OBJ = "*OBJECTNAME*"
+        mv = {k: list(v) for k, v in moves.items()}
+        mv[OBJ] = sorted(x for tgt, lst in moves.items() if tgt.endswith("OBJECTNAME")
+                         for x in lst)
+        vals = dict(values)
+        vals[OBJ] = []
         for k, v in values.items():
             if k.endswith("OBJECTNAME"):
-                obj_values.extend(x for x in v if x not in obj_values)
+                vals[OBJ].extend(x for x in v if x not in vals[OBJ])
+        obj_written = sorted(w for w in other_writes if w.endswith("OBJECTNAME"))
+        pstarts = [m.start() for m in _PARA.finditer(cm, a, b)
+                   if m.group(1).upper() not in _VERBS]
 
-        def source_names(off: int, kind: str, srcv: str) -> List[str]:
-            if kind == "lit":
-                return [srcv]
-            prior = [x for x in moves.get(srcv, []) if x[1] == "lit" and x[0] < off]
-            if prior:
-                return [prior[-1][2]]
-            if values.get(srcv):
-                return list(values[srcv])
-            out: List[str] = []
-            for x in moves.get(srcv, []):
-                if x[1] == "lit" and x[2] not in out:
-                    out.append(x[2])
-            return out
+        def para(off: int) -> int:
+            n = 0
+            for p in pstarts:
+                if p <= off:
+                    n += 1
+            return n
 
-        def resolve_at(off: int) -> List[str]:
-            prior = [m for m in objmoves if m[0] < off]
-            if prior:
-                return source_names(*prior[-1])
-            if obj_values:
-                return list(obj_values)
+        def conditional(off: int) -> bool:
+            start = cm.rfind(".", a, off) + 1
+            seg = cm[max(start, a):off]
+            if len(_IF.findall(seg)) > len(_END_IF.findall(seg)):
+                return True
+            return len(_EVAL.findall(seg)) > len(_END_EVAL.findall(seg))
+
+        def reaching(offs: List[int], at: int) -> Tuple[List[int], bool]:
+            """Writes that can reach 'at'; second value tells whether an earlier
+            (initial) value is certainly overwritten."""
+            prior = [o for o in offs if o < at]
+            if not prior or any(para(o) != para(at) for o in prior):
+                return list(offs), False
+            out: List[int] = []
+            for o in reversed(prior):
+                out.append(o)
+                if not conditional(o):
+                    return out, True
+            return out, False
+
+        def var_names(var: str, at: int, depth: int) -> Tuple[List[str], Optional[str]]:
             names: List[str] = []
-            for m in objmoves:
-                for n in source_names(*m):
+            runtime: Optional[str] = None
+            if var == OBJ:
+                if obj_written:
+                    runtime = obj_written[0]
+            elif var in other_writes:
+                runtime = var
+            entries = {m[0]: m for m in mv.get(var, [])}
+            reach, complete = reaching(sorted(entries), at)
+            for o in reach:
+                _, kind, srcv = entries[o]
+                if kind == "lit":
+                    cand, rt = [srcv], None
+                elif srcv in _FIGURATIVE:
+                    continue
+                elif depth < 4:
+                    cand, rt = var_names(srcv, o, depth + 1)
+                    if not cand and not rt:
+                        rt = var if var != OBJ else srcv
+                else:
+                    cand, rt = [], (var if var != OBJ else srcv)
+                for n in cand:
                     if n not in names:
                         names.append(n)
-            return names
+                runtime = runtime or rt
+            if not complete or runtime:
+                for n in vals.get(var, []):
+                    if n not in names:
+                        names.append(n)
+            return names, runtime
 
         def args_of(end: int) -> List[Optional[str]]:
             m = re.compile(r"\s+USING\s+", _I).match(self.cm, end)
@@ -485,27 +605,29 @@ class _Scan:
             op = MQ_PUTGET.get(name)
             if not op:
                 continue
-            names: List[str] = []
+            at_list = [off]
             if name != "MQPUT1":
                 ar = args_of(end)
                 hobj = ar[1] if len(ar) > 1 else None
                 mine = [o for o, h in opens if h and h == hobj]
                 if mine:
-                    prior = [o for o in mine if o < off]
-                    pick = [prior[-1]] if prior else mine
-                    for o in pick:
-                        for n in resolve_at(o):
-                            if n not in names:
-                                names.append(n)
-                else:
-                    names = resolve_at(off)
-            else:
-                names = resolve_at(off)
-            if len(names) == 1:
+                    at_list, _ = reaching(mine, off)
+            names: List[str] = []
+            runtime: Optional[str] = None
+            for at in at_list:
+                n, rt = var_names(OBJ, at, 0)
+                for x in n:
+                    if x not in names:
+                        names.append(x)
+                runtime = runtime or rt
+            if runtime:
+                self.add(pid, op, "queue", None, off,
+                         "queue name set at run time (%s)" % runtime, names)
+            elif len(names) == 1:
                 self.add(pid, op, "queue", names[0], off)
             elif names:
                 self.add(pid, op, "queue", None, off,
-                         "queue name has several possible values", names)
+                         "queue name depends on run-time path: " + ", ".join(names), names)
             else:
                 self.add(pid, op, "queue", None, off, "queue name not found in program")
 
@@ -692,7 +814,7 @@ class _Scan:
             emit("send_map", "map", "MAPSET", "SEND MAPSET", alt="MAP")
         elif cmd in _CICS_READ or cmd in _CICS_WRITE:
             emit("cics_file", "cicsfile", "FILE", cmd + " FILE",
-                 {"io": "read" if cmd in _CICS_READ else "write"})
+                 {"io": "read" if cmd in _CICS_READ else "write"}, alt="DATASET")
 
 
 def _ddname(operand: str) -> str:
