@@ -1028,6 +1028,19 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             left.append(n.id)
         else:
             right.append(n.id)
+    # a box that meets no member and hangs only off left-column boxes (a loose end fed by
+    # one) stands in the left column, right next to what it hangs off
+    for _ in range(len(right)):
+        moved = False
+        for i in list(right):
+            nb = {m for e in view.edges for m in (e.src, e.dst)
+                  if i in (e.src, e.dst) and m != i}
+            if nb and not (nb & member_ids) and nb <= set(left):
+                right.remove(i)
+                left.append(i)
+                moved = True
+        if not moved:
+            break
 
     # members' extent, with room for group padding and titles
     gx0 = min(b.x for b in mboxes.values()) - GROUP_PAD

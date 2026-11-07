@@ -253,3 +253,22 @@ def test_job_and_repomap_views_set_no_groups():
         v = fixture_view(level, scope)
         assert v.groups == [] and not any(n.group for n in v.nodes), level
         assert layout_for(v, lambda n: (100, 60)).groups == {}
+
+
+def test_context_anchors_a_loose_end_next_to_its_left_column_source():
+    """C11: a missing box fed only by a left-column box stands right next to that box in
+    its column, not at the bottom of the right column."""
+    v = app_with_neighbors()
+    v.nodes.append(VNode("missing:reader:X", "no reader found", kind="missing",
+                         status="loose"))
+    v.edges.append(VEdge("queue:CLM.REQ.LQ", "missing:reader:X", "no reader found",
+                         status="loose"))
+    L = layout_for(v, lambda n: (150, 80))
+    assert no_box_overlaps(L.boxes, margin=20)
+    _routes_on_borders(v, L)
+    src, miss = L.boxes["queue:CLM.REQ.LQ"], L.boxes["missing:reader:X"]
+    g = L.groups["app:claims-online"]
+    assert miss.x + miss.w < g.x  # the left column, with its source
+    col = sorted((b.y, k) for k, b in L.boxes.items() if b.x + b.w < g.x)
+    names = [k for _, k in col]
+    assert abs(names.index("missing:reader:X") - names.index("queue:CLM.REQ.LQ")) == 1
