@@ -4,10 +4,9 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 
 CONFIG_NAME = "archdiag.config.json"
-NOTICE = {"stderr": False}  # set by the CLI for machine-read commands (list)
 
 
 @dataclass
@@ -20,9 +19,10 @@ def _names(value: object) -> List[str]:
     return [str(x) for x in value] if isinstance(value, list) else []
 
 
-def load_config(out_dir: Path) -> Config:
+def load_config(out_dir: Path, notice: Optional[Callable[[str], None]] = None) -> Config:
     """archdiag.config.json from ``out_dir``. A missing file gives the defaults; one that is
-    unreadable, not JSON or not an object also gives the defaults, after one plain line."""
+    unreadable, not JSON or not an object also gives the defaults, after one plain line sent
+    to ``notice`` (default: stdout)."""
     path = Path(out_dir) / CONFIG_NAME
     if not path.is_file():
         return Config()
@@ -31,8 +31,7 @@ def load_config(out_dir: Path) -> Config:
     except (OSError, ValueError):
         data = None
     if not isinstance(data, dict):
-        print("archdiag.config.json is not valid JSON \u2014 using defaults",
-              file=sys.stderr if NOTICE["stderr"] else sys.stdout)
+        (notice or print)("archdiag.config.json is not valid JSON \u2014 using defaults")
         return Config()
     return Config(
         environment_qualifiers=_names(data.get("environment_qualifiers", [])),

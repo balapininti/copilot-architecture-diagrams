@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -447,3 +448,59 @@ def test_cache_saved_with_schema_2_is_rescanned(tmp_path, capsys):
     assert "rescanned" in cap.out + cap.err
     d = json.loads(links.read_text(encoding="utf-8"))
     assert d["inventory"]["schema_version"] == SCHEMA_VERSION == 3
+
+
+def test_notice_sink_is_explicit_not_module_global(capsys):
+    # D1: the order of earlier tests must not change where a notice goes
+    from archdiag import config as config_mod
+    assert not hasattr(config_mod, "NOTICE")
+    got = []
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "archdiag.config.json").write_text("{bad", encoding="utf-8")
+        config_mod.load_config(Path(d), notice=got.append)
+        assert len(got) == 1 and "not valid JSON" in got[0]
+        assert capsys.readouterr() == ("", "")
+        config_mod.load_config(Path(d))  # default sink: stdout
+        assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_list_errors_go_to_stderr_with_clean_stdout(tmp_path, capsys):
+    w = _estate(tmp_path)
+    assert main(["list", "--workspace", str(w), "--what", "nope"]) == 2
+    cap = capsys.readouterr()
+    assert cap.out == "" and "what" in cap.err
+    assert main(["list", "--workspace", str(tmp_path / "empty")]) == 2  # no --what
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err
+    (tmp_path / "empty").mkdir()
+    assert main(["list", "--workspace", str(tmp_path / "empty"), "--what", "jobs"]) == 3
+    cap = capsys.readouterr()
+    assert cap.out == "" and "No git repos" in cap.err
+    # other commands keep errors on stdout
+    assert main(["draw", "--workspace", str(w), "--level", "nope"]) == 2
+    cap = capsys.readouterr()
+    assert cap.err == "" and cap.out
+
+
+def test_walk_error_skip_path_drops_extended_prefix(tmp_path, monkeypatch):
+    # D2: on Windows the error's filename carries \\?\ ; the report must not
+    from archdiag import repos
+    walk_root = "\\\\?\\C:\\ws\\r"
+    monkeypatch.setattr(repos, "extended_path", lambda p: walk_root)
+
+    def fake_walk(top, onerror=None):
+        onerror(PermissionError(13, "Access is denied", walk_root + "\\locked\\sub"))
+        return iter(())
+
+    class FakeOs:  # os as seen from Windows, without touching the real os.name
+        name = "nt"
+        walk = staticmethod(fake_walk)
+
+        def __getattr__(self, n):
+            return getattr(os, n)
+    monkeypatch.setattr(repos, "os", FakeOs())
+    skipped = []
+    list(repos.iter_source_files(tmp_path / "r", (), skipped))
+    shown = str(skipped[0][0])
+    assert "?" not in shown and shown.replace("\\", "/").endswith("r/locked/sub")

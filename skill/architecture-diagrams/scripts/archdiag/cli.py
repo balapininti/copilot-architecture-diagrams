@@ -9,10 +9,9 @@ import re
 import sys
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import resolve as _resolve_pkg
-from . import config as _config_mod
 from .config import CONFIG_NAME, Config, load_config
 from .groups import Groups, load_groups
 from .model import CONFIRMED, LOOSE, PARTIAL, Inventory, Resolved
@@ -35,10 +34,12 @@ def resolve(inv: Inventory, config: Config) -> Resolved:
     return _resolve_pkg.resolve(inv, config)
 
 
-def _notice(message: str) -> None:
-    """A notice about what was done: stdout, except for `list`, whose stdout is read by
-    machines (Copilot) and must hold the listing only."""
-    print(message, file=sys.stderr if _config_mod.NOTICE["stderr"] else sys.stdout, flush=True)
+def _make_notice(to_stderr: bool) -> Callable[[str], None]:
+    """A sink for notices about what was done: stdout, except for `list`, whose stdout is
+    read by machines (Copilot) and must hold the listing only."""
+    def notice(message: str) -> None:
+        print(message, file=sys.stderr if to_stderr else sys.stdout, flush=True)
+    return notice
 
 
 class _Exit(Exception):
@@ -111,7 +112,8 @@ def _counts_line(inv: Inventory, r: Resolved) -> str:
     return line
 
 
-def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
+def _load_current(workspace: Path, out_dir: Path, config: Config,
+                  notice: Callable[[str], None]) -> Resolved:
     """The resolved links for the workspace as it is now: the cache when the repos have not
     changed, otherwise a fresh scan (stating so). The fingerprint inside links.json (its
     inventory) decides, so links from an older scan are never served."""
@@ -123,7 +125,7 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
         except (OSError, ValueError, KeyError, TypeError):
             cached = None
     if cached is not None and not cache_is_current(cached.inventory):
-        _notice("Saved scan was made by another archdiag version; rescanned.")
+        notice("Saved scan was made by another archdiag version; rescanned.")
     elif cached is not None:
         repos = discover_repos(workspace)
         if fingerprint(workspace, repos, config) == cached.inventory.fingerprint:
@@ -136,7 +138,7 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
             resolved = resolve(cached.inventory, config)  # settings changed: no rescan
             save_json(links_path, resolved)
             return resolved
-        _notice("Repos changed since last scan; rescanned.")
+        notice("Repos changed since last scan; rescanned.")
     else:
         print("No earlier scan found; scanning.", file=sys.stderr)
     inv, resolved = _scan_and_save(workspace, out_dir, config)
@@ -144,28 +146,28 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
     return resolved
 
 
-def _groups(out_dir: Path, r: Resolved) -> Groups:
+def _groups(out_dir: Path, r: Resolved, notice: Callable[[str], None]) -> Groups:
     g = load_groups(out_dir / "groups.json", r)
     for problem in g.problems:
-        _notice("groups.json: %s" % problem)
+        notice("groups.json: %s" % problem)
     return g
 
 
 # ------------------------------------------------------------------ commands
 
-def _cmd_scan(args, workspace: Path, out_dir: Path) -> int:
+def _cmd_scan(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     _check_workspace(workspace)
-    inv, resolved = _scan_and_save(workspace, out_dir, load_config(out_dir))
+    inv, resolved = _scan_and_save(workspace, out_dir, load_config(out_dir, notice))
     print("Scanned " + _counts_line(inv, resolved))
     _warn_unanalyzed(inv, out_dir / "inventory.json")
     print("Wrote %s and %s" % (out_dir / "inventory.json", out_dir / "links.json"))
     return 0
 
 
-def _cmd_summary(args, workspace: Path, out_dir: Path) -> int:
+def _cmd_summary(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     _check_workspace(workspace)
-    config = load_config(out_dir)
-    r = _load_current(workspace, out_dir, config)
+    config = load_config(out_dir, notice)
+    r = _load_current(workspace, out_dir, config, notice)
     text = build_summary(r, load_groups(out_dir / "groups.json", r), config)
     _write(out_dir / "summary.md", text)
     print(text, end="")
@@ -174,13 +176,13 @@ def _cmd_summary(args, workspace: Path, out_dir: Path) -> int:
     return 0
 
 
-def _cmd_list(args, workspace: Path, out_dir: Path) -> int:
+def _cmd_list(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     if args.what not in LISTINGS:
         raise _Exit(2, _did_you_mean(args.what, list(LISTINGS), "what", "list --what <one of "
                                      + ", ".join(LISTINGS) + ">"))
     _check_workspace(workspace)
-    r = _load_current(workspace, out_dir, load_config(out_dir))
-    items = list_items(r, _groups(out_dir, r), args.what)
+    r = _load_current(workspace, out_dir, load_config(out_dir, notice), notice)
+    items = list_items(r, _groups(out_dir, r, notice), args.what)
     for line in items:
         print(line)
     if not items:
@@ -188,10 +190,10 @@ def _cmd_list(args, workspace: Path, out_dir: Path) -> int:
     return 0
 
 
-def _cmd_init_config(args, workspace: Path, out_dir: Path) -> int:
+def _cmd_init_config(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     _check_workspace(workspace)
-    config = load_config(out_dir)
-    r = _load_current(workspace, out_dir, config)
+    config = load_config(out_dir, notice)
+    r = _load_current(workspace, out_dir, config, notice)
     found: List[str] = []
     for kind in ("dataset", "table"):
         for q1, q2, _n, _ex in _env_pairs(r, config, kind):
@@ -251,7 +253,7 @@ def _top_issues(view, r: Resolved) -> List[str]:
     return out
 
 
-def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
+def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     from .render import report, style_a, style_b, style_c, style_d
     from .views import ScopeError, build_view
     level = args.level
@@ -263,9 +265,9 @@ def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
         raise _Exit(2, _did_you_mean(style, list(STYLES) + ["all"], "style", "draw --style a|b|c|d|all"))
     styles = list(STYLES) if style == "all" else [style]
     _check_workspace(workspace)
-    config = load_config(out_dir)
-    r = _load_current(workspace, out_dir, config)
-    g = _groups(out_dir, r)
+    config = load_config(out_dir, notice)
+    r = _load_current(workspace, out_dir, config, notice)
+    g = _groups(out_dir, r, notice)
     scope = args.scope
     view_level = level
     if level == "flow":
@@ -299,7 +301,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
     _write(links, report.links_report(view, r))
     written.append(links)
     for note in view.notes:
-        _notice("Note: %s" % note)
+        notice("Note: %s" % note)
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:
         st[e.status] = st.get(e.status, 0) + 1
@@ -340,32 +342,34 @@ def _log_error(out_dir: Path) -> Optional[Path]:
 
 def main(argv: List[str]) -> int:
     _plain_output()
+    machine = argv[:1] == ["list"]  # list's stdout is read by machines: messages go to stderr
+    err = sys.stderr if machine else sys.stdout
     try:
         args = _build_parser().parse_args(argv)
         if not args.command:
             raise _Exit(2, "Choose a command: scan, summary, list, draw, init-config. "
                            "Example: python run.py scan --workspace <folder>")
     except _Exit as e:
-        print(e.message)
+        print(e.message, file=err)
         return e.code
     except SystemExit as e:  # --help
         return e.code if isinstance(e.code, int) else 0
-    _config_mod.NOTICE["stderr"] = args.command == "list"
+    notice = _make_notice(args.command == "list")
     workspace = Path(os.path.abspath(args.workspace))  # real lengths for the 260-char checks
     out_dir = workspace / OUT_DIR_NAME
     try:
-        return COMMANDS[args.command](args, workspace, out_dir)
+        return COMMANDS[args.command](args, workspace, out_dir, notice)
     except _Exit as e:
-        print(e.message)
+        print(e.message, file=err)
         return e.code
     except KeyboardInterrupt:
-        print("Stopped.")
+        print("Stopped.", file=err)
         return 1
     except Exception as e:  # never show a traceback
         msg = " ".join(str(e).split())
         log = _log_error(out_dir) if workspace.is_dir() else None
         if log is not None:
-            print("Something went wrong (%s: %s). Details: %s" % (type(e).__name__, msg, log))
+            print("Something went wrong (%s: %s). Details: %s" % (type(e).__name__, msg, log), file=err)
         else:
-            print("Something went wrong (%s: %s)." % (type(e).__name__, msg))
+            print("Something went wrong (%s: %s)." % (type(e).__name__, msg), file=err)
         return 1

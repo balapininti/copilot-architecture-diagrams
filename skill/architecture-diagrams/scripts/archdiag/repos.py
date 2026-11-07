@@ -91,7 +91,12 @@ def iter_source_files(root: Path, exclude_dirs: Iterable[str] = (),
 
     def walk_error(e: OSError) -> None:
         if skipped is not None:
-            skipped.append((Path(e.filename or str(root)),
+            bad = str(e.filename) if e.filename else walk_root
+            if bad.startswith(walk_root) and walk_root != str(root):
+                where = Path(root) / walk_suffix(bad, walk_root)  # no \\?\ prefix in reports
+            else:
+                where = Path(bad)
+            skipped.append((where,
                             "cannot read folder: %s" % (e.strerror or e)))
     # On Windows walk from the extended form of the root, so folders of 260+ characters can
     # be listed; yielded paths are rebuilt from ``root`` and never carry the prefix.
