@@ -69,7 +69,7 @@ def _parse_app(a: object, problems: List[str]) -> Optional[App]:
         return None
     name = a["name"]
     kind = a.get("kind", "application")
-    if kind not in KINDS:
+    if not isinstance(kind, str) or kind not in KINDS:
         problems.append("app %r: unknown kind %r, using application" % (name, kind))
         kind = "application"
     mem = a.get("members", [])

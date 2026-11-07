@@ -158,3 +158,65 @@ def test_large_input_keeps_tail_sections():
     s = build_summary(r, default_groups(r), Config())
     assert len(s.splitlines()) <= 120 and "truncated" not in s
     assert "and 55 more" in s and "## Links" in s and "Skipped files: 1" in s and "asm: 2" in s
+
+
+def _synth(nrepo=40, nproblem=15):
+    from archdiag.model import Inventory, Node, Repo, Resolved, Edge, Evidence
+    nodes, edges = {}, []
+    for i in range(nrepo):
+        nodes["program:P%d" % i] = Node("program:P%d" % i, "program", "P%d" % i, "r%d" % i,
+                                        [Evidence("r%d" % i, "a.cbl", 1, "")])
+    for q in ("A%d" % i for i in range(12)):
+        for t in ("T1", "T2"):
+            for kind in ("dataset", "table"):
+                nid = "%s:%s.%s" % (kind, q, t)
+                nodes[nid] = Node(nid, kind, "%s.%s" % (q, t), None, [])
+    for i in range(30):
+        edges.append(Edge("program:P%d" % i, "call", "missing:program:X%d" % i, "loose", "why", []))
+        edges.append(Edge("program:P%d" % i, "call", "program:P%d" % (i + 1), "partial", "why", []))
+    inv = Inventory("w", [Repo("r%d" % i, "r%d" % i) for i in range(nrepo)], nodes, [], "f",
+                    {"asm": 2, "pli": 1}, [{"repo": "r1", "path": "f%d" % i, "reason": "size"} for i in range(9)])
+    r = Resolved(inv, nodes, edges)
+    g = default_groups(r)
+    g.problems = ["problem %d" % i for i in range(nproblem)]
+    return r, g
+
+
+def test_maxed_sections_keep_tail():
+    r, g = _synth()
+    s = build_summary(r, g, Config())
+    lines = s.splitlines()
+    assert len(lines) <= 120 and "truncated" not in s
+    assert "## Not analyzed" in s and "asm: 2 files" in s and "Skipped files: 9" in s
+    assert "  - r1/f4 (size)" in s and "and " in s
+
+
+def test_cross_repo_and_guards():
+    from archdiag.model import Edge, Evidence
+    r, g = _synth(3, 0)
+    r.edges = [
+        Edge("program:P0", "call", "missing:program:X", "loose", "a", [Evidence("r0", "z", 1, "")]),
+        Edge("program:P0", "call", "program:P1", "loose", "b", [Evidence(None, None, 1, "")]),
+        Edge("program:P2", "call", "program:P1", "loose", "c", []),
+    ]
+    s = build_summary(r, g, Config())
+    loose = s.split("## Top loose links")[1].splitlines()
+    assert "-> program:P1: b" in loose[1] or "-> program:P1: c" in loose[1]
+    assert "missing:program:X" in loose[3]
+
+
+def test_gdg_generations_one_tail():
+    from archdiag.model import Inventory, Node, Resolved
+    names = ["TEST.A.G0001V00", "TEST.A.G0002V00", "PROD.A", "TEST.B", "PROD.B"]
+    nodes = {"dataset:" + n: Node("dataset:" + n, "dataset", n, None, []) for n in names}
+    r = Resolved(Inventory("w", [], nodes, [], "f", {}, []), nodes, [])
+    s = build_summary(r, default_groups(r), Config(environment_qualifiers=["dev"]))
+    assert "TEST ~ PROD (2 shared names" in s
+
+
+def test_case_insensitive_config_and_bad_kind(tmp_path):
+    r, _ = res(False)
+    s = build_summary(r, default_groups(r), Config(environment_qualifiers=["test", "prod"]))
+    assert "TEST ~ PROD" not in s
+    g = load_groups(write(tmp_path, {"apps": [{"name": "A", "kind": ["x"]}, {"name": "B", "kind": {}}]}), r)
+    assert [a.kind for a in g.apps][:2] == ["application", "application"] and len(g.problems) >= 2
