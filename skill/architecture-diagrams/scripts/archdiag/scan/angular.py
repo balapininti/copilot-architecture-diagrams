@@ -15,11 +15,15 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..model import Evidence, Node, Ref
 from . import ScanContext
-from .lexutil import Lines, args_at, make_ev, split_top, strip_code, unescape
+from .lexutil import NONLIT, Lines, args_at, make_ev, split_top, strip_code, unescape
 
 _DECORATED = re.compile(r"@(Component|Injectable)\b")
 _CLASS = re.compile(r"(?<![\w.])class\s+([A-Za-z_$][\w$]*)")
 _ENDS_HTTP = re.compile(r"^_?\w*(http|httpclient)$", re.I)
+
+
+def _stem(rel: str) -> str:
+    return re.sub(r"\.ts$", "", rel)
 
 
 def _decorated_classes(masked: str) -> List[Tuple[str, str, int]]:
@@ -39,9 +43,10 @@ def _decorated_classes(masked: str) -> List[Tuple[str, str, int]]:
 
 def collect_angular(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
     _, masked = strip_code(text, ts=True)
-    known = ctx.ts_classes.setdefault(repo, set())
+    known = ctx.ts_classes.setdefault(repo, {})
+    stem = _stem(rel)
     for _, name, _ in _decorated_classes(masked):
-        known.add(name)
+        known.setdefault(name, set()).add(stem)
 
 
 def _read_ts_expr(clean: str, i: int) -> str:
@@ -93,12 +98,64 @@ class _Src:
             if o >= 0 and ";" not in self.masked[m.end():o]:
                 self.classes.append((m.start(), o, close_of.get(o, len(self.masked)),
                                      m.group(1)))
+        # every assignment of a name (declaration, `name =`, `this.name =`, `+=`); an
+        # assignment to a field is field-level wherever it sits
         self.vars: Dict[str, List[Tuple[Optional[Tuple[int, int]], str]]] = {}
         for m in re.finditer(
-                r"(?<![\w.$])(?:(?:private|public|protected|readonly|static|const|let|var)\s+)+"
-                r"([A-Za-z_$][\w$]*)\s*(?::\s*string\s*)?=(?!=)\s*", self.masked):
-            self.vars.setdefault(m.group(1), []).append(
-                (self.scope(m.start()), _read_ts_expr(self.clean, m.end())))
+                r"(?<![\w$.])(this\s*\.\s*)?([A-Za-z_$][\w$]*)\s*(?::\s*string\s*)?(\+=|=(?!=|>))\s*",
+                self.masked):
+            expr = _read_ts_expr(self.clean, m.end())
+            if m.group(3) == "+=":
+                expr = "\0" + expr
+            scope = None if m.group(1) else self.scope(m.start())
+            self.vars.setdefault(m.group(2), []).append((scope, expr))
+        # names of HttpClient fields / parameters, whatever they are called
+        self.http_names: Set[str] = set(
+            m.group(1) for m in re.finditer(r"([\w$]+)\s*[?!]?\s*:\s*HttpClient\b", self.masked))
+        self.http_names.update(
+            m.group(1) for m in re.finditer(
+                r"([\w$]+)\s*(?::[^=;]*)?=\s*inject\s*\(\s*HttpClient\b", self.masked))
+        self.imports: Dict[str, str] = {}
+        for im in re.finditer(r"import\s*\{([^}]*)\}\s*from\s*['\"]([^'\"]+)['\"]", self.clean):
+            for part in im.group(1).split(","):
+                nm = part.strip().split(" as ")[0].strip()
+                if nm:
+                    self.imports[nm] = im.group(2)
+        self.cands: List[str] = []
+
+    def comp_id(self, name: str, stem: str) -> str:
+        stems = self.ctx.ts_classes.get(self.repo, {}).get(name, set()) | {stem}
+        return "component:%s/%s" % (self.repo, name if len(stems) == 1 else stem + "/" + name)
+
+    def resolve_comp(self, name: str) -> Optional[Tuple[Optional[str], List[str]]]:
+        """(component id, []) for a class of this repo; (None, candidate ids) when several
+        classes share the name and the imports do not decide; None if not a repo class."""
+        stems = self.ctx.ts_classes.get(self.repo, {}).get(name)
+        if not stems:
+            return None
+        if len(stems) == 1:
+            return self.comp_id(name, next(iter(stems))), []
+        own = _stem(self.rel)
+        spec = self.imports.get(name)
+        if spec is None:
+            return (self.comp_id(name, own), []) if own in stems else \
+                (None, sorted(self.comp_id(name, x) for x in stems))
+        if spec.startswith("."):
+            segs = self.rel.split("/")[:-1]
+            for seg in spec.split("/"):
+                if seg == "..":
+                    if segs:
+                        segs.pop()
+                elif seg not in (".", ""):
+                    segs.append(seg)
+            want = "/".join(segs)
+            hit = [x for x in stems if x == want]
+        else:
+            tail = "/".join(spec.split("/")[1:]) if spec.startswith("@") else spec
+            hit = [x for x in stems if tail and x.endswith(tail)]
+        if len(hit) == 1:
+            return self.comp_id(name, hit[0]), []
+        return None, sorted(self.comp_id(name, x) for x in stems)
 
     def class_at(self, off: int) -> Optional[Tuple[int, int, int, str]]:
         best = None
@@ -120,7 +177,10 @@ class _Src:
 
     def lookup(self, chain: str, off: int) -> Tuple[Optional[str], Optional[str]]:
         if chain.startswith("environment."):
-            v = self.env.get(chain[len("environment."):])
+            key = chain[len("environment."):]
+            v = self.env.get(key)
+            if v == NONLIT:
+                return None, "environment.%s is not a literal" % key
             return ("'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'", None) \
                 if v is not None else (None, "%s not found in environment files" % chain)
         name = chain[5:] if chain.startswith("this.") else chain.split(".")[-1] \
@@ -131,11 +191,15 @@ class _Src:
         scope = self.scope(off)
         local = [e for e in entries if e[0] is not None and e[0] == scope]
         pool = local or [e for e in entries if e[0] is None]
-        exprs = {e[1] for e in pool}
-        if len(exprs) == 1:
-            return pool[0][1], None
-        if len(exprs) > 1:
-            return None, "variable %s is assigned more than once" % name
+        exprs = sorted({e[1] for e in pool})
+        if len(exprs) == 1 and not exprs[0].startswith("\0"):
+            return exprs[0], None
+        if exprs:
+            for x in exprs:
+                lit = _unquote(x)
+                if lit is not None:
+                    self.cands.append(lit)
+            return None, "variable %s assigned more than once" % name
         return None, "cannot work out the value of %s" % chain
 
     def eval(self, expr: str, off: int, depth: int = 0) -> Tuple[Optional[str], Optional[str]]:
@@ -239,7 +303,15 @@ def _routes(s: _Src, open_idx: int, prefix: str, repo: str, nodes: List[Node],
         if comp:
             pid = "page:%s/%s" % (repo, full)
             nodes.append(Node(pid, "page", full or "/", repo, [s.ev(pos)], {"path": full}))
-            refs.append(Ref(pid, "uses", "component", "%s/%s" % (repo, comp), s.ev(pos)))
+            got = s.resolve_comp(comp)
+            if got is None:
+                refs.append(Ref(pid, "uses", "component", "%s/%s" % (repo, comp), s.ev(pos)))
+            elif got[0] is None:
+                refs.append(Ref(pid, "uses", "component", None, s.ev(pos),
+                                "component %s matches more than one class" % comp, got[1]))
+            else:
+                refs.append(Ref(pid, "uses", "component", got[0][len("component:"):],
+                                s.ev(pos)))
         ch = props.get("children", "")
         if ch.startswith("["):
             cpos = s.clean.find(ch, pos)
@@ -251,11 +323,12 @@ def scan_angular(repo: str, rel: str, text: str,
     s = _Src(repo, rel, text, ctx)
     nodes: List[Node] = []
     refs: List[Ref] = []
-    known = ctx.ts_classes.get(repo, set())
+    known = ctx.ts_classes.get(repo, {})
     node_ids: Set[str] = set()
+    own_stem = _stem(rel)
 
     def cid(name: str) -> str:
-        return "component:%s/%s" % (repo, name)
+        return s.comp_id(name, own_stem)
 
     def ensure(name: str, off: int, decorator: Optional[str]) -> None:
         if cid(name) not in node_ids:
@@ -285,15 +358,22 @@ def scan_angular(repo: str, rel: str, text: str,
         for m in re.finditer(r"\binject\s*\(\s*([A-Za-z_$][\w$]*)", s.masked[o:c]):
             deps.append((m.group(1), o + m.start()))
         for t, off in deps:
-            if t in known and t != name and t not in seen:
-                seen.add(t)
-                refs.append(Ref(cid(name), "uses", "component", "%s/%s" % (repo, t), s.ev(off)))
+            got = s.resolve_comp(t) if t in known else None
+            if got is None or got[0] == cid(name) or t in seen:
+                continue
+            seen.add(t)
+            if got[0] is None:
+                refs.append(Ref(cid(name), "uses", "component", None, s.ev(off),
+                                "component %s matches more than one class" % t, got[1]))
+            else:
+                refs.append(Ref(cid(name), "uses", "component",
+                                got[0][len("component:"):], s.ev(off)))
 
     # HTTP calls
     for m in re.finditer(
             r"(?<![\w$])((?:[\w$]+\s*\.\s*)*([\w$]+))\s*\.\s*(get|post|put|delete|patch|head|"
             r"options|request)\s*(?:<[^()]*?>)?\s*\(", s.masked):
-        if not _ENDS_HTTP.match(m.group(2)):
+        if m.group(2) not in s.http_names and not _ENDS_HTTP.match(m.group(2)):
             continue
         cls = s.class_at(m.start())
         if cls is None:
@@ -311,11 +391,12 @@ def scan_angular(repo: str, rel: str, text: str,
         if not args:
             continue
         ensure(cls[3], cls[0], None)
+        s.cands = []
         url, why = s.eval(args[0], m.start())
         ev = s.ev(m.start())
         if url is None:
             refs.append(Ref(cid(cls[3]), "http", "endpoint", None, ev,
-                            "URL not worked out: %s" % why))
+                            "URL not worked out: %s" % why, sorted(set(s.cands))))
         else:
             refs.append(Ref(cid(cls[3]), "http", "endpoint", "%s %s" % (meth, url), ev))
 

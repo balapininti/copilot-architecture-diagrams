@@ -159,41 +159,40 @@ def unescape(s: str) -> str:
     return re.sub(r"\\(.)", lambda m: _ESC.get(m.group(1), m.group(1)), s)
 
 
-_PLACEHOLDER = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+_INNER = re.compile(r"\$\{([^${}:]*)(?::([^${}]*))?\}")
 
 
-def expand_placeholders(s: str, props: Dict[str, str],
-                        depth: int = 0) -> Tuple[Optional[str], Optional[str]]:
-    """Resolve Spring ``${prop}`` / ``${prop:default}``. Returns (text, None) or
-    (None, reason)."""
+def expand_placeholders(s: str, props: Dict[str, str], depth: int = 0,
+                        conflicts: Optional[Dict[str, str]] = None
+                        ) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve Spring ``${prop}`` / ``${prop:default}``, innermost first (so
+    ``${a:${b}}`` works). Returns (text, None) or (None, reason)."""
     if "#{" in s:
         return None, "SpEL expression %s cannot be worked out" % s
-    reason: List[str] = []
-
-    def sub(m: "re.Match[str]") -> str:
+    for _ in range(30):
+        m = _INNER.search(s)
+        if not m:
+            break
         key = m.group(1).strip()
+        if conflicts and key in conflicts:
+            return None, conflicts[key]
         if key in props:
             val = props[key]
         elif m.group(2) is not None:
             val = m.group(2)
         else:
-            reason.append("property %s not found" % key)
-            return ""
+            return None, "property %s not found" % key
         if "${" in val:
             if depth >= 5:
-                reason.append("property %s refers to itself" % key)
-                return ""
-            got, why = expand_placeholders(val, props, depth + 1)
+                return None, "property %s refers to itself" % key
+            got, why = expand_placeholders(val, props, depth + 1, conflicts)
             if got is None:
-                reason.append(why or "property %s not resolved" % key)
-                return ""
-            return got
-        return val
-
-    out = _PLACEHOLDER.sub(sub, s)
-    if reason:
-        return None, reason[0]
-    return out, None
+                return None, why
+            val = got
+        s = s[:m.start()] + val + s[m.end():]
+    if "${" in s:
+        return None, "placeholder in %s cannot be resolved" % s
+    return s, None
 
 
 # ---------------------------------------------------------------- property files
@@ -298,17 +297,50 @@ def parse_yaml_docs(text: str) -> List[Dict[str, str]]:
 # ---------------------------------------------------------------- TypeScript object
 
 
+NONLIT = "\0nonliteral"  # value of a key whose value is not a plain literal
+
+
+def _skip_value(text: str, i: int) -> int:
+    """Index of the ',' or '}' that ends the value starting at i (always advances)."""
+    n = len(text)
+    j = i
+    depth = 0
+    while j < n:
+        c = text[j]
+        if c in "\"'`":
+            j += 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c == "," and depth == 0:
+            break
+        j += 1
+    return max(j, i + 1)
+
+
 def parse_ts_object(text: str, open_idx: int, prefix: str = "") -> Dict[str, str]:
-    """Flatten a TypeScript object literal starting at the ``{`` at open_idx."""
+    """Flatten a TypeScript object literal starting at the ``{`` at open_idx. A value that
+    is not a plain literal (expression, template with ``${}``, call) maps to NONLIT; later
+    keys are still read."""
     out: Dict[str, str] = {}
     i = open_idx + 1
     n = len(text)
+    key_re = re.compile(r"""(?:(\w+)|'([^']*)'|"([^"]*)")\s*:\s*""")
     while i < n:
-        m = re.compile(r"""\s*,?\s*(?:(\w+)|'([^']*)'|"([^"]*)")\s*:\s*""").match(text, i)
-        if not m:
+        i = re.compile(r"[\s,]*").match(text, i).end()
+        if i >= n or text[i] == "}":
             break
-        key = m.group(1) or m.group(2) or m.group(3)
-        i = m.end()
+        km = key_re.match(text, i)
+        if not km:
+            i = _skip_value(text, i)  # spread, shorthand, method
+            continue
+        key = prefix + (km.group(1) or km.group(2) or km.group(3))
+        i = km.end()
         if i >= n:
             break
         ch = text[i]
@@ -317,33 +349,20 @@ def parse_ts_object(text: str, open_idx: int, prefix: str = "") -> Dict[str, str
             while j < n and text[j] != ch:
                 j += 2 if text[j] == "\\" else 1
             body = text[i + 1:j]
-            if ch != "`" or "${" not in body:
-                out[prefix + key] = unescape(body)
-            i = j + 1
+            after = re.compile(r"\s*").match(text, j + 1).end()
+            if (after >= n or text[after] in ",}") and not (ch == "`" and "${" in body):
+                out[key] = unescape(body)
+                i = j + 1
+            else:
+                out[key] = NONLIT
+                i = _skip_value(text, i)
         elif ch == "{":
-            out.update(parse_ts_object(text, i, prefix + key + "."))
+            out.update(parse_ts_object(text, i, key + "."))
             _, close = args_at(text, i)
             i = close + 1
         else:
-            j = i
-            depth = 0
-            while j < n:
-                c = text[j]
-                if c in "([{":
-                    depth += 1
-                elif c in ")]}":
-                    if depth == 0:
-                        break
-                    depth -= 1
-                elif c == "," and depth == 0:
-                    break
-                j += 1
+            j = _skip_value(text, i)
             val = text[i:j].strip()
-            if re.fullmatch(r"-?\d+(?:\.\d+)?|true|false", val):
-                out[prefix + key] = val
+            out[key] = val if re.fullmatch(r"-?\d+(?:\.\d+)?|true|false", val) else NONLIT
             i = j
-        # next property or the closing brace
-        k = re.compile(r"\s*").match(text, i).end()
-        if k < n and text[k] == "}":
-            break
     return out

@@ -21,9 +21,16 @@ class ScanContext:
     ts_env: Dict[str, Dict[str, str]] = field(default_factory=dict)  # per repo
     # Java / Angular (pass 1): class names defined per repo, and `static final String`
     # constants per repo (name -> source literal)
-    java_classes: Dict[str, Set[str]] = field(default_factory=dict)
+    # java_classes[repo][Simple] = qualified names (package.Outer.Simple); java_consts[repo]
+    # holds "Class.NAME" -> literal and bare "NAME" (only while unique)
+    java_classes: Dict[str, Dict[str, Set[str]]] = field(default_factory=dict)
     java_consts: Dict[str, Dict[str, str]] = field(default_factory=dict)
-    ts_classes: Dict[str, Set[str]] = field(default_factory=dict)
+    # ts_classes[repo][Name] = file stems that declare a component / injectable of that name
+    ts_classes: Dict[str, Dict[str, Set[str]]] = field(default_factory=dict)
+    # config keys: where each base value came from, and keys whose base files disagree
+    props_src: Dict[str, Dict[str, Tuple[str, str]]] = field(default_factory=dict)
+    props_conflicts: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    ts_env_rank: Dict[str, Dict[str, int]] = field(default_factory=dict)
     # MQ (pass 1): processes whose APPLICID is CKBR, and queues named in a CKBR start (Q=...)
     ckbr_processes: Set[str] = field(default_factory=set)
     ckbr_queues: Set[str] = field(default_factory=set)
@@ -94,24 +101,40 @@ _BASE_CONFIG = re.compile(r"^(application|bootstrap)\.(ya?ml|properties)$", re.I
 
 
 def _load_props(repo: str, rel: str, text: str, ftype: str, ctx: ScanContext) -> None:
-    """application*.yml / *.properties into ctx.props[repo]. The base file wins; profile
-    files (application-dev.yml) and later YAML documents only add keys not yet set."""
+    """application*/bootstrap* yml / properties into ctx.props[repo]. Files under a test
+    directory are ignored. The base file wins over profile files (application-dev.yml) and
+    later YAML documents; two base files that disagree on a key drop it and remember why."""
     from .lexutil import parse_properties, parse_yaml_docs
+    parts = rel.lower().split("/")
+    if "test" in parts[:-1] or "tests" in parts[:-1]:
+        return
     name = rel.rsplit("/", 1)[-1]
-    if not name.lower().startswith(("application", "bootstrap")) and ftype == "yaml":
+    if not name.lower().startswith(("application", "bootstrap")):
         return
     docs = parse_yaml_docs(text) if ftype == "yaml" else [parse_properties(text)]
     props = ctx.props.setdefault(repo, {})
+    src = ctx.props_src.setdefault(repo, {})
+    conflicts = ctx.props_conflicts.setdefault(repo, {})
     base = bool(_BASE_CONFIG.match(name))
     for i, doc in enumerate(docs):
         for k, v in doc.items():
+            if k in conflicts:
+                continue
             if base and i == 0:
+                if k in src and src[k][1] != v:
+                    conflicts[k] = "property %s has different values in %s, %s" % (
+                        k, src[k][0], rel)
+                    props.pop(k, None)
+                    continue
+                src[k] = (rel, v)
                 props[k] = v
             else:
                 props.setdefault(k, v)
 
 
 def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
+    """environment*.ts into ctx.ts_env[repo]. environment.prod.ts beats environment.ts,
+    which beats other variants; a non-literal value is stored as lexutil.NONLIT."""
     from .lexutil import parse_ts_object, strip_code
     name = rel.rsplit("/", 1)[-1].lower()
     if not re.match(r"environment(\.[\w-]+)?\.ts$", name):
@@ -120,13 +143,14 @@ def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
     m = re.search(r"\benvironment\b[^=\n]*=\s*\{", masked)
     if not m:
         return
-    vals = parse_ts_object(clean, m.end() - 1)
+    rank = 2 if name in ("environment.prod.ts", "environment.production.ts") else \
+        1 if name == "environment.ts" else 0
     env = ctx.ts_env.setdefault(repo, {})
-    for k, v in vals.items():
-        if name == "environment.ts":
+    ranks = ctx.ts_env_rank.setdefault(repo, {})
+    for k, v in parse_ts_object(clean, m.end() - 1).items():
+        if k not in env or rank > ranks.get(k, -1):
             env[k] = v
-        else:
-            env.setdefault(k, v)
+            ranks[k] = rank
 
 
 def scan_workspace(workspace: Path, config: Config) -> Inventory:

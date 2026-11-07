@@ -52,26 +52,37 @@ def _read_expr(clean: str, i: int) -> str:
     return clean[i:j].strip()
 
 
+_AMBIGUOUS = "\0ambiguous"
+
+
 def collect_java(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
-    """Pass 1: class names defined in the repo and ``static final String`` constants."""
-    clean, masked = strip_code(text)
-    classes = ctx.java_classes.setdefault(repo, set())
-    for m in _CLASS_DECL.finditer(masked):
-        classes.add(m.group(2))
+    """Pass 1: class names (with package) defined in the repo and ``static final String``
+    constants, keyed ``Class.NAME`` and, while unique in the repo, bare ``NAME``."""
+    s = _Src(repo, rel, text, ctx, collecting=True)
+    classes = ctx.java_classes.setdefault(repo, {})
+    for c in s.classes:
+        classes.setdefault(c[3], set()).add(s.qual[c[0]])
     consts = ctx.java_consts.setdefault(repo, {})
-    for m in _CONST.finditer(clean):
-        consts.setdefault(m.group(1), m.group(2))
+    for m in _CONST.finditer(s.clean):
+        cls = s.class_at(m.start())
+        if cls is None:
+            continue
+        consts["%s.%s" % (cls[3], m.group(1))] = m.group(2)
+        have = consts.get(m.group(1))
+        consts[m.group(1)] = m.group(2) if have is None or have == m.group(2) else _AMBIGUOUS
 
 
 class _Src:
     """One cleaned Java file with its structure and variable table."""
 
-    def __init__(self, repo: str, rel: str, text: str, ctx: ScanContext) -> None:
+    def __init__(self, repo: str, rel: str, text: str, ctx: ScanContext,
+                 collecting: bool = False) -> None:
         self.repo, self.rel, self.ctx = repo, rel, ctx
         self.orig = text.split("\n")
         self.clean, self.masked = strip_code(text)
         self.lines = Lines(self.clean)
         self.props = ctx.props.get(repo, {})
+        self.conflicts = ctx.props_conflicts.get(repo, {})
         self.pairs: List[Tuple[int, int, int]] = []  # (open, close, depth)
         stack: List[int] = []
         for i, ch in enumerate(self.masked):
@@ -80,6 +91,15 @@ class _Src:
             elif ch == "}" and stack:
                 self.pairs.append((stack.pop(), i, len(stack)))
         self.pairs.sort()
+        pk = re.search(r"^\s*package\s+([\w.]+)\s*;", self.clean, re.M)
+        self.pkg = pk.group(1) if pk else ""
+        self.imports = set()  # type: Set[str]
+        self.wild = []  # type: List[str]
+        for im in re.finditer(r"^\s*import\s+(?!static\b)([\w.]+?)(\.\*)?\s*;", self.clean, re.M):
+            if im.group(2):
+                self.wild.append(im.group(1))
+            else:
+                self.imports.add(im.group(1))
         # (declaration start, open brace, close brace, name, header start)
         self.classes: List[Tuple[int, int, int, str, int]] = []
         close_of = {o: c for o, c, _ in self.pairs}
@@ -90,8 +110,70 @@ class _Src:
             hdr = max(self.masked.rfind(c, 0, m.start()) for c in ";{}") + 1
             self.classes.append((m.start(), o, close_of.get(o, len(self.masked)),
                                  m.group(2), hdr))
+        self.qual: Dict[int, str] = {}
+        for c in self.classes:
+            chain = [x for x in self.classes if x[1] < c[1] < x[2]]
+            chain.sort(key=lambda x: x[1])
+            names = [x[3] for x in chain] + [c[3]]
+            self.qual[c[0]] = (self.pkg + "." if self.pkg else "") + ".".join(names)
+        self._params: Dict[Tuple[int, int], Set[str]] = {}
         self.vars: Dict[str, List[Tuple[Optional[Tuple[int, int]], str]]] = {}
-        self._find_vars()
+        if not collecting:
+            self._find_vars()
+
+    # class identity ------------------------------------------------------------------
+    def id_for(self, simple: str, qual: str) -> str:
+        quals = self.ctx.java_classes.get(self.repo, {}).get(simple, set())
+        return "class:%s/%s" % (self.repo, simple if len(quals | {qual}) == 1 else qual)
+
+    def cid(self, c: Tuple[int, int, int, str, int]) -> str:
+        return self.id_for(c[3], self.qual[c[0]])
+
+    def resolve_type(self, t: str) -> Optional[Tuple[Optional[str], List[str]]]:
+        """(class id, []) for a type defined in this repo; (None, candidate ids) when two
+        same-named classes cannot be told apart; None when it is not a repo class."""
+        quals = self.ctx.java_classes.get(self.repo, {}).get(t)
+        if not quals:
+            return None
+        if len(quals) == 1:
+            return self.id_for(t, next(iter(quals))), []
+        for q in sorted(quals):
+            if q in self.imports:
+                return self.id_for(t, q), []
+        same = (self.pkg + "." if self.pkg else "") + t
+        if same in quals:
+            return self.id_for(t, same), []
+        for w in self.wild:
+            if w + "." + t in quals:
+                return self.id_for(t, w + "." + t), []
+        return None, [self.id_for(t, q) for q in sorted(quals)]
+
+    def params_of(self, scope: Optional[Tuple[int, int]]) -> Set[str]:
+        """Names of the parameters of the method whose body is scope (an @Value parameter
+        is a configuration value, not a passed-in one, so it is left out)."""
+        if scope is None:
+            return set()
+        if scope in self._params:
+            return self._params[scope]
+        names: Set[str] = set()
+        j = self.masked.rfind(")", 0, scope[0])
+        if j >= 0 and re.fullmatch(r"\s*(?:throws[\w\s,.]*)?", self.masked[j + 1:scope[0]]):
+            depth = 0
+            k = j
+            while k >= 0:
+                ch = self.masked[k]
+                depth += (ch == ")") - (ch == "(")
+                if depth == 0:
+                    break
+                k -= 1
+            for piece in split_generic(split_top(self.clean[k + 1:j], ",")):
+                if piece.lstrip().startswith("@Value"):
+                    continue
+                pm = re.search(r"(\w+)\s*$", piece)
+                if pm:
+                    names.add(pm.group(1))
+        self._params[scope] = names
+        return names
 
     def class_at(self, off: int) -> Optional[Tuple[int, int, int, str, int]]:
         best = None
@@ -113,7 +195,7 @@ class _Src:
 
     def class_id(self, off: int) -> Optional[str]:
         c = self.class_at(off)
-        return "class:%s/%s" % (self.repo, c[3]) if c else None
+        return self.cid(c) if c else None
 
     def ev(self, off: int) -> Evidence:
         return make_ev(self.repo, self.rel, self.orig, self.lines.line_of(off))
@@ -139,10 +221,20 @@ class _Src:
                 self.vars.setdefault(m.group(1), []).append(
                     (self.method_scope(m.start()), a[-1]))
 
-    def lookup(self, name: str, off: int) -> Tuple[Optional[str], Optional[str]]:
+    def lookup(self, chain: str, off: int) -> Tuple[Optional[str], Optional[str]]:
+        """Source expression for a name: ``NAME``, ``this.NAME`` or ``Class.NAME``."""
+        consts = self.ctx.java_consts.get(self.repo, {})
+        parts = chain[5:].split(".") if chain.startswith("this.") else chain.split(".")
+        if len(parts) > 1 and not chain.startswith("this."):
+            got = consts.get("%s.%s" % (parts[-2], parts[-1]))  # Other.NAME looks only there
+            return (got, None) if got is not None else \
+                (None, "cannot work out the value of %s" % chain)
+        name = parts[-1]
+        scope = self.method_scope(off)
+        if not chain.startswith("this.") and name in self.params_of(scope):
+            return None, "value passed in as parameter %s" % name
         entries = self.vars.get(name)
         if entries:
-            scope = self.method_scope(off)
             local = [e for e in entries if e[0] is not None and e[0] == scope]
             pool = local or [e for e in entries if e[0] is None]
             exprs = {e[1] for e in pool}
@@ -150,9 +242,13 @@ class _Src:
                 return pool[0][1], None
             if len(exprs) > 1:
                 return None, "variable %s is assigned more than once" % name
-        const = self.ctx.java_consts.get(self.repo, {}).get(name)
-        if const is not None:
-            return const, None
+        for c in sorted((c for c in self.classes if c[1] < off < c[2]), key=lambda c: -c[1]):
+            got = consts.get("%s.%s" % (c[3], name))
+            if got is not None:
+                return got, None
+        got = consts.get(name)
+        if got is not None and got != _AMBIGUOUS:
+            return got, None
         return None, "cannot work out the value of %s" % name
 
     # expressions ---------------------------------------------------------------------
@@ -173,13 +269,12 @@ class _Src:
             if len(split_top(t, "+")) > 1:
                 val, why = self.eval(t, off, url, depth + 1)
             elif re.fullmatch(r'"(?:[^"\\\n]|\\.)*"', t):
-                val, why = expand_placeholders(unescape(t[1:-1]), self.props)
+                val, why = expand_placeholders(unescape(t[1:-1]), self.props, 0, self.conflicts)
             elif re.fullmatch(r"-?\d+", t):
                 val = t
             else:
-                m = re.fullmatch(r"(?:this\.)?(\w+)|(?:\w+\.)+([A-Z_]\w*)", t)
-                if m:
-                    e, why = self.lookup(m.group(1) or m.group(2), off)
+                if re.fullmatch(r"(?:\w+\.)*\w+", t):
+                    e, why = self.lookup(t, off)
                     if e is not None:
                         val, why = self.eval(e, off, url, depth + 1)
                 else:
@@ -207,34 +302,48 @@ def _balanced(s: str) -> bool:
     return d == 0
 
 
-def _paths(a: str, s: _Src, off: int) -> List[str]:
+def _paths(a: str, s: _Src, off: int) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Paths in one annotation value; all of them must resolve or none is returned."""
     a = a.strip()
     parts = [p for p in split_top(a[1:-1], ",") if p] if a.startswith("{") and a.endswith("}") \
         else [a]
     out = []
     for p in parts:
-        v, _ = s.eval(p, off)
-        if v is not None:
-            out.append(v)
-    return out
+        v, why = s.eval(p, off)
+        if v is None:
+            return None, "path %s not worked out: %s" % (p, why)
+        out.append(v)
+    return out, None
 
 
-def _mapping(s: _Src, m: "re.Match[str]") -> Tuple[List[str], List[str]]:
-    """(paths, methods) of one @XxxMapping annotation; no path means ``""``."""
+def _mapping(s: _Src, m: "re.Match[str]") -> Tuple[Optional[List[str]], List[str], Optional[str]]:
+    """(paths, methods, reason) of one @XxxMapping annotation; no path means ``""``.
+    paths is None, with a reason, when a path cannot be worked out."""
     kind = m.group(1)
-    paths: List[str] = [""]
+    paths: Optional[List[str]] = [""]
+    why: Optional[str] = None
     methods = [_METHOD_ANN[kind]] if kind in _METHOD_ANN else []
     if _OPEN.match(s.masked, m.end()):
         args, _ = args_at(s.clean, s.masked.find("(", m.end()))
         for k, a in enumerate(args):
             nm = _NAMED.match(a)
             if nm and nm.group(1) in ("value", "path"):
-                paths = _paths(nm.group(2), s, m.start()) or paths
+                paths, why = _paths(nm.group(2), s, m.start())
             elif nm and nm.group(1) == "method":
-                methods = [x for x in re.findall(r"(?:Request|Http)Method\.(\w+)", nm.group(2))]
+                methods = re.findall(r"(?:Request|Http)Method\.(\w+)", nm.group(2))
             elif not nm and k == 0:
-                paths = _paths(a, s, m.start()) or paths
-    return paths, methods or ["ANY"]
+                paths, why = _paths(a, s, m.start())
+    return paths, methods or ["ANY"], why
+
+
+def _method_name(s: _Src, m: "re.Match[str]") -> str:
+    pos = m.end()
+    if _OPEN.match(s.masked, pos):
+        _, close = args_at(s.clean, s.masked.find("(", pos))
+        pos = close + 1
+    for mm in re.finditer(r"(?<![@\w.])(\w+)\s*\(", s.masked[pos:pos + 600]):
+        return mm.group(1)
+    return "method"
 
 
 def _join(*parts: str) -> str:
@@ -248,7 +357,8 @@ class _Out:
         self.seen: Set[Tuple[str, str, str, Optional[str], int]] = set()
 
     def add(self, off: int, op: str, kind: str, name: Optional[str],
-            reason: Optional[str] = None, attrs: Optional[Dict[str, object]] = None) -> None:
+            reason: Optional[str] = None, attrs: Optional[Dict[str, object]] = None,
+            keep_reason: bool = False) -> None:
         src = self.s.class_id(off)
         if src is None:
             return
@@ -257,8 +367,8 @@ class _Out:
         if key in self.seen:
             return
         self.seen.add(key)
-        self.refs.append(Ref(src, op, kind, name, ev, None if name else (reason or "unknown"),
-                             attrs=attrs or {}))
+        why = (reason or "unknown") if not name else (reason if keep_reason else None)
+        self.refs.append(Ref(src, op, kind, name, ev, why, attrs=attrs or {}))
 
 
 # ---------------------------------------------------------------------- SQL
@@ -270,20 +380,25 @@ _TABLE = re.compile(r'^(?:"[^"]+"|`[^`]+`|[A-Za-z_#$@][\w#$@]*)'
                     r'(?:\.(?:"[^"]+"|`[^`]+`|[\w#$@]+))*$')
 
 
-def sql_tables(sql: str) -> List[Tuple[str, str]]:
-    """(op, TABLE) pairs in one SQL statement. Sub-selects and CTE names are skipped."""
+def sql_tables(sql: str) -> List[Tuple[str, Optional[str], str]]:
+    """(op, TABLE, token) triples in one SQL statement. TABLE is None when the token is
+    not a plain table name. Sub-selects and CTE names are skipped."""
     s = re.sub(r"\s+", " ", sql.strip())
     s = re.sub(r"\bFOR UPDATE\b(?: OF [\w., ]+)?", " ", s, flags=re.I)
     s = re.sub(r"\bON DUPLICATE KEY UPDATE\b", " ", s, flags=re.I)
     s = re.sub(r"\b(?:EXTRACT|TRIM|SUBSTRING|OVERLAY)\s*\([^()]*\)", " X ", s, flags=re.I)
     ctes = {m.group(1).upper() for m in re.finditer(
         r"(?:\bWITH(?:\s+RECURSIVE)?|,)\s*(\w+)\s*(?:\([^)]*\)\s*)?AS\s*\(", s, re.I)}
-    found: List[Tuple[str, str]] = []
+    found: List[Tuple[str, Optional[str], str]] = []
 
     def take(op: str, tok: str) -> None:
+        if not tok or tok[0] == "(":
+            return
         name = tok.replace('"', "").replace("`", "").upper()
-        if _TABLE.match(tok) and name not in ctes and (op, name) not in found:
-            found.append((op, name))
+        if not _TABLE.match(tok):
+            found.append((op, None, tok))
+        elif name not in ctes and (op, name, tok) not in found:
+            found.append((op, name, tok))
 
     for m in re.finditer(r"\bINSERT\s+(?:INTO\s+)?([^\s(]+)", s, re.I):
         take("insert", m.group(1))
@@ -321,8 +436,8 @@ def _sql_ref(s: _Src, out: _Out, off: int, expr: str, default_op: str) -> None:
         return
     if not _STATEMENT.match(sql):
         return
-    for op, table in sql_tables(sql):
-        out.add(off, op, "table", table)
+    for op, table, tok in sql_tables(sql):
+        out.add(off, op, "table", table, "table name %s is not a plain name" % tok)
 
 
 # ---------------------------------------------------------------------- queues
@@ -336,11 +451,13 @@ _HTTP_CALLS = {
 }
 
 
-def _is_jms_receiver(name: str, text: str) -> bool:
-    if re.search(r"jms|mq", name, re.I):
-        return True
-    return bool(re.search(r"import\s+(?:org\.springframework\.jms|javax\.jms|jakarta\.jms)",
-                          text)) and not re.search(r"import\s+[\w.]*amqp", text)
+_JMS_TYPES = re.compile(r"\b(?:JmsTemplate|JmsMessagingTemplate|JMSContext|JMSProducer|"
+                        r"MessageProducer|MQQueue)\s*(?:<[^>]*>)?\s+(\w+)")
+
+
+def _jms_receivers(masked: str) -> Set[str]:
+    """Names of fields, parameters and variables typed as a JMS sender / receiver."""
+    return {m.group(1) for m in _JMS_TYPES.finditer(masked)}
 
 
 def split_generic(params: List[str]) -> List[str]:
@@ -368,23 +485,24 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
     s = _Src(repo, rel, text, ctx)
     nodes: List[Node] = []
     out = _Out(s)
-    known = ctx.java_classes.get(repo, set())
-    pkg = re.search(r"^\s*package\s+([\w.]+)\s*;", s.clean, re.M)
-    for decl, o, c, name, hdr in s.classes:
-        nodes.append(Node("class:%s/%s" % (repo, name), "class", name, repo, [s.ev(decl)],
-                          {"package": pkg.group(1) if pkg else None}))
+    for c in s.classes:
+        nodes.append(Node(s.cid(c), "class", c[3], repo, [s.ev(c[0])],
+                          {"package": s.pkg or None}))
 
     # endpoints (controllers) and REST calls declared by Feign interfaces --------------
-    for decl, o, c, name, hdr in s.classes:
+    for c in s.classes:
+        decl, o, close, name, hdr = c
         header = s.masked[hdr:decl]
         is_ctrl = bool(re.search(r"@(RestController|Controller)\b", header))
         feign = re.search(r"@FeignClient\b", header)
         if not (is_ctrl or feign):
             continue
-        prefixes = [""]
+        cid = s.cid(c)
+        prefixes: Optional[List[str]] = [""]
+        prefix_why: Optional[str] = None
         for m in _MAPPING.finditer(s.masked, hdr, decl):
             if m.group(1) == "Request":
-                prefixes = _mapping(s, m)[0]
+                prefixes, _, prefix_why = _mapping(s, m)
         base_url: Optional[str] = None
         base_why: Optional[str] = None
         fpath = ""
@@ -394,42 +512,55 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
                 nm = _NAMED.match(a)
                 if nm and nm.group(1) in ("url", "path"):
                     v, why = s.eval(nm.group(2), hdr + feign.start())
-                    if nm.group(1) == "path":
-                        fpath = v or ""
-                    elif v is not None:
-                        base_url = v
+                    if v is None:
+                        base_why = "Feign %s not worked out: %s" % (nm.group(1), why)
+                    elif nm.group(1) == "path":
+                        fpath = v
                     else:
-                        base_why = why
-        for m in _MAPPING.finditer(s.masked, o + 1, c):
+                        base_url = v
+        for m in _MAPPING.finditer(s.masked, o + 1, close):
             cls = s.class_at(m.start())
-            if cls is None or cls[3] != name:
+            if cls is None or cls[0] != decl:
                 continue
-            paths, methods = _mapping(s, m)
+            paths, methods, why = _mapping(s, m)
+            if not is_ctrl:
+                if base_why is not None or paths is None:
+                    out.add(m.start(), "http", "endpoint", None, base_why or why)
+                    continue
+                for meth in methods:
+                    for pth in paths:
+                        full = _join(fpath, pth)
+                        url = (base_url.rstrip("/") + full) if base_url else full
+                        out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url))
+                continue
+            if paths is None or prefixes is None:
+                reason = why if paths is None else "class path prefix not worked out: %s" % prefix_why
+                mname = _method_name(s, m)
+                uid = "endpoint:?%s#%s" % (cid[len("class:"):], mname)
+                nodes.append(Node(uid, "endpoint", "?%s#%s" % (name, mname), repo,
+                                  [s.ev(m.start())],
+                                  {"handler": cid, "unresolved": reason}))
+                continue
             for meth in methods:
-                for pre in (prefixes if is_ctrl else [fpath]):
+                for pre in prefixes:
                     for pth in paths:
                         full = _join(pre, pth)
-                        if is_ctrl:
-                            label = "%s %s" % (meth, norm_path(full))
-                            nodes.append(Node("endpoint:" + label, "endpoint", label, repo,
-                                              [s.ev(m.start())],
-                                              {"handler": "class:%s/%s" % (repo, name),
-                                               "path": full}))
-                        elif base_why is not None:
-                            out.add(m.start(), "http", "endpoint", None,
-                                    "Feign client url not worked out: %s" % base_why)
-                        else:
-                            url = (base_url.rstrip("/") + full) if base_url else full
-                            out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url))
+                        label = "%s %s" % (meth, norm_path(full))
+                        nodes.append(Node("endpoint:" + label, "endpoint", label, repo,
+                                          [s.ev(m.start())], {"handler": cid, "path": full}))
 
     # uses: constructor parameters and injected fields of classes in this repo --------
-    for decl, o, c, name, hdr in s.classes:
+    for c in s.classes:
+        decl, o, close, name, hdr = c
         types: List[Tuple[str, int]] = []
-        for m in re.finditer(r"(?<![\w.])%s\s*\(" % re.escape(name), s.masked[:c], ):
+        for m in re.finditer(r"(?<![\w.])%s\s*\(" % re.escape(name), s.masked[:close]):
             if m.start() < o or re.search(r"new\s+$", s.masked[max(0, m.start() - 6):m.start()]):
                 continue
-            params, close = args_at(s.clean, m.end() - 1)
-            if not re.match(r"\s*(?:throws\s+[\w.,\s]+)?\{", s.masked[close + 1:close + 120]):
+            cls = s.class_at(m.start())
+            if cls is None or cls[0] != decl:
+                continue
+            params, pclose = args_at(s.clean, m.end() - 1)
+            if not re.match(r"\s*(?:throws\s+[\w.,\s]+)?\{", s.masked[pclose + 1:pclose + 120]):
                 continue
             for p in split_generic(params):
                 t = param_type(p)
@@ -438,7 +569,10 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
         lombok = re.search(r"@(RequiredArgsConstructor|AllArgsConstructor)\b",
                            s.masked[hdr:decl])
         for m in re.finditer(r"((?:@\w+(?:\([^)]*\))?\s+)*)(?:(?:private|protected|public|final)\s+)*"
-                             r"([A-Z]\w*)\s+\w+\s*(=[^;]*)?;", s.masked[o + 1:c]):
+                             r"([A-Z]\w*)\s+\w+\s*(=[^;]*)?;", s.masked[o + 1:close]):
+            cls = s.class_at(o + 1 + m.start())
+            if cls is None or cls[0] != decl:
+                continue
             member = re.search(r"@(Autowired|Inject|Resource)\b", m.group(1))
             lfinal = (lombok and re.search(r"\bfinal\b", m.group(0))
                       and not m.group(3) and "static" not in m.group(0))
@@ -446,9 +580,20 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
                 types.append((m.group(2), o + 1 + m.start()))
         done: Set[str] = set()
         for t, off in types:
-            if t in known and t != name and t not in done:
-                done.add(t)
-                out.add(off, "uses", "class", "%s/%s" % (repo, t))
+            got = s.resolve_type(t)
+            if got is None:
+                continue
+            tid, cands = got
+            if tid == s.cid(c) or (tid or t) in done:
+                continue
+            done.add(tid or t)
+            if tid is None:
+                src = s.cid(c)
+                out.refs.append(Ref(src, "uses", "class", None, s.ev(off),
+                                    "class %s matches more than one class in the repo" % t,
+                                    cands))
+            else:
+                out.add(off, "uses", "class", tid[len("class:"):])
 
     # REST calls ----------------------------------------------------------------------------
     for m in re.finditer(r"\.\s*(getForObject|getForEntity|postForObject|postForEntity|"
@@ -499,12 +644,13 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
             out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url))
 
     # queues -----------------------------------------------------------------------------------
+    jms = _jms_receivers(s.masked)
     for m in _JMS.finditer(s.masked):
-        if not _is_jms_receiver(m.group(1), s.clean):
+        if m.group(1) not in jms:
             continue
         op = "put" if m.group(2) in ("convertAndSend", "send") else "get"
         args, _ = args_at(s.clean, m.end() - 1)
-        if not args or (m.group(2) == "send" and len(args) == 1):
+        if not args or (m.group(2) in ("send", "convertAndSend") and len(args) == 1):
             out.add(m.start(), op, "queue", None, "default destination, queue name not in code")
             continue
         q, why = s.eval(args[0], m.start())
@@ -525,8 +671,12 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
         q, why = s.eval(args[0], m.start())
         opts = " ".join(args[1:])
         ops = [o for o, pat in (("put", "OUTPUT"), ("get", "INPUT")) if pat in opts]
-        for op in ops or ["put", "get"]:
-            out.add(m.start(), op, "queue", q, why, None if ops else {"op_unclear": True})
+        if ops:
+            for op in ops:
+                out.add(m.start(), op, "queue", q, why)
+        else:
+            out.add(m.start(), "open", "queue", q, why or "queue open mode not worked out",
+                    keep_reason=True)
 
     # SQL ----------------------------------------------------------------------------------------
     for m in _JDBC.finditer(s.masked):
