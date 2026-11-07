@@ -370,3 +370,29 @@ def test_jms_types_and_inherited_template(tmp_path):
     t = triples(inv, "class:r/C")
     assert ("get", "queue", "C.IN") in t and ("put", "queue", "C.OUT") in t
     assert not any(n == "NO.Q" for _, _, n in t)
+
+
+# ------------------------------------------------------------------ servlet context path (I2)
+
+_CTL = ("package s;\n@RestController\n@RequestMapping(\"/claims\")\npublic class Ctl {\n"
+        "  @GetMapping(\"/{id}\")\n  public String get(@PathVariable String id) { return id; }\n}\n")
+
+
+def test_context_path_prefixes_endpoints(tmp_path):
+    i = java_inv(tmp_path, _CTL, "server:\n  servlet:\n    context-path: /claims-api\n", "Ctl")
+    eps = sorted(n.id for n in i.nodes.values() if n.kind == "endpoint")
+    assert eps == ["endpoint:GET /claims-api/claims/{}"]
+
+
+def test_context_and_servlet_path_both_prefix(tmp_path):
+    yml = "server:\n  servlet:\n    contextPath: /app/\nspring:\n  mvc:\n    servlet:\n      path: /v1\n"
+    i = java_inv(tmp_path, _CTL, yml, "Ctl")
+    eps = sorted(n.id for n in i.nodes.values() if n.kind == "endpoint")
+    assert eps == ["endpoint:GET /app/v1/claims/{}"]
+
+
+def test_unresolved_context_path_gives_unresolved_endpoint(tmp_path):
+    i = java_inv(tmp_path, _CTL, "server:\n  servlet:\n    context-path: ${BASE}\n", "Ctl")
+    eps = [n for n in i.nodes.values() if n.kind == "endpoint"]
+    assert len(eps) == 1 and eps[0].id.startswith("endpoint:?")
+    assert "context path" in eps[0].attrs["unresolved"]

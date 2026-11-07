@@ -358,6 +358,33 @@ def _join(*parts: str) -> str:
     return "/" + "/".join(x for p in parts for x in p.split("/") if x)
 
 
+# Spring settings that put every controller path under a prefix, outermost first
+_SERVLET_KEYS = (("server.servlet.context-path", "server.servlet.contextPath",
+                  "server.context-path", "server.contextPath"),
+                 ("spring.mvc.servlet.path", "spring.mvc.servletPath"))
+
+
+def _servlet_base(ctx: ScanContext, repo: str) -> Tuple[str, Optional[str]]:
+    """The context path + DispatcherServlet path from the repo's config, and why it is not
+    worked out (or None)."""
+    props = ctx.props.get(repo, {})
+    conflicts = ctx.props_conflicts.get(repo, {})
+    parts: List[str] = []
+    for keys in _SERVLET_KEYS:
+        for k in keys:
+            if k in conflicts:
+                return "", "context path not worked out: %s" % conflicts[k]
+            v = props.get(k)
+            if v is None:
+                continue
+            v = str(v).strip().strip("'\"")
+            if "${" in v or "\0" in v:
+                return "", "context path not worked out: %s = %s" % (k, v.replace("\0", ""))
+            parts.append(v)
+            break
+    return _join(*parts) if parts else "", None
+
+
 class _Out:
     def __init__(self, s: _Src) -> None:
         self.s = s
@@ -524,6 +551,12 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
         for m in _MAPPING.finditer(s.masked, hdr, decl):
             if m.group(1) == "Request":
                 prefixes, _, prefix_why = _mapping(s, m)
+        if is_ctrl:
+            sbase, sbase_why = _servlet_base(ctx, repo)
+            if sbase_why is not None:
+                prefixes, prefix_why = None, sbase_why
+            elif sbase and prefixes is not None:
+                prefixes = [_join(sbase, p) for p in prefixes]
         base_url: Optional[str] = None
         base_why: Optional[str] = None
         fpath = ""
