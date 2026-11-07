@@ -21,6 +21,7 @@ from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, e
                                     notes_height, num, overview_block, step_text, svg_doc, text,
                                     text_width, wrap)
 from archdiag.render.pills import edge_svg, key_svg, place_pills
+from archdiag.render.report import md
 from archdiag.views import VEdge, VNode, ViewGraph
 
 NAME_SIZE, NAME_LINE = 13.0, 17.0
@@ -451,8 +452,11 @@ def _markdown(view: ViewGraph, azure: bool = False) -> str:
     ``::: mermaid`` block Azure DevOps wikis need (``azure=True``, the ``.azure.md`` copy)."""
     styles = {line_style(e.status, e.kind) for e in view.edges}
     fence = ("::: mermaid", ":::") if azure else ("```mermaid", "```")
-    ov = " ".join(str(view.overview or "").split())
-    out = ["# %s" % " ".join(view.title.split()), ""]
+    # gitdiagram text is written by Copilot or the user: Markdown-safe (other levels keep
+    # their text as it was)
+    safe = md if view.level == "gitdiagram" else (lambda t: " ".join(str(t).split()))
+    ov = safe(view.overview or "")
+    out = ["# %s" % safe(view.title), ""]
     if ov:
         out += [ov, ""]
     out += [fence[0], _mermaid(view), fence[1], "", "## Legend", ""]
@@ -464,7 +468,8 @@ def _markdown(view: ViewGraph, azure: bool = False) -> str:
     out.append("- Cylinder: a table or dataset; a dashed box groups one repository")
     notes = view.notes + layout_notes(view)
     if notes:
-        out += ["", "## Notes", ""] + ["- %s" % n for n in notes]
+        out += ["", "## Notes", ""] + ["- %s" % (safe(n) if view.level == "gitdiagram" else n)
+                                       for n in notes]
     return "\n".join(out) + "\n"
 
 

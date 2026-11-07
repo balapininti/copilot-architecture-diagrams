@@ -208,12 +208,14 @@ CLICKABLE = ("The SVG (opened in a browser or VS Code) and the draw.io file are 
              "Excalidraw resolves relative links against the app, not the workspace.")
 
 
-def md(text: object) -> str:
+def md(text: object, lines: bool = False) -> str:
     """Text outside a table made safe for Markdown: ``\\ * _ [ ] ` `` and a leading ``#``
-    are escaped (table cells use ``_cell``)."""
+    are escaped and ``<`` is ``&lt;`` (table cells use ``_cell``). Newlines and runs of
+    white space collapse to one space, so a heading, name or list item stays one line;
+    ``lines=True`` keeps the lines (a paragraph such as the overview)."""
     out = []
-    for line in str(text).splitlines() or [""]:
-        line = re.sub(r"([\\*_\[\]`])", r"\\\1", line)
+    for line in (str(text).splitlines() or [""]) if lines else [" ".join(str(text).split())]:
+        line = re.sub(r"([\\*_\[\]`])", r"\\\1", line).replace("<", "&lt;")
         out.append(re.sub(r"^(\s*)#", r"\1\\#", line))
     return "\n".join(out)
 
@@ -240,7 +242,7 @@ def _folded_mark(more: Optional[object]) -> List[str]:
 
 def _gd_head(view: ViewGraph) -> List[str]:
     """Overview, Groups, Entry points, Job structure and the outside/shared boxes."""
-    o: List[str] = ["## Overview", "", md(view.overview.strip()) if view.overview.strip() else "No overview was written.", ""]
+    o: List[str] = ["## Overview", "", md(view.overview.strip(), lines=True) if view.overview.strip() else "No overview was written.", ""]
     o += ["## Groups", ""]
     boxes = _boxes(view)
     groups = [(n, m) for n, m in boxes if n.kind == "group" and n.role != "ungrouped"]

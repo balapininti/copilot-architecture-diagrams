@@ -99,3 +99,34 @@ def test_special_characters_escaped_everywhere():
                 m = re.sub(r"</?b>|<br/>", "", ln)
                 inner = m.split('"', 1)[1].rsplit('"', 1)[0] if '"' in m else ""
                 assert not re.search(r"[\[\]|<]", inner), ln
+
+
+def test_mermaid_markdown_overview_and_notes_are_markdown_safe():
+    base = batch_gd()
+    gd = GitDiagram(base.repo, "Uses a_b *x*\n\n  <script> [y]", base.groups,
+                    [{"from": "Nowhere box", "to": "Procs", "label": "", "note": ""}], [], True,
+                    "ok")
+    v = view_of(gd)
+    v.problems.append("group 'a_b <c>': pattern x matches no file")
+    v.notes.append(v.problems[-1])
+    for key in ("md", "azure.md"):
+        text = style_b.render(v)[key]
+        assert "Uses a\\_b \\*x\\* &lt;script> \\[y\\]" in text, text
+        assert "<script>" not in text
+        assert "- group 'a\\_b &lt;c>': pattern x matches no file" in text
+
+
+def test_report_md_escapes_angle_brackets_and_collapses_names():
+    from archdiag.render.report import links_report, md
+    from conftest import fixture_resolved
+    assert md("a <b> c") == "a &lt;b> c"
+    assert md("one\n  two\tthree") == "one two three"
+    assert md("para one\n\npara two", lines=True) == "para one\n\npara two"
+    base = batch_gd()
+    gd = GitDiagram(base.repo, "Line one\nline two", [GitGroup("Pay\n<A>", "JCL\n1", ["jcl/"],
+                                                               "first\nsecond")]
+                    + base.groups[1:], [], [], True, "ok")
+    text = links_report(view_of(gd), fixture_resolved())
+    assert "### Pay &lt;A> \\[JCL 1\\]" in text
+    assert "first second" in text
+    assert "Line one\nline two" in text
