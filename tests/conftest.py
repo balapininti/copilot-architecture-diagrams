@@ -33,6 +33,12 @@ def fixture_view(level, scope=None):
     return _FIXTURE[key]
 
 
+def fixture_resolved():
+    """The claims estate's Resolved (built by the first fixture_view call)."""
+    fixture_view("landscape", None)
+    return _FIXTURE["r"]
+
+
 OFFICE_UNSAFE_TAGS = {"filter", "style", "use", "marker", "foreignObject", "image", "script"}
 
 
