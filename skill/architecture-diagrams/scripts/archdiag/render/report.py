@@ -208,24 +208,33 @@ CLICKABLE = ("The SVG (opened in a browser or VS Code) and the draw.io file are 
              "Excalidraw resolves relative links against the app, not the workspace.")
 
 
+def md(text: object) -> str:
+    """Text outside a table made safe for Markdown: ``\\ * _ [ ] ` `` and a leading ``#``
+    are escaped (table cells use ``_cell``)."""
+    out = []
+    for line in str(text).splitlines() or [""]:
+        line = re.sub(r"([\\*_\[\]`])", r"\\\1", line)
+        out.append(re.sub(r"^(\s*)#", r"\1\\#", line))
+    return "\n".join(out)
+
+
 def _file_link(view: ViewGraph, path: str) -> str:
-    text = path.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
-    return "[%s](%s)" % (text, href(view.repo_path or view.scope or "", path))
+    return "[%s](%s)" % (md(path), href(view.repo_path or view.scope or "", path))
 
 
 def _gd_head(view: ViewGraph) -> List[str]:
     """Overview, Groups, Entry points, Job structure and the outside/shared boxes."""
-    o: List[str] = ["## Overview", "", view.overview.strip() or "No overview was written.", ""]
+    o: List[str] = ["## Overview", "", md(view.overview.strip()) if view.overview.strip() else "No overview was written.", ""]
     o += ["## Groups", ""]
     groups = [n for n in view.nodes if n.kind == "group" and n.role != "ungrouped"]
     if not groups:
         o += ["No groups.", ""]
     for n in groups:
-        o.append("### %s%s" % (_cell(n.label), " %s" % _cell(n.sublabel) if n.sublabel else ""))
+        o.append("### %s%s" % (md(n.label), " %s" % md(n.sublabel) if n.sublabel else ""))
         o.append("")
         if n.desc_line >= 0 and n.desc_line < len(n.detail_lines):
-            o += [n.detail_lines[n.desc_line], ""]
-        o += ["- %s" % i for i in n.info]
+            o += [md(n.detail_lines[n.desc_line]), ""]
+        o += ["- %s" % md(i) for i in n.info]
         o += ["- %s" % _file_link(view, p) for p in n.members] or ["- No files."]
         o.append("")
     o += ["## Entry points", ""]
@@ -233,25 +242,25 @@ def _gd_head(view: ViewGraph) -> List[str]:
     if not actors:
         o += ["None.", ""]
     for n in actors:
-        o += ["### %s (%s)" % (_cell(n.label), _cell(n.sublabel)), ""]
-        o += ["- %s" % m for m in n.members] + [""]
+        o += ["### %s (%s)" % (md(n.label), md(n.sublabel)), ""]
+        o += ["- %s" % md(m) for m in n.members] + [""]
     struct = [e for e in view.edges if e.status == STRUCTURAL]
     if struct:
         names = {n.id: n.label for n in view.nodes}
         o += ["## Job structure", "",
               "These lines say a job exists; who schedules it is not in these repos. They are "
               "not links and are not counted above.", ""]
-        o += ["- %s %s %s" % (names.get(e.src, e.src), e.label, names.get(e.dst, e.dst))
+        o += ["- %s %s %s" % (md(names.get(e.src, e.src)), md(e.label), md(names.get(e.dst, e.dst)))
               for e in struct]
         o.append("")
     other = [n for n in view.nodes if n.role == "shared" or n.id.startswith("out:")]
     if other:
         o += ["## Shared resources and outside this repo", ""]
         for n in other:
-            o.append("- %s (%s)" % (_cell(n.label), _cell(n.sublabel)) if n.sublabel
-                     else "- %s" % _cell(n.label))
-            o += ["  - %s" % i for i in n.info]
-            o += ["  - %s" % m for m in (n.members if n.id.startswith("out:") else [])]
+            o.append("- %s (%s)" % (md(n.label), md(n.sublabel)) if n.sublabel
+                     else "- %s" % md(n.label))
+            o += ["  - %s" % md(i) for i in n.info]
+            o += ["  - %s" % md(m) for m in (n.members if n.id.startswith("out:") else [])]
         o.append("")
     return o
 
@@ -260,12 +269,12 @@ def _gd_tail(view: ViewGraph) -> List[str]:
     o: List[str] = ["", "## Clickable boxes", "", CLICKABLE, "", "## Not yet grouped", ""]
     ung = [n for n in view.nodes if n.role == "ungrouped"]
     if ung and (ung[0].members or ung[0].info):
-        o += ["- %s" % i for i in ung[0].info]
+        o += ["- %s" % md(i) for i in ung[0].info]
         o += ["- %s" % _file_link(view, p) for p in ung[0].members]
     else:
         o.append("None.")
     o += ["", "## Problems in the gitdiagram file", ""]
-    o += ["- %s" % " ".join(p.split()) for p in view.problems] or ["None."]
+    o += ["- %s" % md(" ".join(p.split())) for p in view.problems] or ["None."]
     return o
 
 
@@ -318,7 +327,7 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
 
     o += ["", "## Notes", ""]
     notes = [n for n in view.notes + layout_notes(view) if not (gd and n in view.problems)]
-    o += ["- %s" % " ".join(str(n).split()) for n in notes]
+    o += ["- %s" % (md if gd else str)(" ".join(str(n).split())) for n in notes]
     if seq:
         o.append("- %d job-structure lines (step order, SYSOUT) are drawn but are not links; "
                  "they have no row above" % seq)
