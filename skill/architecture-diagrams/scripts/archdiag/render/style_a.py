@@ -14,7 +14,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
-                                    PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, group_colors,
+                                    PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, gd_details,
+                                    group_colors,
                                     group_icon, legend, legend_width, line_attrs, line_style,
                                     link_wrap, notes_block, notes_height, num, overview_block,
                                     path_d, step_text, svg_doc, text, text_width, tint, wrap)
@@ -48,14 +49,17 @@ class _NodeText:
         mono = n.kind == "repo"
         self.label = wrap(n.label, MAX_TEXT_W, LABEL_SIZE)
         self.sub = wrap(n.sublabel, MAX_TEXT_W, SUB_SIZE) if n.sublabel else []
-        self.detail: List[Tuple[str, bool]] = []  # (line, highlighted)
-        for i, d in enumerate(n.detail_lines):
-            for s in wrap(d, MAX_TEXT_W, DETAIL_SIZE, mono=mono):
-                self.detail.append((s, i < n.highlight))
+        self.detail: List[Tuple[str, bool, bool]] = []  # (line, highlighted, muted)
+        if n.kind == "group":  # gitdiagram: description capped, links-inside line muted
+            self.detail = [(s, False, m) for s, m in gd_details(n, MAX_TEXT_W, DETAIL_SIZE)]
+        else:
+            for i, d in enumerate(n.detail_lines):
+                for s in wrap(d, MAX_TEXT_W, DETAIL_SIZE, mono=mono):
+                    self.detail.append((s, i < n.highlight, False))
         self.mono = mono
         widths = [text_width(s, LABEL_SIZE) for s in self.label]
         widths += [text_width(s, SUB_SIZE) for s in self.sub]
-        widths += [text_width(s, DETAIL_SIZE, mono) for s, _ in self.detail]
+        widths += [text_width(s, DETAIL_SIZE, mono) for s, _, _ in self.detail]
         self.width = max(widths) if widths else 0.0
         self.height = (LABEL_LINE * len(self.label) + SUB_LINE * len(self.sub)
                        + (3 + DETAIL_LINE * len(self.detail) if self.detail else 0))
@@ -154,7 +158,11 @@ def _node_svg(n: VNode, b: Box, color: str, ends_in_dot: bool, ox: float, oy: fl
     t = _NodeText(n)
     x, y, cx = b.x + ox, b.y + oy, b.cx + ox
     parts: List[str] = []
-    if n.kind == "group" and color:  # gitdiagram: a card in the group's colour
+    if n.role == "ungrouped":  # gitdiagram "Not yet grouped": dashed grey, light fill
+        parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="10" fill="#f8fafc" '
+                     'stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>'
+                     % (num(x + 1), num(y + 1), num(b.w - 2), num(b.h - 2)))
+    elif n.kind == "group" and color:  # gitdiagram: a card in the group's colour
         parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="10" fill="%s" stroke="%s" '
                      'stroke-width="1.5"/>' % (num(x + 1), num(y + 1), num(b.w - 2),
                                                num(b.h - 2), tint(color, 0.07), color))
@@ -183,9 +191,11 @@ def _node_svg(n: VNode, b: Box, color: str, ends_in_dot: bool, ox: float, oy: fl
         parts.append(text(cx, ty - 2.5, s, SUB_SIZE, sub_fill, "middle"))
     if t.detail:
         ty += 3
-    for s, hi in t.detail:
+    for s, hi, muted in t.detail:
         ty += DETAIL_LINE
         fill = "#0f172a" if hi else ("#475569" if _has_icon(n) else label_fill)
+        if muted:
+            fill = "#94a3b8"
         parts.append(text(cx, ty - 2.5, s, DETAIL_SIZE, fill, "middle", "700" if hi else "",
                           mono=t.mono))
     return "<g>%s</g>" % "".join(parts)

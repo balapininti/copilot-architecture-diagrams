@@ -89,7 +89,7 @@ def test_groups_become_boxes_with_links():
     assert jobs.members == ["jcl.pds/CLMD300", "jcl/CLMD100.jcl", "jcl/test/CLMD100.jcl"]
     # files no group claims
     ung = node(v, "grp:?")
-    assert ung.label == "Not yet grouped"
+    assert ung.label == "Not yet grouped · 3 files" and ung.role == "ungrouped"
     assert set(ung.members) == {"asm/DATEUTIL.asm", "cobol/CLMB500.cbl", "cobol/CLMB510.cbl"}
     assert "3 files not yet grouped" in v.notes
 
@@ -123,9 +123,11 @@ def test_dataset_arrow_starts_at_program_group():
     ops = {(u.src, u.op, u.dst) for u in ln.underlying}
     assert (JOB + "STEP020", "write", "dataset:CLAIMS.DAILY") in ops
     assert (JOB + "STEP020", "runs", "program:CLMB200") in ops  # stands on the runs edge too
-    # the job's temporary datasets are told apart by the job file
-    assert node(v, "dataset:claims-batch/jcl/test/CLMD100.jcl#&&SORTED").sublabel == \
-        "temporary dataset · jcl/test/CLMD100.jcl"
+    # the job's temporary datasets are no boxes: named on the job's line and in its info,
+    # told apart by the job file (Ruling 6)
+    assert not [n for n in v.nodes if "&&" in n.id]
+    assert "temporary dataset &&SORTED (jcl/test/CLMD100.jcl)" in \
+        node(v, "grp:Nightly jobs").info
     # the same DD is not drawn from the job's group
     assert not [e for e in lines(v, "grp:Nightly jobs", "dataset:CLAIMS.DAILY")
                 if any(u.src == JOB + "STEP020" for u in e.underlying)]
@@ -194,9 +196,10 @@ def test_undefined_shared_resource_box_only_when_two_groups():
     assert lines(v, "grp:A", "dataset:D1")[0].label == "reads"
     assert lines(v, "grp:B", "dataset:D1")[0].label == "writes"
     ga = node(v, "grp:A")
-    assert any("D2" in x for x in ga.detail_lines)
-    # its partial link is counted inside A and kept for the links report
-    assert "1 link inside" in ga.detail_lines and "1 partly known link inside" in ga.detail_lines
+    assert any("D2" in x for x in ga.info)
+    # its partial link is counted inside A (one muted box line) and kept for the links report
+    assert ga.detail_lines[-1] == "+1 link inside (1 partly known)" and ga.muted == 1
+    assert "1 link inside" in ga.info and "1 partly known link inside" in ga.info
     assert any(u.dst == "dataset:D2" for u in ga.underlying)
 
 
@@ -365,7 +368,7 @@ def test_partial_call_between_groups_is_dotted():
     ln, = lines(v, "grp:Payments", "grp:Claim pricing")
     assert (ln.label, ln.status) == ("CALL · CLMB210", CONFIRMED)
     pricing = node(v, "grp:Claim pricing")
-    assert "1 partly known link inside" in pricing.detail_lines
+    assert "1 partly known link inside" in pricing.info
     # the partly known runs of the CLMEXT proc
     pr, = [e for e in lines(v, "grp:Procs", "grp:Claim pricing") if e.label.startswith("runs")]
     assert pr.status == PARTIAL
@@ -435,9 +438,10 @@ def test_other_repo_use_of_a_resource_is_marked_and_kept():
     r.inventory.repos += [Repo("r2", "r2"), Repo("r3", "r3")]
     gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"])], [], [], True)
     ga = node(view_of(gd, r), "grp:A")
-    assert "also used by other repos: D (r2, partly known; r3)" in ga.detail_lines
+    assert "also used by other repos: D (r2, partly known; r3)" in ga.info
     assert any(u is e_b for u in ga.underlying) and any(u is e_c for u in ga.underlying)
-    # a shared box says the same in its sublabel and keeps the edges too
+    # a shared box says the same in its info (its box shows name and kind) and keeps the
+    # edges too
     a2 = prog("A2", "a2/A2.cbl")
     r = synthetic([a, a2, b, d], [e_a, Edge(a2.id, "read", d.id, CONFIRMED, None,
                                             [_ev("r1", "a2/A2.cbl", 3)]), e_b],
@@ -445,7 +449,7 @@ def test_other_repo_use_of_a_resource_is_marked_and_kept():
     r.inventory.repos.append(Repo("r2", "r2"))
     gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"]), GitGroup("A2", "", ["a2/"])], [], [], True)
     box = node(view_of(gd, r), "dataset:D")
-    assert box.sublabel.endswith("also used by r2, partly known")
+    assert box.sublabel == "dataset" and "also used by r2, partly known" in box.info
     assert any(u is e_b for u in box.underlying)
 
 

@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLORS, esc,
-                                    group_colors, legend, legend_width, line_style, link_wrap,
+                                    gd_details, group_colors, legend, legend_width, line_style, link_wrap,
                                     notes_block, notes_height, num, overview_block, svg_doc,
                                     text, text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, marker_svg, place_pills
@@ -56,16 +56,14 @@ def _shorten(s: str, limit: int = MAX_ROW_CHARS) -> str:
     return s if len(s) <= limit else "…" + s[-(limit - 1):]
 
 
-def _rows(n: VNode) -> List[Tuple[str, bool]]:
-    """(text, is evidence file) for each detail row of a repo card."""
+def _rows(n: VNode) -> List[Tuple[str, bool, bool]]:
+    """(text, is evidence file, muted) for each detail row of a card."""
     out = []
     if n.kind != "repo":  # gitdiagram text (files, names, a description): wrapped, not cut
-        for d in n.detail_lines:
-            out.extend((s, False) for s in wrap(d, GD_ROW_CHARS * 0.55 * ROW_SIZE, ROW_SIZE,
-                                                True))
-        return out
+        return [(s, False, m) for s, m in
+                gd_details(n, GD_ROW_CHARS * 0.55 * ROW_SIZE, ROW_SIZE, True)]
     for i, d in enumerate(n.detail_lines):
-        out.append((_shorten(d), i < n.highlight and not d.startswith("…")))
+        out.append((_shorten(d), i < n.highlight and not d.startswith("…"), False))
     return out
 
 
@@ -81,7 +79,7 @@ def node_size(n: VNode) -> Tuple[float, float]:
     if n.kind in CARD_KINDS:
         rows = _rows(n)
         w = max([MIN_CARD_W, text_width(_name(n), NAME_SIZE) + text_width(n.sublabel, LANG_SIZE)
-                 + 44] + [text_width(r, ROW_SIZE, n.kind == "repo") + 28 for r, _ in rows])
+                 + 44] + [text_width(r, ROW_SIZE, n.kind == "repo") + 28 for r, _, _ in rows])
         h = HEAD_H + CARD_PAD + len(rows) * (ROW_H + ROW_GAP) + CARD_PAD
         return w, max(h, HEAD_H + 40)
     name, sub = _missing_lines(n)
@@ -104,6 +102,16 @@ def _repo_colors(view: ViewGraph) -> Dict[str, str]:
 
 def _card_svg(n: VNode, b: Box, color: str, ox: float, oy: float) -> str:
     x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
+    if n.role == "ungrouped":  # gitdiagram "Not yet grouped": dashed grey, light header
+        parts = ['<rect x="%s" y="%s" width="%s" height="%s" rx="10" fill="#f8fafc" '
+                 'stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 4"/>'
+                 % (num(x), num(y), num(w), num(h)),
+                 text(x + 13, y + 21, _name(n), NAME_SIZE, "#334155", weight="700")]
+        ry = y + HEAD_H + CARD_PAD
+        for row, _, _ in _rows(n):
+            parts.append(text(x + 14, ry + 15, row, ROW_SIZE, "#64748b", mono=True))
+            ry += ROW_H + ROW_GAP
+        return "<g>%s</g>" % "".join(parts)
     parts = [
         # the shadow: a second rect offset 2px (no filter in Office-safe SVG)
         '<rect x="%s" y="%s" width="%s" height="%s" rx="10" fill="#0f172a" fill-opacity="0.08"/>'
@@ -117,12 +125,13 @@ def _card_svg(n: VNode, b: Box, color: str, ox: float, oy: float) -> str:
     if n.sublabel:
         parts.append(text(x + w - 10, y + 20, n.sublabel, LANG_SIZE, "#f1f5f9", anchor="end"))
     ry = y + HEAD_H + CARD_PAD
-    for row, is_evidence in _rows(n):
+    for row, is_evidence, muted in _rows(n):
         if is_evidence:
             parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="4" fill="%s"/>'
                          % (num(x + 8), num(ry), num(w - 16), num(ROW_H), tint(color, 0.18)))
         parts.append(text(x + 14, ry + 15, row, ROW_SIZE,
-                          "#0f172a" if is_evidence else "#64748b", mono=True))
+                          "#0f172a" if is_evidence else ("#94a3b8" if muted else "#64748b"),
+                          mono=True))
         ry += ROW_H + ROW_GAP
     return "<g>%s</g>" % "".join(parts)
 

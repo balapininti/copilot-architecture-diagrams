@@ -39,6 +39,16 @@ class VNode:
     # gitdiagram: everything the box stands for in full (a group's file paths, an entry
     # actor's names), for the links report and the completeness check
     members: List[str] = field(default_factory=list)
+    # gitdiagram: what the box stands for but does not show (links inside, resources,
+    # other repos' uses, temporary datasets), for the links report
+    info: List[str] = field(default_factory=list)
+    # gitdiagram: the index in detail_lines of the description (drawn in at most 2 lines),
+    # and how many trailing detail lines are drawn muted ("+3 links inside")
+    desc_line: int = -1
+    muted: int = 0
+    # gitdiagram: "shared" for a resource box between groups (name and short kind only),
+    # "ungrouped" for the "Not yet grouped" box
+    role: str = ""
 
 
 @dataclass

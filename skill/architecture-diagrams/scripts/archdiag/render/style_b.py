@@ -15,7 +15,8 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for, layout_notes
-from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, esc, group_colors, legend,
+from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, esc, gd_details,
+                                    group_colors, legend,
                                     legend_width, line_style, link_wrap, notes_block,
                                     notes_height, num, overview_block, step_text, svg_doc, text,
                                     text_width, wrap)
@@ -42,6 +43,9 @@ QUEUE = "#438dd5"
 NOTANALYZED = "#cbd5e1"
 CAP = "#2a7fd4"               # a cylinder's top ellipse
 SUB_TEXT = "#cfe0f5"
+MUTED_ON_DARK = "#dbe4f0"     # a muted line on a coloured box
+SHARED_FILL = "#e2e8f0"       # a gitdiagram resource box between groups: neutral
+SHARED_CAP = "#cbd5e1"
 
 CYLINDERS = ("table", "dataset", "vsam", "gdg", "datastore")
 
@@ -86,6 +90,8 @@ def _card(n: VNode) -> Tuple[str, str, List[str]]:
     sub = n.sublabel or ""
     if n.kind == "missing":
         return n.label, "", ([sub] if sub else [])
+    if n.role == "shared":  # gitdiagram: a resource between groups, name and short kind
+        return n.label, "[%s]" % sub if sub else "", []
     if n.kind in GD_KINDS:  # gitdiagram: the sublabel is the [tech] or what the box holds
         kind_line = sub if sub.startswith("[") else ("[%s]" % sub if sub else "")
         return n.label, kind_line, list(n.detail_lines)
@@ -127,8 +133,15 @@ class _Text:
         self.name = wrap(name, MAX_TEXT_W, NAME_SIZE)
         self.kind = [kind_line] if kind_line else []
         self.desc: List[str] = []
-        for d in desc:
-            self.desc.extend(wrap(d, MAX_TEXT_W, DESC_SIZE))
+        self.muted: Set[int] = set()  # indexes of desc lines drawn muted
+        if n.kind == "group":  # gitdiagram: description capped, links-inside line muted
+            for k, (d, m) in enumerate(gd_details(n, MAX_TEXT_W, DESC_SIZE)):
+                self.desc.append(d)
+                if m:
+                    self.muted.add(k)
+        else:
+            for d in desc:
+                self.desc.extend(wrap(d, MAX_TEXT_W, DESC_SIZE))
         self.desc = self.desc[:(MAX_GD_LINES if n.kind in GD_KINDS else MAX_DESC_LINES + 1)]
         widths = [text_width(s, NAME_SIZE) + 6 for s in self.name]
         widths += [text_width(s, KIND_SIZE) for s in self.kind]
@@ -194,11 +207,15 @@ def _node_svg(n: VNode, b: Box, ox: float, oy: float, color: str = "") -> str:
         top = y + (h - t.height) / 2
     elif n.kind in CYLINDERS:
         ry = CYL_RY
+        body_fill, cap_fill = BOX, CAP
+        if n.role == "shared":  # gitdiagram: neutral, so it never looks like a group
+            body_fill, cap_fill = SHARED_FILL, SHARED_CAP
+            name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
         parts.append('<path d="M%s,%s L%s,%s A%s,%s 0 0,0 %s,%s L%s,%s" fill="%s"/>'
                      % (num(x), num(y + ry), num(x), num(y + h - ry), num(w / 2), num(ry),
-                        num(x + w), num(y + h - ry), num(x + w), num(y + ry), BOX))
+                        num(x + w), num(y + h - ry), num(x + w), num(y + ry), body_fill))
         parts.append('<ellipse cx="%s" cy="%s" rx="%s" ry="%s" fill="%s"/>'
-                     % (num(cx), num(y + ry), num(w / 2), num(ry), CAP))
+                     % (num(cx), num(y + ry), num(w / 2), num(ry), cap_fill))
         top = y + 2 * ry - 2 + PAD_TOP / 2
     elif n.kind in ("person", "actor"):
         if n.id == "act:scheduler":
@@ -216,6 +233,14 @@ def _node_svg(n: VNode, b: Box, ox: float, oy: float, color: str = "") -> str:
         if n.kind in ("notanalyzed", "neighbor", "outside"):
             stroke = ' stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3"'
             name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
+        elif n.role == "ungrouped":  # gitdiagram "Not yet grouped": dashed grey, light fill
+            fill = "#f8fafc"
+            stroke = ' stroke="#64748b" stroke-width="1.4" stroke-dasharray="6 4"'
+            name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
+        elif n.role == "shared":
+            fill = SHARED_FILL
+            stroke = ' stroke="#94a3b8" stroke-width="1.2"'
+            name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
         parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="%s"%s/>'
                      % (num(x), num(y), num(w), num(h), fill, stroke))
         if n.kind == "queue":
@@ -229,9 +254,11 @@ def _node_svg(n: VNode, b: Box, ox: float, oy: float, color: str = "") -> str:
         parts.append(text(cx, ty - 3.5, s, KIND_SIZE, kind_fill, "middle"))
     if t.desc:
         ty += 4
-    for s in t.desc:
+    for k, s in enumerate(t.desc):
         ty += DESC_LINE
-        parts.append(text(cx, ty - 3.5, s, DESC_SIZE, desc_fill, "middle"))
+        parts.append(text(cx, ty - 3.5, s, DESC_SIZE,
+                          (MUTED_ON_DARK if desc_fill == "#ffffff" else "#94a3b8")
+                          if k in t.muted else desc_fill, "middle"))
     return "<g>%s</g>" % "".join(parts)
 
 

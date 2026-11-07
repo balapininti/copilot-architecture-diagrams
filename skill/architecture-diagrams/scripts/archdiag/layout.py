@@ -163,8 +163,8 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
     elif view.level == "gitdiagram" and _gitdiagram_centre(view):
-        left, right = _gitdiagram_sides(view)
-        boxes, routes = context(view, sizes, left, right)
+        left, right, bottom = _gitdiagram_sides(view)
+        boxes, routes = context(view, sizes, left, right, bottom)
         groups = {}
     else:
         boxes, routes = layered(view, sizes)
@@ -1333,20 +1333,32 @@ def _has_context(view: ViewGraph) -> bool:
     return 0 < grouped < len(view.nodes)
 
 
-def _gitdiagram_sides(view: ViewGraph) -> Tuple[List[str], List[str]]:
-    """A gitdiagram's columns: entry points (``act:*``) left, outside stubs (``out:*``)
-    right; groups and shared boxes are the centre."""
-    return ([n.id for n in view.nodes if n.id.startswith("act:")],
-            [n.id for n in view.nodes if n.id.startswith("out:")])
+def _gitdiagram_sides(view: ViewGraph) -> Tuple[List[str], List[str], List[str]]:
+    """A gitdiagram's places: entry points (``act:*``) left, then the outside stubs that only
+    call into the repo (every line leaves them, like claims-portal's REST calls); the other
+    outside stubs right; "Not yet grouped" (``grp:?``) in a row under the centre. Groups and
+    shared boxes are the centre."""
+    callers = set()
+    for n in view.nodes:
+        if n.id.startswith("out:"):
+            mine = [e for e in view.edges if n.id in (e.src, e.dst)]
+            if mine and all(e.src == n.id for e in mine):
+                callers.add(n.id)
+    left = [n.id for n in view.nodes if n.id.startswith("act:")]
+    left += [n.id for n in view.nodes if n.id in callers]
+    right = [n.id for n in view.nodes if n.id.startswith("out:") and n.id not in callers]
+    bottom = [n.id for n in view.nodes if n.id == "grp:?"]
+    return left, right, bottom
 
 
 def _gitdiagram_centre(view: ViewGraph) -> bool:
-    left, right = _gitdiagram_sides(view)
-    return len(left) + len(right) < len(view.nodes)
+    left, right, bottom = _gitdiagram_sides(view)
+    return len(left) + len(right) + len(bottom) < len(view.nodes)
 
 
 def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
-            left_ids: Optional[List[str]] = None, right_ids: Optional[List[str]] = None
+            left_ids: Optional[List[str]] = None, right_ids: Optional[List[str]] = None,
+            bottom_ids: Optional[List[str]] = None
             ) -> Tuple[Dict[str, Box], List[List[Point]]]:
     """One application in its context: its members (grouped boxes) in the middle, laid
     out left to right by ``layered`` in at most CONTEXT_COLS columns; outside boxes in one
@@ -1355,12 +1367,14 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     to and from the columns are routed one by one in their own lanes, leaving and
     entering members through spread ports on the top or bottom.
 
-    ``left_ids`` and ``right_ids``, when given, fix the two columns (the gitdiagram's roles)
-    and every other box is a member."""
+    ``left_ids`` and ``right_ids``, when given, fix the two columns (the gitdiagram's roles),
+    ``bottom_ids`` stand in a row under the members, and every other box is a member. A fixed
+    left column keeps its given order of kinds: the entry points first, then the callers."""
     by_id = {n.id: n for n in view.nodes}
     fixed = left_ids is not None or right_ids is not None
+    bottom: List[str] = list(bottom_ids or []) if fixed else []
     if fixed:
-        sides = set(left_ids or []) | set(right_ids or [])
+        sides = set(left_ids or []) | set(right_ids or []) | set(bottom)
         members = [n for n in view.nodes if n.id not in sides]
     else:
         members = [n for n in view.nodes if n.group]
@@ -1411,6 +1425,8 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     gy1 = max(b.bottom for b in mboxes.values()) + GROUP_PAD
     boxes: Dict[str, Box] = dict(mboxes)
 
+    rank = {i: (0 if i.startswith("act:") else 1) for i in left} if fixed else {}
+
     def place_column(ids: List[str], x_of: Callable[[float], float]) -> None:
         want: Dict[str, float] = {}
         key: Dict[str, Tuple[float, int, int]] = {}  # (anchor's place, anchor, depth)
@@ -1434,7 +1450,7 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
             if i not in want:
                 want[i] = gy1
                 key[i] = (gy1, ids.index(i), 0)
-        order = sorted(ids, key=lambda i: key[i])
+        order = sorted(ids, key=lambda i: (rank.get(i, 0),) + key[i])
         gaps = [(sizes[a][1] + sizes[b][1]) / 2 + CONTEXT_ROW_GAP
                 for a, b in zip(order, order[1:])]
         ys = _pack([want[i] for i in order], gaps)
@@ -1454,8 +1470,18 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     lanes: List[Tuple[Point, Point]] = []
     for r in mroutes:
         lanes.extend(zip(r, r[1:]))
+    # the bottom row: centred under the members
+    if bottom:
+        bw = sum(sizes[i][0] for i in bottom) + CONTEXT_GAP * (len(bottom) - 1)
+        bx = (gx0 + gx1) / 2 - bw / 2
+        by = gy1 + CONTEXT_GAP / 2
+        for i in bottom:
+            w, h = sizes[i]
+            boxes[i] = Box(bx, by, w, h)
+            bx += w + CONTEXT_GAP
     side_of = {i: "left" for i in left}
     side_of.update({i: "right" for i in right})
+    side_of.update({i: "bottom" for i in bottom})
     # ports: outside boxes on the side facing the members; members on top or bottom
     plan: Dict[int, Tuple[Tuple[str, str], Tuple[str, str]]] = {}
     want_x: Dict[Tuple[str, str], List[Tuple[float, int]]] = {}
@@ -1474,6 +1500,12 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
         return True
 
     def end_side(me: str, other: str) -> str:
+        if me in bottom:
+            if other in member_ids or other in bottom:
+                return "top"
+            return "left" if side_of[other] == "left" else "right"
+        if me in member_ids and other in bottom:
+            return "bottom"
         if me in member_ids:
             col = side_of.get(other)
             if col is not None and faces(me, col):

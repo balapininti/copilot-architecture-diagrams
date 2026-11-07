@@ -22,8 +22,13 @@ from __future__ import annotations
 
 import math
 import posixpath
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+import re
+from typing import (TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Sequence, Set,
+                    Tuple)
 from urllib.parse import quote
+
+if TYPE_CHECKING:  # pragma: no cover
+    from archdiag.views import VNode, ViewGraph
 
 FONT = "Segoe UI, Arial, sans-serif"
 MONO = "Consolas, monospace"
@@ -271,11 +276,14 @@ def notes_block(notes: Sequence[str], x: float, y: float, max_w: float = 900.0) 
 
 def svg_doc(w: float, h: float, body: str, bg: str = "#ffffff",
             title: str = "Architecture diagram") -> str:
-    """A complete SVG document: namespace, size, ``<title>``, background, body."""
-    return ('<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %s %s" '
-            'font-family="%s"><title>%s</title><rect x="0" y="0" width="%s" height="%s" '
-            'fill="%s"/>%s</svg>\n' % (num(w), num(h), num(w), num(h), FONT, esc(title),
-                                       num(w), num(h), bg, body))
+    """A complete SVG document: namespace, size, ``<title>``, background, body. The xlink
+    namespace is declared only when a box link uses it."""
+    xlink = ' xmlns:xlink="http://www.w3.org/1999/xlink"' if "xlink:href=" in body else ""
+    return ('<svg xmlns="http://www.w3.org/2000/svg"%s width="%s" height="%s" '
+            'viewBox="0 0 %s %s" font-family="%s"><title>%s</title><rect x="0" y="0" '
+            'width="%s" height="%s" fill="%s"/>%s</svg>\n'
+            % (xlink, num(w), num(h), num(w), num(h), FONT, esc(title), num(w), num(h), bg,
+               body))
 
 
 # ------------------------------------------------------------------ gitdiagram: links, overview
@@ -291,16 +299,40 @@ def _url_path(p: str) -> str:
 def href(view_repo_path: str, link: str) -> str:
     """The relative URL, from ``architecture-diagrams/``, of ``link`` (repo-relative) in the
     repo folder ``view_repo_path`` (workspace-relative): ``../<repo path>/<link>``, every
-    part percent-encoded so spaces and ``#`` survive."""
+    part percent-encoded so spaces and ``#`` survive. A path inside an archive
+    (``lib/x.aar!/a/b``) links to the archive file."""
+    link = str(link).split("!/", 1)[0]
     parts = [x for x in (_url_path(view_repo_path), _url_path(link)) if x]
     return "../" + quote(posixpath.join(*parts) if parts else "", safe="/")
 
 
-def link_wrap(view, n, svg: str) -> str:
-    """``svg`` (one box) wrapped in ``<a href>`` when the box has a link; as is otherwise."""
-    if not getattr(n, "link", "") or not svg:
+def link_wrap(view: "ViewGraph", n: "VNode", svg: str) -> str:
+    """``svg`` (one box) wrapped in ``<a>`` when the box has a link; as is otherwise. Both
+    ``href`` (SVG 2) and ``xlink:href`` (older viewers) are written."""
+    if not n.link or not svg:
         return svg
-    return '<a href="%s">%s</a>' % (esc(href(view.repo_path or view.scope or "", n.link)), svg)
+    url = esc(href(view.repo_path or view.scope or "", n.link))
+    return '<a href="%s" xlink:href="%s">%s</a>' % (url, url, svg)
+
+
+DESC_MAX_LINES = 2  # a gitdiagram group's description, wrapped
+
+
+def gd_details(n: "VNode", max_px: float, size: float, mono: bool = False
+               ) -> List[Tuple[str, bool]]:
+    """A box's detail lines wrapped to ``max_px``, each with whether it is drawn muted. The
+    description (``n.desc_line``) keeps at most DESC_MAX_LINES lines, the last cut with
+    ``…``; the last ``n.muted`` detail lines are muted."""
+    out: List[Tuple[str, bool]] = []
+    first_muted = len(n.detail_lines) - n.muted
+    for i, d in enumerate(n.detail_lines):
+        ws = wrap(d, max_px, size, mono)
+        if i == n.desc_line and len(ws) > DESC_MAX_LINES:
+            keep = max(1, int(max_px / ((0.55 if mono else 0.6) * size)) - 1)
+            ws = ws[:DESC_MAX_LINES]
+            ws[-1] = ws[-1][:keep].rstrip() + "…"
+        out.extend((w, i >= first_muted) for w in ws)
+    return out
 
 
 OVERVIEW_SIZE, OVERVIEW_LINE = 12.5, 18.0
@@ -324,12 +356,12 @@ def overview_block(text_: str, width: float) -> Tuple[str, float]:
 
 # group box colours: hues away from the line colours (slate, amber, red, brown, grey) and
 # dark enough to carry white text; "Not yet grouped" is neutral grey
-GROUP_PALETTE = ("#2563eb", "#047857", "#7c3aed", "#0e7490", "#a21caf", "#4338ca", "#0f766e",
-                 "#0369a1")
+GROUP_PALETTE = ("#2563eb", "#15803d", "#a21caf", "#0e7490", "#6d28d9", "#4338ca", "#0f766e",
+                 "#0369a1")  # the first five far apart: blue, green, fuchsia, cyan, violet
 UNGROUPED_COLOR = "#64748b"
 
 
-def group_colors(view) -> Dict[str, str]:
+def group_colors(view: "ViewGraph") -> Dict[str, str]:
     """{group box id: colour} for the gitdiagram's ``group`` boxes, by sorted group name, so
     the same groups get the same colours every time."""
     ids = sorted((n.id for n in view.nodes if n.kind == "group" and n.id != "grp:?"),
@@ -356,12 +388,18 @@ _EXT_ICON = {".cbl": "program", ".cob": "program", ".cpy": "program", ".jcl": "j
              ".bms": "map", ".csd": "transaction", ".asm": "program"}
 
 
-def group_icon(n) -> str:
-    """The icon kind of a gitdiagram group box: from its ``[tech]``, else from the most
-    common file type among its members, else a folder (``repo``)."""
-    tech = (n.sublabel or "").strip("[] ").lower()
+def _tokens(s: str) -> List[str]:
+    return re.findall(r"[a-z0-9/+#]+", s.lower())
+
+
+def group_icon(n: "VNode") -> str:
+    """The icon kind of a gitdiagram group box: from the words of its ``[tech]`` (whole
+    words: "JavaScript" is not "Java"), else from the most common file type among its
+    members, else a folder (``repo``)."""
+    words = _tokens(n.sublabel or "")
     for word, kind in _TECH_ICON:
-        if tech == word or tech.startswith(word + " ") or (len(word) > 3 and word in tech):
+        want = _tokens(word)
+        if any(words[k:k + len(want)] == want for k in range(len(words) - len(want) + 1)):
             return kind
     counts: Dict[str, int] = {}
     for p in getattr(n, "members", []) or []:
@@ -373,7 +411,7 @@ def group_icon(n) -> str:
     return "repo"
 
 
-def actor_icon(n) -> str:
+def actor_icon(n: "VNode") -> str:
     """``clock`` for the Scheduler, ``person`` for every other entry-point box."""
     return "clock" if n.id == "act:scheduler" else "person"
 

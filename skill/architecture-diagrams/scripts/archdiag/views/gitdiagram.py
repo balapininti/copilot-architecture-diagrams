@@ -36,6 +36,7 @@ from archdiag.views.common import (_RANK, STRUCTURAL, VEdge, VNode, ViewGraph, _
 UNGROUPED = "grp:?"
 SCHEDULER = "act:scheduler"
 MAX_FILES = 4  # file names shown in a group box
+MAX_UNGROUPED = 3  # file names shown in the "Not yet grouped" box
 MAX_NAMES = 6  # entry names shown in an actor box
 _ENTRY_LABEL = {k: label for k, label in ACTOR_NAMES if k != "job"}
 _ACTOR_ORDER = [SCHEDULER] + ["act:%s" % k for k, _ in ACTOR_NAMES if k != "job"]
@@ -52,8 +53,8 @@ def _s(n: int) -> str:
     return "" if n == 1 else "s"
 
 
-def _file_lines(paths: List[str], more: str) -> List[str]:
-    """Up to MAX_FILES base names (with the parent folder when two base names collide), then
+def _file_lines(paths: List[str], more: str, keep: int = MAX_FILES) -> List[str]:
+    """Up to ``keep`` base names (with the parent folder when two base names collide), then
     ``… N more`` + ``more``."""
     base = [posixpath.basename(p) for p in paths]
     out = []
@@ -62,8 +63,8 @@ def _file_lines(paths: List[str], more: str) -> List[str]:
             parent = posixpath.basename(posixpath.dirname(p))
             b = "%s/%s" % (parent, b) if parent else b
         out.append(b)
-    if len(out) > MAX_FILES:
-        return out[:MAX_FILES] + ["… %d more%s" % (len(out) - MAX_FILES, more)]
+    if len(out) > keep:
+        return out[:keep] + ["… %d more%s" % (len(out) - keep, more)]
     return out
 
 
@@ -146,9 +147,17 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         dd = str(dd).strip().upper()
         ddname[key] = dd if ddname.get(key, dd) == dd else None  # two DDs on one line: unknown
     runs: Dict[str, List[Edge]] = {}
+    out_of: Dict[str, List[Edge]] = {}
     for e in r.edges:
         if e.op == "runs" and e.src.startswith("step:"):
             runs.setdefault(e.src, []).append(e)
+        out_of.setdefault(e.src, []).append(e)
+
+    def handler(nid: str) -> Optional[str]:
+        """The group holding entry point ``nid``'s handler (its first, by name)."""
+        hs = sorted({str(base(x.dst)) for x in out_of.get(nid, [])
+                     if str(base(x.dst)).startswith("grp:")})
+        return hs[0] if hs else None
 
     def program_run(e: Edge) -> Optional[Edge]:
         """The confirmed ``runs`` edge of ``e``'s step to a program of this repo that opens
@@ -181,12 +190,22 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             s = base(run.dst)
             st = _least_certain([e.status, run.status])
             extra = [run]
+        # a group's use of an entry point of this repo is an internal call: drawn to the
+        # group holding the handler, never into the actor (Ruling 5); same status
+        if s is not None and s.startswith("grp:") and d is not None and \
+                d.startswith("act:") and d != SCHEDULER:
+            h = handler(e.dst)
+            if h is not None:
+                d = h
         return s, d, st, extra
 
     def mine(b: Optional[str]) -> bool:
         return b is not None and b.startswith(("grp:", "act:"))
 
     mapped = [(e,) + ends(e) for e in r.edges]
+    # temporary (&&) datasets are never boxes: folded into the line between the groups that
+    # write and read them ("via &&SORTED"), and listed on the boxes' info (Ruling 6)
+    temp_ids = {nid for nid, n in nodes.items() if n.kind == "dataset" and n.attrs.get("temp")}
 
     # ---------------------------------------------------------------- resources with no file
     touch: Dict[str, Set[str]] = {}
@@ -194,7 +213,7 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     elsewhere: Dict[str, Dict[str, List[Edge]]] = {}
     for e, s, d, _, _ in mapped:
         for b, nid, other in ((s, e.src, d), (d, e.dst, s)):
-            if b != _RES:
+            if b != _RES or nid in temp_ids:
                 continue
             if mine(other):
                 touch.setdefault(nid, set()).add(str(other))
@@ -216,7 +235,16 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     stray: Dict[str, List[Edge]] = {}  # links inside one non-group box (kept for the report)
     drawn: List[Tuple[str, str, str, Edge, str, List[Edge]]] = []
     res_lines: Dict[str, List[str]] = {}  # group -> resources shown as its detail lines
+    # temp dataset -> (box, writes, edge, status, extra) for each use from this repo
+    temps: Dict[str, List[Tuple[str, bool, Edge, str, List[Edge]]]] = {}
     for e, s0, d0, st, extra in mapped:
+        if (s0 == _RES and e.src in temp_ids) or (d0 == _RES and e.dst in temp_ids):
+            at_dst = d0 == _RES and e.dst in temp_ids
+            tid, other = (e.dst, s0) if at_dst else (e.src, d0)
+            if mine(other) and str(other).startswith("grp:"):
+                temps.setdefault(tid, []).append(
+                    (str(other), (e.op in ("write", "update")) if at_dst else True, e, st, extra))
+            continue
         s = res_box.get(e.src) if s0 == _RES else s0
         d = res_box.get(e.dst) if d0 == _RES else d0
         if s is None or d is None or not (here(s) or here(d)):
@@ -280,6 +308,57 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         vedges.append(VEdge(s, d, label, status, "shared_code" if fam == "COPY" else "runtime",
                             _evidence(under), None, under))
 
+    # ---------------------------------------------------------------- temporary datasets
+    temp_info: Dict[str, List[str]] = {}
+    via: Dict[Tuple[str, str], List[Tuple[str, Tuple, Tuple]]] = {}
+    via_order: List[Tuple[str, str]] = []
+    for tid in sorted(temps):
+        uses = temps[tid]
+        job = tid.split(":", 1)[1].split("#", 1)[0]
+        job = job[len(repo) + 1:] if job.startswith(repo + "/") else job
+        line = "temporary dataset %s (%s)" % (_short(nodes[tid]), job)
+        for u in uses:
+            if line not in temp_info.setdefault(u[0], []):
+                temp_info[u[0]].append(line)
+        paired = False
+        for w in (u for u in uses if u[1]):
+            for rd in (u for u in uses if not u[1]):
+                if w[0] == rd[0]:
+                    continue
+                key = (w[0], rd[0])
+                if key not in via:
+                    via[key] = []
+                    via_order.append(key)
+                via[key].append((tid, w, rd))
+                paired = True
+        if not paired:  # written and read in one group: links inside it
+            for u in uses:
+                inside.setdefault(u[0], []).append((u[2], u[3], u[4]))
+    for key in via_order:
+        names: List[str] = []
+        under = []  # type: List[Edge]
+        sts: List[str] = []
+        for tid, w, rd in via[key]:
+            if _short(nodes[tid]) not in names:
+                names.append(_short(nodes[tid]))
+            for u in (w, rd):
+                sts.append(u[3])
+                for x in [u[2]] + u[4]:
+                    if not any(x is y for y in under):
+                        under.append(x)
+        status = _least_certain(sts)
+        text = "via %s" % _names_line(names, 2)
+        same = [ve for ve in vedges if (ve.src, ve.dst) == key and ve.status == status]
+        if same:  # the job's own line, as certain: it carries the temporary dataset's name
+            ve = same[0]
+            ve.label = "%s %s" % (ve.label, text)
+            ve.underlying = ve.underlying + [x for x in under
+                                             if not any(x is y for y in ve.underlying)]
+            ve.evidence = _evidence(ve.underlying)
+        else:
+            vedges.append(VEdge(key[0], key[1], text, status, "runtime", _evidence(under),
+                                None, under))
+
     # ---------------------------------------------------------------- the Scheduler
     jobs = sorted((n for nid, n in nodes.items() if n.kind == "job" and mine(base(nid))),
                   key=lambda n: (n.name, n.id))
@@ -310,9 +389,10 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     actors: Dict[str, VNode] = {}
     if started:
         nm = entry_names(started)
+        job_paths = [f[1] for f in (file(n.id) for n in started) if f]
         actors[SCHEDULER] = VNode(SCHEDULER, "Scheduler", "%d job%s" % (len(started), _s(len(started))),
                                   "actor", None, None, name_lines(nm), real_kind="job",
-                                  members=nm)
+                                  members=nm, link=_folder_link(job_paths))
     for kind, label in _ENTRY_LABEL.items():
         aid = "act:%s" % kind
         ns = sorted((n for nid, n in nodes.items() if n.kind == kind and base(nid) == aid),
@@ -371,6 +451,15 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             out.append("%d partly known link%s inside" % (partly, _s(partly)))
         return out, under
 
+    def inside_summary(gid: str) -> List[str]:
+        """The one muted box line: ``+14 links inside (1 partly known)``."""
+        items = inside.get(gid, [])
+        if not items:
+            return []
+        partly = sum(1 for _, st, _ in items if st != CONFIRMED)
+        return ["+%d link%s inside%s" % (len(items), _s(len(items)),
+                                         " (%d partly known)" % partly if partly else "")]
+
     groups: List[VNode] = []
     for g in gd.groups:
         gid = _gid(g.name)
@@ -378,20 +467,31 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         if not paths and gid not in used and gid not in inside:
             continue
         lines = _file_lines(paths, " files")
+        desc = -1
         if g.description:
+            desc = len(lines)
             lines.append(g.description)
         more, under = inside_detail(gid)
         under += other_edges(res_lines.get(gid, []))
+        summary = inside_summary(gid)
         groups.append(VNode(gid, g.name, "[%s]" % g.tech if g.tech else "", "group", None, None,
-                            lines + more + res_detail(gid), underlying=under,
-                            link=_folder_link(paths), members=list(paths)))
+                            lines + summary, underlying=under, link=_folder_link(paths),
+                            members=list(paths),
+                            info=more + res_detail(gid) + temp_info.get(gid, []),
+                            desc_line=desc, muted=len(summary)))
+    ungrouped: Optional[VNode] = None
     if members.get(UNGROUPED) or UNGROUPED in used or UNGROUPED in inside:
         paths = members.get(UNGROUPED, [])
         more, under = inside_detail(UNGROUPED)
         under += other_edges(res_lines.get(UNGROUPED, []))
-        groups.append(VNode(UNGROUPED, "Not yet grouped", "", "group", None, None,
-                            _file_lines(paths, "") + more + res_detail(UNGROUPED),
-                            underlying=under, members=list(paths)))
+        label = "Not yet grouped · %d file%s" % (len(paths), _s(len(paths))) if paths \
+            else "Not yet grouped"
+        ungrouped = VNode(UNGROUPED, label, "", "group", None, None,
+                          _file_lines(paths, "", MAX_UNGROUPED), underlying=under,
+                          members=list(paths), link=_folder_link(paths),
+                          info=more + res_detail(UNGROUPED) + temp_info.get(UNGROUPED, []),
+                          role="ungrouped")
+        groups.append(ungrouped)
         if paths:
             notes.append("%d file%s not yet grouped" % (len(paths), _s(len(paths))))
     if gd.from_file and files and not any(g.id != UNGROUPED and g.members for g in groups):
@@ -400,14 +500,16 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
 
     shared_nodes: List[VNode] = []
     for nid in sorted(shared):
-        vn = ctx.vnode(nid)
-        if nodes[nid].attrs.get("temp") and "#" in nid:  # one per job: say which
-            job = nid.split(":", 1)[1].split("#", 1)[0]
-            vn.sublabel = "%s · %s" % (vn.sublabel, job[len(repo) + 1:] if
-                                       job.startswith(repo + "/") else job)
+        vn = ctx.vnode(nid)  # name and short kind only; the rest is info for the report
+        vn.info = list(vn.detail_lines)
+        vn.detail_lines = []
+        vn.role = "shared"
         if nid in elsewhere:
-            vn.sublabel = "%s · also used by %s" % (vn.sublabel, other_use(nid))
+            vn.info.append("also used by %s" % other_use(nid))
         vn.underlying = list(stray.get(nid, [])) + other_edges([nid])
+        evs = sorted({(x.path, x.line) for e in r.edges if nid in (e.src, e.dst)
+                      for x in e.evidence if x.repo == repo})
+        vn.link = evs[0][0] if evs else ""
         shared_nodes.append(vn)
 
     stubs: List[VNode] = []
@@ -479,7 +581,10 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         notes.append("%d partly known or loose link%s inside one entry-point or shared box are "
                      "not drawn; the links report lists them" % (dropped, _s(dropped)))
 
-    vnodes = [actors[a] for a in _ACTOR_ORDER if a in actors] + groups + shared_nodes + stubs
+    # "Not yet grouped" goes last in the centre, after the shared boxes
+    named = [g for g in groups if g is not ungrouped]
+    vnodes = [actors[a] for a in _ACTOR_ORDER if a in actors] + named + shared_nodes + \
+        ([ungrouped] if ungrouped is not None else []) + stubs
     v = ViewGraph("Gitdiagram %s" % repo, "gitdiagram", repo, vnodes, vedges, [], notes)
     v.overview = gd.overview
     v.repo_path = repo_path

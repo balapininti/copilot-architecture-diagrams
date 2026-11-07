@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
-                                    esc, group_colors, legend, legend_width, line_style,
+                                    esc, gd_details, group_colors, legend, legend_width, line_style,
                                     link_wrap, loose_dot, note_lines, num, overview_block, path_d,
                                     step_text, svg_doc, text, text_width, tint, wrap)
 from archdiag.render.pills import KEY_LINE, KEY_R, Pill, key_entries, key_svg, marker_svg, place_pills
@@ -158,8 +158,15 @@ class _NodeText:
         self.label = wrap(n.label, MAX_TEXT_W, LABEL_SIZE)
         self.sub = wrap(n.sublabel, MAX_TEXT_W, SUB_SIZE) if n.sublabel else []
         self.detail: List[str] = []
-        for d in n.detail_lines:
-            self.detail.extend(wrap(d, MAX_TEXT_W, DETAIL_SIZE))
+        self.muted: Set[int] = set()  # indexes of detail lines drawn muted
+        if n.kind == "group":  # gitdiagram: description capped, links-inside line muted
+            for k, (d, m) in enumerate(gd_details(n, MAX_TEXT_W, DETAIL_SIZE)):
+                self.detail.append(d)
+                if m:
+                    self.muted.add(k)
+        else:
+            for d in n.detail_lines:
+                self.detail.extend(wrap(d, MAX_TEXT_W, DETAIL_SIZE))
         widths = [text_width(s, LABEL_SIZE) for s in self.label]
         widths += [text_width(s, SUB_SIZE) for s in self.sub]
         widths += [text_width(s, DETAIL_SIZE) for s in self.detail]
@@ -206,9 +213,10 @@ def _text_block(t: _NodeText, cx: float, top: float, ink: str, sub_ink: str) -> 
         parts.append(text(cx, y - 3, s, SUB_SIZE, sub_ink, "middle"))
     if t.detail:
         y += 3
-    for s in t.detail:
+    for k, s in enumerate(t.detail):
         y += DETAIL_LINE
-        parts.append(text(cx, y - 3, s, DETAIL_SIZE, "#495057", "middle"))
+        parts.append(text(cx, y - 3, s, DETAIL_SIZE, "#868e96" if k in t.muted else "#495057",
+                          "middle"))
     return "".join(parts)
 
 
@@ -220,7 +228,13 @@ def _node_svg(R: Rough, n: VNode, b: Box, idx: Optional[int], grouped: bool, i: 
     pastel = PASTELS[(idx if idx is not None else i) % len(PASTELS)]
     ink_sub = PASTEL_INK[(idx if idx is not None else i) % len(PASTEL_INK)]
     fill, op = ("#ffffff", 0.9) if grouped else (pastel, 0.5)
-    if color:  # a gitdiagram group: a pastel of its own colour
+    if n.role == "ungrouped":  # gitdiagram "Not yet grouped": dashed grey, light fill
+        parts0 = _shape(_d(R.rect(x, y, w, h, 8), True), "#f8f9fa", 0.9, "#868e96", 1.8, "6 5")
+        return "<g>%s%s</g>" % (parts0, _text_block(t, cx, y + (h - t.height) / 2, "#495057",
+                                                     "#868e96"))
+    if n.role == "shared":  # gitdiagram: a neutral resource box, never like a group
+        fill, op, ink_sub = "#f1f3f5", 0.9, "#495057"
+    elif color:  # a gitdiagram group: a pastel of its own colour
         fill, op, ink_sub = tint(color, 0.3), 0.8, color
     parts: List[str] = []
     top = y + (h - t.height) / 2
