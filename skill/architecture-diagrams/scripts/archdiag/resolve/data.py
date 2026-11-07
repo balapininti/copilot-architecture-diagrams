@@ -15,7 +15,8 @@ exactly one thing matches it.
 - **Tables** match the DDL by schema and name, following aliases.
 - **Queues** follow alias and remote definitions; MQ process definitions give ``triggers``
   edges to the CICS transaction; a queue used on one side only gets a partial gap edge.
-- **REST** client calls match ``endpoint:`` and ``zosapi:`` nodes by method and path.
+- **REST** client calls match ``endpoint:`` and ``zosapi:`` nodes by method and path, and each
+  Spring endpoint ``runs`` its handler class (Ruling 25).
 
 Every Edge's evidence is the Ref's evidence first, then the definitions'.
 """
@@ -511,6 +512,34 @@ class _Data:
         status, reason = _status(ref.reason)
         self.add(ref, ref.op, node.id, status, reason, list(node.evidence))
 
+    # -- endpoint handlers (Ruling 25) ------------------------------------------------
+    def handlers(self) -> None:
+        """``endpoint -runs-> class`` for each Spring endpoint with a known handler class, so
+        a client call reaches the code behind it. Confirmed for a worked-out path defined in
+        one place; partial for an ``endpoint:?`` node (its unresolved reason) or a path that
+        several handlers define."""
+        for ep in list(self.inv.nodes.values()):
+            if ep.kind != "endpoint":
+                continue
+            handler = str(ep.attrs.get("handler") or "").strip()
+            if not handler:
+                continue
+            unresolved = ep.attrs.get("unresolved")
+            why: Optional[str] = None
+            if unresolved or ep.id.startswith("endpoint:?"):
+                why = unresolved if isinstance(unresolved, str) and unresolved \
+                    else "endpoint path not worked out"
+            evid = list(ep.evidence)
+            cls = self.nodes.get(handler)
+            if cls is None:
+                name = handler.split(":", 1)[1] if ":" in handler else handler
+                self.edges.append(Edge(ep.id, "runs", missing(self.nodes, "class", name),
+                                       LOOSE, why, evid))
+                continue
+            status, reason = _status(why, _defs_reason(ep))
+            self.edges.append(Edge(ep.id, "runs", cls.id, status, reason,
+                                   evid + list(cls.evidence)))
+
     # -- driver --------------------------------------------------------------------------
     def run(self) -> None:
         for ref in self.inv.refs:
@@ -531,6 +560,7 @@ class _Data:
                 self.http(ref)
             elif op == "uses" and kind in ("class", "component"):
                 self.uses(ref)
+        self.handlers()
         self.triggers()
         self.dataset_loose()
         self.queue_gaps()

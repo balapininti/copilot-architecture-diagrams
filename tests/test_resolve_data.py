@@ -546,3 +546,30 @@ def test_uses_missing_target_is_loose():
 def test_system_refs_dropped():
     r = _run([_prog("P")], [Ref("program:P", "put", "queue", "Q", _ev(1), attrs={"system": True})])
     assert r.edges == []
+
+
+def _handler_class(repo="api", name="C"):
+    return Node("class:%s/%s" % (repo, name), "class", name, repo, [_ev(3, "C.java", repo)], {})
+
+
+def test_endpoint_runs_handler_class():
+    ep = _ep("GET", "/a/{}", handler="class:api/C")
+    r = _run([ep, _handler_class()], [])
+    e = edge("endpoint:GET /a/{}", "runs", "class:api/C", r)
+    assert e.status == "confirmed" and e.reason is None
+    # the mapping annotation first, then the class definition
+    assert [(v.path, v.line) for v in e.evidence] == [(ep.evidence[0].path, ep.evidence[0].line),
+                                                       ("C.java", 3)]
+
+
+def test_unresolved_endpoint_runs_handler_partial():
+    ep = Node("endpoint:?api/C#get", "endpoint", "?C#get", "api", [_ev(9, "C.java", "api")],
+              {"handler": "class:api/C", "unresolved": "path from ${base.path} not worked out"})
+    r = _run([ep, _handler_class()], [])
+    e = edge("endpoint:?api/C#get", "runs", "class:api/C", r)
+    assert e.status == "partial" and e.reason == "path from ${base.path} not worked out"
+
+
+def test_endpoint_without_handler_has_no_runs_edge():
+    r = _run([_ep("GET", "/a")], [])
+    assert edges(op="runs", r=r) == []
