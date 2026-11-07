@@ -76,6 +76,8 @@
   {"src": "class:claims-api/RatesClient", "op": "http", "dst": "external:rates.example.com", "status": "loose"},
   {"src": "class:claims-api/ClaimController", "op": "uses", "dst": "class:claims-api/MqClaimGateway", "status": "confirmed"},
   {"src": "class:claims-api/ClaimController", "op": "uses", "dst": "class:claims-api/ClaimStatusClient", "status": "confirmed"},
+  {"src": "endpoint:GET /api/claims/{}", "op": "runs", "dst": "class:claims-api/ClaimController", "status": "confirmed"},
+  {"src": "endpoint:POST /api/claims", "op": "runs", "dst": "class:claims-api/ClaimController", "status": "confirmed"},
 
   {"src": "page:claims-portal/claims/:id", "op": "uses", "dst": "component:claims-portal/ClaimDetailsComponent", "status": "confirmed"},
   {"src": "component:claims-portal/ClaimDetailsComponent", "op": "uses", "dst": "component:claims-portal/ClaimService", "status": "confirmed"},

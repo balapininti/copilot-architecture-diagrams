@@ -16,7 +16,7 @@ fully worked out from code in the repos and exactly one thing matches it".
 | STEP010 read dataset:CLM.MASTER.KSDS | confirmed | line 5 `&HLQ..CLM.MASTER.KSDS`, DISP=SHR; `&HLQ` from SET counts as worked out (§7.4), PROD is a listed env qualifier so key drops it |
 | STEP010 write dataset:claims-batch/jcl/CLMD100.jcl#&&SORTED | confirmed | line 6 `&&SORTED` DISP=NEW: temp dataset keyed by job (plan Task 8, `data.py` id form) |
 | STEP020 runs program:CLMB200 | confirmed | line 10; one PROGRAM-ID CLMB200 (cobol/CLMB200.cbl:2) |
-| STEP020 read …#&&SORTED | confirmed | line 11 DISP=(OLD,DELETE) on a temp: read; same job's temp node |
+| STEP020 read …#&&SORTED | confirmed | line 11 `CLMIN DD … DISP=(OLD,DELETE)`: DISP=OLD is `update`, refined by the step program's open mode (spec §7.1 SELECT…ASSIGN tie-back, plan Task 8): CLMB200 has `SELECT CLMIN-FILE ASSIGN TO CLMIN` (CLMB200.cbl:6) and `OPEN INPUT CLMIN-FILE` (:21), so read; same job's temp node |
 | STEP020 write dataset:CLAIMS.DAILY | confirmed | line 12 `&HLQ..CLAIMS.DAILY(+1)` NEW: GDG generation stripped, PROD dropped |
 | STEP030 runs program:CLMB300 | confirmed | lines 13-16: IKJEFT01 with `RUN PROGRAM(CLMB300)` in SYSTSIN (§7.1); the driver IKJEFT01 itself is not a link |
 | STEP030 read dataset:CLAIMS.DAILY | confirmed | line 19 `(0)` SHR. REPORT is SYSOUT (line 20): no edge |
@@ -26,7 +26,7 @@ fully worked out from code in the repos and exactly one thing matches it".
 | STEP040 write dataset:CLAIMS.AUDIT | confirmed | line 25 DISP=MOD: write |
 | STEP050 runs utility:DMBATCH | confirmed | line 26 |
 | STEP050 read dataset:CLAIMS.EXTRACT | confirmed | line 28 `COPY FROM (DSN=PROD.CLAIMS.EXTRACT)`: the local side of a transfer is a real read (scanner-facts `via=transfer`) |
-| STEP050 transfer external:NDM:FINANCE | partial | line 28 `TO (SNODE=FINANCE …)`: "file transfer target is outside these repos" (plan Task 8) |
+| STEP050 transfer external:NDM:FINANCE | partial | line 28 `TO (SNODE=FINANCE …)`: "file transfer target is outside these repos" (Ruling 24, plan Task 8) |
 
 Line 31 is a `//*` comment holding `EXEC PGM=FAKEPGM DSN=FAKE.DS`: no edge. Lines 7-9 and 27-29
 are in-stream `DD *` data: no dataset.
@@ -117,9 +117,14 @@ CLM.BRIDGE.Q has no put/get in the code, so no gap edge.
 | RatesClient http external:rates.example.com | loose | RatesClient.java:11 absolute URL, nothing serves `/v1/rates`: "external or missing service" (plan Task 8) |
 | ClaimController uses class:claims-api/MqClaimGateway | confirmed | ClaimController.java:11 constructor parameter |
 | ClaimController uses class:claims-api/ClaimStatusClient | confirmed | ClaimController.java:11 constructor parameter |
+| endpoint:GET /api/claims/{} runs class:claims-api/ClaimController | confirmed | ClaimController.java:16 `@GetMapping("/claims/{id}")` under class `@RequestMapping("/api")` (:6); handler class defined once (:7). Ruling 25 |
+| endpoint:POST /api/claims runs class:claims-api/ClaimController | confirmed | ClaimController.java:21 `@PostMapping("/claims")`; same handler. Ruling 25 |
 
-The two controller methods (ClaimController.java:16,21) define `endpoint:GET /api/claims/{}`
-and `endpoint:POST /api/claims` (nodes, no outgoing edge). JmsTemplate/RestTemplate/JdbcTemplate
+The two endpoint `runs` edges were added in fix round 1 (Ruling 25). They are a resolver
+change, not a misread fixture: the plan's model kept the handler only as
+`attrs["handler"]` on the endpoint node, with no edge, so an Angular → Java → MQ/CICS flow
+stopped at the endpoint. The resolver now emits `endpoint -runs-> handler class`
+(confirmed; partial for an unresolved `endpoint:?` node). JmsTemplate/RestTemplate/JdbcTemplate
 are not repo classes: no `uses`.
 
 ## claims-portal (Angular)
@@ -132,17 +137,13 @@ are not repo classes: no `uses`.
 | ClaimService http endpoint:POST /api/claims | confirmed | claim.service.ts:14 |
 | ClaimService http missing:endpoint:DELETE /api/claims/{} | loose | claim.service.ts:18; no DELETE handler, no host: only one side (plan Task 8 test) |
 
-## Open question (needs a ruling)
+## Transfer status
 
-- **STEP050 transfer external:NDM:FINANCE: partial or loose?** Kept as partial, as plan Task 8
-  says ("file transfer target is outside these repos") and `test_transfer_partial` checks. But
-  spec §7.3 defines a loose end as "only one side was found … the link goes outside the
-  estate", and the transfer target is a fully worked-out name (SNODE=FINANCE) with no
-  run-time part or guess, which is how the outside-estate HTTP call (RatesClient →
-  external:rates.example.com) is treated, and that one is loose. Both options are non-solid;
-  partial is kept until the controller rules.
+STEP050's NDM transfer is partial by Ruling 24 ("NDM/FTP transfer to an outside node stays
+PARTIAL"), which settles the partial-vs-loose question raised in the first gate run.
 
 ## Changes made after running the gate
 
-None. The first run matched all 75 entries exactly (58 confirmed, 8 partial, 9 loose): no
-missed link, no unexpected edge, no status difference.
+- First run: matched all 75 entries exactly (58 confirmed, 8 partial, 9 loose).
+- Fix round 1: +2 entries, the endpoint → handler `runs` edges (Ruling 25, resolver change
+  above). Now 77 entries (60 confirmed, 8 partial, 9 loose).

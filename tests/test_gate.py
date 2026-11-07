@@ -30,22 +30,27 @@ def expected_set() -> Set[Link]:
     return {(r["src"], r["op"], r["dst"], r["status"]) for r in _expected_rows()}
 
 
-def actual_set() -> Set[Link]:
-    if "actual" not in _CACHE:
+def resolved():
+    if "r" not in _CACHE:
         cfg = load_config(ESTATE / "architecture-diagrams")
-        r = resolve(scan_workspace(ESTATE, cfg), cfg)
-        _CACHE["actual"] = {(e.src, e.op, e.dst, e.status) for e in r.edges}
-    return _CACHE["actual"]  # type: ignore[return-value]
+        _CACHE["r"] = resolve(scan_workspace(ESTATE, cfg), cfg)
+    return _CACHE["r"]
+
+
+def actual_set() -> Set[Link]:
+    return {(e.src, e.op, e.dst, e.status) for e in resolved().edges}  # type: ignore[attr-defined]
 
 
 def test_expected_list_is_well_formed():
     rows = _expected_rows()
+    assert expected_set(), "expected_links.json is empty"
     keys = [(r["src"], r["op"], r["dst"]) for r in rows]
     assert len(keys) == len(set(keys)), "duplicate entries in expected_links.json"
     assert all(r["status"] in ("confirmed", "partial", "loose") for r in rows)
 
 
 def test_no_missed_links():
+    assert expected_set()
     missing = expected_set() - actual_set()
     assert not missing, "missed links: %s" % sorted(missing)
 
@@ -68,3 +73,31 @@ def test_no_unexpected_links():
     # the list holds every edge, so a new dotted or red edge is a change to look at too
     extra = actual_set() - expected_set()
     assert not extra, "edges not in the expected list: %s" % sorted(extra)
+
+
+def _files(evidence) -> Set[Tuple[str, str]]:
+    return {(v.repo, v.path) for v in evidence}
+
+
+def test_every_edge_has_evidence():
+    bare = [(e.src, e.op, e.dst) for e in resolved().edges if not e.evidence]
+    assert not bare, "edges without evidence: %s" % bare
+
+
+def test_confirmed_edges_carry_evidence_for_both_ends():
+    # spec §7.3: every link stores both ends' file and line. Checked where both ends are
+    # nodes defined in the code (resolver-made dataset, utility and missing nodes have none).
+    r = resolved()
+    short = []
+    for e in r.edges:  # type: ignore[attr-defined]
+        if e.status != "confirmed":
+            continue
+        s, d = r.nodes.get(e.src), r.nodes.get(e.dst)
+        if s is None or d is None or not s.evidence or not d.evidence:
+            continue
+        got = set((v.repo, v.path, v.line) for v in e.evidence)
+        dst_ok = any((v.repo, v.path, v.line) in got for v in d.evidence)
+        src_ok = bool(_files(s.evidence) & _files(e.evidence))
+        if not (src_ok and dst_ok):
+            short.append((e.src, e.op, e.dst, src_ok, dst_ok))
+    assert not short, "confirmed edges missing an end's evidence (src_ok, dst_ok): %s" % short
