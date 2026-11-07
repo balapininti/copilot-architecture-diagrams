@@ -164,3 +164,12 @@ file was changed.
 
 A job in a repo with no copy of a PROC that two repos define differently gets every ref
 partial, "ambiguous: PROC X defined in N places: ..." (unit tests in test_scan_jcl.py).
+
+### C2: MQ handles qualified with OF (`claims-online/cobol/CLMO140.cbl`)
+
+| Edge | Status | Why |
+|---|---|---|
+| CLMO140 put queue:CLM.AUDIT | confirmed | CLMO140.cbl:25 `MQPUT USING HCONN OF CTL, HAUD OF CTL`: the handle is the second argument once each `OF <group>` is skipped; HAUD is opened at :20 after `MOVE 'CLM.AUDIT'` (:19). The old parser counted `CTL` as an argument and fell back to the last MOVE before the call (`CLM.RSP`, :22), a confirmed wrong queue |
+| CLMO140 put missing:queue:?CLMO140:27 | partial | CLMO140.cbl:27 `MQPUT` on WS-HANDLE, which no MQOPEN in the program sets; the program opens two different queues, so the ref is partial with both candidates (CLM.AUDIT, CLM.RSP) |
+
+CLM.AUDIT still has no consumer: the existing `queue:CLM.AUDIT partial missing:queue-consumer:CLM.AUDIT` edge is unchanged.

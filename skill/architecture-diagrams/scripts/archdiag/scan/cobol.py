@@ -588,9 +588,16 @@ class _Scan:
             seg = self.cm[m.end(): stop if stop >= 0 else len(self.cm)]
             seg = re.sub(r"\([^)]*\)", " ", seg)
             args: List[Optional[str]] = []
+            qualifier = False
             for t in _ARG_TOK.finditer(seg):
                 w = t.group(0)
-                if w.upper() in ("BY", "REFERENCE", "CONTENT", "VALUE", "ADDRESS", "OF"):
+                if qualifier:  # the group after OF / IN qualifies the argument before it
+                    qualifier = False
+                    continue
+                if w.upper() in ("OF", "IN"):
+                    qualifier = True
+                    continue
+                if w.upper() in ("BY", "REFERENCE", "CONTENT", "VALUE", "ADDRESS"):
                     continue
                 if w.upper() in _VERBS:
                     break
@@ -603,17 +610,28 @@ class _Scan:
                 ar = args_of(end)
                 opens.append((off, ar[3] if len(ar) > 3 else None))
 
+        open_names: Dict[int, List[str]] = {}
+        for o, _h in opens:
+            open_names[o] = var_names(OBJ, o, 0)[0]
+        distinct_opens = set(tuple(v) for v in open_names.values())
         for off, name, end in calls:
             op = MQ_PUTGET.get(name)
             if not op:
                 continue
             at_list = [off]
+            untied: Optional[str] = None
             if name != "MQPUT1":
                 ar = args_of(end)
                 hobj = ar[1] if len(ar) > 1 else None
                 mine = [o for o, h in opens if h and h == hobj]
                 if mine:
                     at_list, _ = reaching(mine, off)
+                elif len(opens) > 1 and len(distinct_opens) > 1:
+                    # the handle can't be tied to one MQOPEN and the opens name different
+                    # queues: every queue the program opens is a candidate, never the last
+                    # MOVE before the call
+                    at_list = [o for o, _h in opens]
+                    untied = hobj or "?"
             names: List[str] = []
             runtime: Optional[str] = None
             for at in at_list:
@@ -622,7 +640,11 @@ class _Scan:
                     if x not in names:
                         names.append(x)
                 runtime = runtime or rt
-            if runtime:
+            if untied is not None and not runtime:
+                self.add(pid, op, "queue", None, off,
+                         "MQ handle %s can't be tied to one MQOPEN; the program opens: %s"
+                         % (untied, ", ".join(names)), names)
+            elif runtime:
                 self.add(pid, op, "queue", None, off,
                          "queue name set at run time (%s)" % runtime, names)
             elif len(names) == 1:

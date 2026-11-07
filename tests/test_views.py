@@ -192,15 +192,17 @@ def test_landscape_keeps_every_loose_end():
 def test_landscape_folds_each_apps_loose_ends():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    # 18: the CLMEXT trap (duplicate PROC) makes CLAIMS.DAILY shared by batch and online
-    assert len(v.nodes) == 18
+    # 19: the final-fix traps make CLAIMS.DAILY (CLMEXT, duplicate PROC) and CLM.AUDIT
+    # (CLMO140, MQ handles) shared between apps
+    assert len(v.nodes) == 19
     box = node(v, "missing:app:claims-online")
-    assert (box.kind, box.label, box.status) == ("missing", "6 loose ends", LOOSE)
-    assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +3"]
+    assert (box.kind, box.label, box.status) == ("missing", "7 loose ends", LOOSE)
+    assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +4"]
     e, = edges(v, "app:claims-online", "missing:app:claims-online")
     want = {"missing:copybook:ERRMSG", "missing:program:?CLMO100:26", "missing:program:CLMO120",
-            "missing:table:?POLICY", "missing:transaction:CLMB", "missing:transaction:CLMX"}
-    assert {u.dst for u in e.underlying} == want and len(e.underlying) == 7
+            "missing:table:?POLICY", "missing:transaction:CLMB", "missing:transaction:CLMX",
+            "missing:queue:?CLMO140:27"}
+    assert {u.dst for u in e.underlying} == want and len(e.underlying) == 8
     assert e.status == LOOSE  # the least certain: a red end never looks merely dotted
     assert not want & {n.id for n in v.nodes}
     # partly known links inside one application are counted on its box

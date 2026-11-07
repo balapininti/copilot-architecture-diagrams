@@ -264,3 +264,40 @@ def test_mq_section_header_is_a_boundary():
            "           CALL 'MQGET' USING HCONN HOBJ.\n           GOBACK.\n"
            "       SEC-B SECTION.\n           MOVE 'Q.B' TO MQOD-OBJECTNAME.\n")[0]
     assert q.target_name is None and q.candidates == ["Q.A", "Q.B"]
+
+
+# ------------------------------------------------------------------ MQ handles (C2)
+
+_TWO_OPENS = ("           MOVE 'CLM.REQ.Q' TO MQOD-OBJECTNAME\n"
+              "           CALL 'MQOPEN' USING HCONN OF CTL, MQOD, OPTS, HREQ OF CTL,\n"
+              "                CC, RC.\n"
+              "           MOVE 'CLM.RSP.Q' TO MQOD-OBJECTNAME\n"
+              "           CALL 'MQOPEN' USING HCONN OF CTL, MQOD, OPTS, HRSP OF CTL,\n"
+              "                CC, RC.\n")
+
+
+def test_mq_qualified_handles_are_tied_to_their_open():
+    q = _q(_TWO_OPENS +
+           "           CALL 'MQPUT' USING HCONN OF CTL, HREQ OF CTL, MQMD, PMO,\n"
+           "                LEN, BUF, CC, RC.\n"
+           "           CALL 'MQGET' USING HCONN IN CTL, HRSP IN CTL, MQMD, GMO,\n"
+           "                LEN, BUF, DLEN, CC, RC.\n")
+    got = {(r.op, r.target_name) for r in q}
+    assert got == {("put", "CLM.REQ.Q"), ("get", "CLM.RSP.Q")}
+
+
+def test_mq_handle_not_tied_to_one_open_is_partial_with_every_candidate():
+    q = _q(_TWO_OPENS +
+           "           CALL 'MQPUT' USING HCONN, WS-HANDLE, MQMD, PMO,\n"
+           "                LEN, BUF, CC, RC.\n")
+    put, = [r for r in q if r.op == "put"]
+    assert put.target_name is None
+    assert sorted(put.candidates) == ["CLM.REQ.Q", "CLM.RSP.Q"]
+    assert "WS-HANDLE" in put.reason
+
+
+def test_mq_one_open_with_same_name_everywhere_stays_confirmed():
+    q = _q("           MOVE 'CLM.REQ.Q' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQOPEN' USING HCONN, MQOD, OPTS, HREQ, CC, RC.\n"
+           "           CALL 'MQPUT' USING HCONN, HREQ, MQMD, PMO, LEN, BUF, CC, RC.\n")
+    assert [(r.op, r.target_name) for r in q] == [("put", "CLM.REQ.Q")]
