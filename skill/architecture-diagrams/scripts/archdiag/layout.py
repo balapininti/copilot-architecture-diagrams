@@ -59,6 +59,7 @@ CARD_COL_GAP = 120.0   # card_grid gaps
 CARD_ROW_GAP = 90.0
 CARD_POINTS = 12       # card_grid: points per flattened Bezier
 CARD_PARALLEL = 24.0   # card_grid: spacing between lines sharing one card side
+CARD_SAMPLE = 10.0     # card_grid: a curve is tested against cards every this many px
 
 
 @dataclass
@@ -1297,7 +1298,8 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     maxw = max(w for w, _ in sizes.values())
     maxh = max(h for _, h in sizes.values())
     cell_of = dict(zip(by_links, cells))
-    _shorten_links(view, cell_of, cells, maxw + CARD_COL_GAP, maxh + CARD_ROW_GAP)
+    _shorten_links(view, cell_of, cells, maxw + CARD_COL_GAP, maxh + CARD_ROW_GAP,
+                   fixed=by_links[0])
     boxes: Dict[str, Box] = {}
     for i, (r, c) in cell_of.items():
         w, h = sizes[i]
@@ -1351,10 +1353,15 @@ def _card_curve(p0: Point, sa: str, p3: Point, sb: str, bend: float) -> List[Poi
 def _cards_hit(curve: List[Point], others: List[Box]) -> int:
     hit = 0
     for b in others:
-        # test the flattened segments at a few points each, against the card shrunk by 2px
+        # test the flattened segments every CARD_SAMPLE px, against the card shrunk by 2px
         for (x0, y0), (x1, y1) in zip(curve, curve[1:]):
+            if max(x0, x1) <= b.x + 2 or min(x0, x1) >= b.right - 2 \
+                    or max(y0, y1) <= b.y + 2 or min(y0, y1) >= b.bottom - 2:
+                continue
+            n = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / CARD_SAMPLE)))
             if any(b.x + 2 < x0 + (x1 - x0) * t < b.right - 2
-                   and b.y + 2 < y0 + (y1 - y0) * t < b.bottom - 2 for t in (0.0, 0.5, 1.0)):
+                   and b.y + 2 < y0 + (y1 - y0) * t < b.bottom - 2
+                   for t in (k / float(n) for k in range(n + 1))):
                 hit += 1
                 break
     return hit
@@ -1383,8 +1390,10 @@ def _clear_sides(a: Box, b: Box, others: List[Box]) -> Tuple[Tuple[str, str], fl
 
 
 def _shorten_links(view: ViewGraph, cell_of: Dict[str, Tuple[int, int]],
-                   cells: List[Tuple[int, int]], pitch_x: float, pitch_y: float) -> None:
-    """Swap cards between cells (or into empty ones) while that shortens the links."""
+                   cells: List[Tuple[int, int]], pitch_x: float, pitch_y: float,
+                   fixed: Optional[str] = None) -> None:
+    """Swap cards between cells (or into empty ones) while that shortens the links. The
+    ``fixed`` card (the most linked, in the middle) never moves and nothing takes its cell."""
     links = [(e.src, e.dst) for e in view.edges if e.src != e.dst]
 
     def cost() -> float:
@@ -1398,9 +1407,11 @@ def _shorten_links(view: ViewGraph, cell_of: Dict[str, Tuple[int, int]],
     for _ in range(3):
         improved = False
         for i in list(cell_of):
+            if i == fixed:
+                continue
             for cell in cells:
                 here = cell_of[i]
-                if cell == here:
+                if cell == here or (fixed is not None and cell == cell_of[fixed]):
                     continue
                 other = next((j for j, c in cell_of.items() if c == cell), None)
                 cell_of[i] = cell

@@ -200,3 +200,46 @@ def test_context_keeps_a_loose_end_next_to_its_outside_box():
     between = names[names.index("table:CLAIM") + 1:names.index("missing:writer:CLAIM")]
     hangers = {e.src for e in v.edges if e.dst == "table:CLAIM"}
     assert set(between) <= hangers, between
+
+
+# ------------------------------------------------------------------ Batch C
+
+def _random_repomap(seed):
+    import random
+    R = random.Random(seed)
+    n = R.randint(4, 12)
+    ids = ["repo:r%d" % i for i in range(n)]
+    edges = [VEdge(R.choice(ids), R.choice(ids), "x") for _ in range(R.randint(n, 3 * n))]
+    edges = [e for e in edges if e.src != e.dst]
+    return ViewGraph("t", "repomap", None, [VNode(i, i, kind="repo") for i in ids], edges, [])
+
+
+def test_card_grid_keeps_the_hub_in_the_middle():
+    """C7: swapping cards to shorten links never moves the most linked card off centre."""
+    import math
+    from archdiag.layout import CARD_COL_GAP, CARD_ROW_GAP, card_grid
+    for seed in range(60):
+        v = _random_repomap(seed)
+        ids = [n.id for n in v.nodes]
+        deg = {i: 0 for i in ids}
+        for e in v.edges:
+            deg[e.src] += 1
+            deg[e.dst] += 1
+        hub = sorted(ids, key=lambda i: (-deg[i], ids.index(i)))[0]
+        boxes, _ = card_grid(v, {i: (200.0, 100.0) for i in ids})
+        cols = int(math.ceil(math.sqrt(len(ids))))
+        rows = int(math.ceil(len(ids) / float(cols)))
+        b = boxes[hub]
+        c, r = b.x / (200 + CARD_COL_GAP), b.y / (100 + CARD_ROW_GAP)
+        mid_r, mid_c = (rows - 1) / 2.0, (cols - 1) / 2.0
+        best = min((rr - mid_r) ** 2 + (cc - mid_c) ** 2 for rr in range(rows)
+                   for cc in range(cols))
+        assert abs((r - mid_r) ** 2 + (c - mid_c) ** 2 - best) < 1e-6, seed
+
+
+def test_cards_hit_samples_every_10px():
+    """C7: a curve segment that passes through a small card between its sample points
+    still counts as hitting it."""
+    from archdiag.layout import _cards_hit
+    card = Box(141, -10, 14, 20)  # a narrow card well clear of 0, 0.5 and 1 of the segment
+    assert _cards_hit([(0.0, 0.0), (400.0, 0.0)], [card]) == 1
