@@ -258,6 +258,18 @@ def prefer_marker(pill: Tuple[float, float], marker: Tuple[float, float]) -> boo
     return (marker[1], marker[0]) < (pill[1], pill[0])
 
 
+def _cuts_a_word(s: str, max_w: float) -> bool:
+    """Would wrapping ``s`` at ``max_w`` cut a word where it has no ``. / _ - ,``?"""
+    max_chars = max(1, int(max_w / (0.6 * PILL_SIZE)))  # as ``wrap`` counts
+    for w in s.split():
+        while len(w) > max_chars:
+            cut = max(w.rfind(c, 0, max_chars) for c in "./_-,")
+            if cut < max_chars // 3:
+                return True
+            w = w[cut + 1:]
+    return False
+
+
 def place_pills(view: ViewGraph, L: Layout, styles: List[str],
                 routes: List[List[Tuple[float, float]]],
                 edge_text: Callable[[object], str],
@@ -305,6 +317,8 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
         # further out: a pill away from its line could be read as another line's.
         tries = []
         for max_w in (PILL_MAX_W, 84.0, 56.0):
+            if max_w < PILL_MAX_W and _cuts_a_word(s, max_w):
+                continue  # 'ClaimSta / tusClien / t' is unreadable: wide, or the key
             probe = Pill(i, s, (0.0, 0.0), styles[i], max_w, e.number)
             tries += [(max_w, at, beside) for at, beside in
                       (_candidates(route, probe, i, routes) or [(L.label_at[i], False)])]

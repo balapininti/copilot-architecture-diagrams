@@ -258,3 +258,34 @@ def test_the_clearance_preference_never_moves_a_pill_off_a_free_spot_on_its_line
         off = [v.edges[p.i].label for p in pills
                if not p.marker and not _on_route((p.x + p.w / 2, p.y + p.h / 2), routes[p.i])]
         assert not off, (mod.__name__, off)
+
+
+
+def _gitdiagram_view(repo):
+    from conftest import ESTATE, fixture_resolved
+    from archdiag.gitdiagram import load_gitdiagram
+    from archdiag.groups import default_groups
+    from archdiag.views import build_view
+    fixture_view("landscape")  # builds the session's Resolved
+    r = fixture_resolved()
+    gd = load_gitdiagram(ESTATE / "architecture-diagrams", r, repo)
+    return build_view(r, default_groups(r), "gitdiagram", repo, gitdiagram=gd)
+
+
+def test_a_narrow_pill_never_cuts_a_word_without_a_break_point():
+    """'uses · ClaimStatusClient' between two close boxes was wrapped 'ClaimSta / tusClien / t'.
+    A narrower wrap is only tried when no word has to be cut where it has no . / _ - ,;
+    otherwise the label keeps the wide wrap or goes to the key."""
+    views = [fixture_view(lv, sc) for lv, sc in LEVELS]
+    views += [_gitdiagram_view("claims-api"), _gitdiagram_view("claims-batch")]
+    for v in views:
+        for mod in (style_a, style_b, style_c, style_d):
+            _, pills = _placed(mod, v)
+            for p in pills:
+                if p.marker:
+                    continue
+                label = v.edges[p.i].label
+                for a, b in zip(p.lines, p.lines[1:]):
+                    if a and b and a[-1].isalnum() and b[0].isalnum():
+                        joined = a.split()[-1] + b.split()[0]
+                        assert joined not in label, (v.title, mod.__name__, p.lines)
