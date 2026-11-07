@@ -469,3 +469,62 @@ def test_layout_is_deterministic():
     for make in (claims_job, claims_landscape, app_with_neighbors):
         assert _layout_snapshot(layout_for(make(), lambda n: (140, 80))) == \
             _layout_snapshot(layout_for(make(), lambda n: (140, 80))), make.__name__
+
+
+def _cross_band_pairs_that_cross(v, L):
+    """Pairs of lines that each go from one band to a later one (source box wholly above
+    the target box, with a channel run between) and cross each other, where they could
+    nest: a line whose source is left of the other's and whose target is right of it
+    (one span inside the other) must cross it once going down, so it is not counted."""
+    from layout_helpers import _proper_cross, _segments
+    cross = []
+    for k, e in enumerate(v.edges):
+        a, b = L.boxes[e.src], L.boxes[e.dst]
+        r = L.routes[k]
+        lane = [p for p, q in zip(r, r[1:]) if abs(p[1] - q[1]) < 1e-6
+                and a.y + a.h < p[1] < b.y and abs(p[0] - q[0]) > 300]
+        if lane:
+            cross.append(k)
+    bad = []
+    for i in cross:
+        for j in cross:
+            si, sj = L.boxes[v.edges[i].src], L.boxes[v.edges[j].src]
+            di, dj = L.boxes[v.edges[i].dst], L.boxes[v.edges[j].dst]
+            if (si.x - sj.x) * (di.x - dj.x) < 0:
+                continue
+            if i < j and any(_proper_cross(s, t) for s in _segments(L.routes[i])
+                             for t in _segments(L.routes[j])):
+                bad.append((v.edges[i].label, v.edges[j].label))
+    return cross, bad
+
+
+def test_channel_lanes_nest_without_crossing():
+    """E2: lines running along the channel between two bands are stacked so they nest:
+    the line coming down furthest right takes the lowest lane, and none of them cross."""
+    from conftest import fixture_view
+    v = fixture_view("flow_tx", "claims/:id")
+    for size in _style_sizes():
+        L = layout_for(v, size)
+        cross, bad = _cross_band_pairs_that_cross(v, L)
+        assert len(cross) >= 3, (size.__module__, cross)
+        assert not bad, (size.__module__, bad)
+
+
+def test_channel_lanes_nest_in_a_synthetic_wrap():
+    """E2: several lines from the end of the first band to different boxes of the second
+    never cross one another in the channel."""
+    names = ["n%d" % i for i in range(26)]
+    nodes = [VNode(n, n) for n in names]
+    edges = [VEdge(a, b) for a, b in zip(names, names[1:])]
+    v0 = ViewGraph("chain", "flow_tx", None, nodes, edges, [])
+    L0 = layout_for(v0, lambda n: (150, 60))
+    top = min(b.y for b in L0.boxes.values())
+    band0 = [n for n in names if L0.boxes[n].y == top]
+    band1 = [n for n in names if L0.boxes[n].y > top]
+    extra = [VEdge(band0[-2], band1[1], "x1"), VEdge(band0[-3], band1[3], "x2"),
+             VEdge(band0[-2], band1[5], "x3"), VEdge(band0[-4], band1[2], "x4")]
+    v = ViewGraph("chain", "flow_tx", None, nodes, edges + extra, [])
+    L = layout_for(v, lambda n: (150, 60))
+    cross, bad = _cross_band_pairs_that_cross(v, L)
+    assert len(cross) >= 4, cross
+    assert not bad, bad

@@ -57,6 +57,8 @@ MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
 BAND_WIDTH = 1940.0    # layered: a picture wider than this (plus margins: 2000px) wraps its
                        # layers into bands stacked top to bottom
 BEND_GAP = 10.0        # layered: least gap between two lines bending in one column gap
+CHANNEL_LANE = 10.0    # layered: gap between two lines running along one channel
+CROSS_KEY = 1e7        # layered: port sort key offset for a line to a later band
 CHANNEL_PAD = 16.0     # layered: room above and below the lines in a channel between bands
 SPINE_GAP = 14.0       # layered: gap between lines going down the left of the picture
 FAN_OUT = 4            # layered: most lines on one box side before some use the top/bottom
@@ -608,12 +610,9 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
                 box_y[n] = center_y[n] - sizes[n][1] / 2
         bottom = top + ry[-1] + rh[-1]
         chan_top.append(bottom + GROUP_PAD + CHANNEL_PAD)
-        top = (chan_top[-1] + BEND_GAP * (len(chan_edges[b]) + 1) + CHANNEL_PAD
+        top = (chan_top[-1] + CHANNEL_LANE * (len(chan_edges[b]) + 1) + CHANNEL_PAD
                + GROUP_PAD + GROUP_TITLE)
-    chan_y: Dict[Tuple[int, int], float] = {}
-    for b, ks in enumerate(chan_edges):
-        for idx, k in enumerate(ks):
-            chan_y[(b, k)] = chan_top[b] + BEND_GAP * (idx + 1)
+    chan_y: Dict[Tuple[int, int], float] = {}  # set in 7b, once the ports are known
     spine = {k: idx for idx, k in enumerate(k for u, v, k in dag if k in cross
                                             and band_of[layer[v]] - band_of[layer[u]] > 1)}
 
@@ -623,6 +622,16 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     out_ports: Dict[str, List[Tuple[float, int]]] = {i: [] for i in ids}
     in_ports: Dict[str, List[Tuple[float, int]]] = {i: [] for i in ids}
     for k, chain in chains.items():
+        if k in cross:
+            # a line to a later band leaves from the bottom of its side and enters at the
+            # top of its target's side. So the lines in a channel nest (E2): out of one
+            # side, the one going furthest right below leaves highest (it comes down
+            # furthest right and takes the lowest lane); into one side, the one from the
+            # highest lane (leftmost) enters lowest.
+            u, v = chain[0], chain[-1]
+            out_ports[u].append((CROSS_KEY - layer[v] * 1e4 + center_y[v], k))
+            in_ports[v].append((-CROSS_KEY - layer[u] * 1e4 + center_y[u], k))
+            continue
         out_ports[chain[0]].append((center_y[chain[1]], k))
         in_ports[chain[-1]].append((center_y[chain[-2]], k))
     fans = {i for i in ids if fan and (len(out_ports[i]) > FAN_OUT
@@ -707,14 +716,25 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
         elif len(out_ports[a]) == 1 and a_top < port_in[k] < a_top + sizes[a][1]:
             port_out[k] = port_in[k]
 
-    # 8. The vertical runs of the lines, gap by gap (a gap is after a layer, or before
-    #    the first layer of a band), and how wide each gap must be to keep them apart.
     def start_y(k: int) -> float:
         return fanned[(k, "out")][2] if (k, "out") in fanned else port_out[k]
 
     def end_y(k: int) -> float:
         return fanned[(k, "in")][2] if (k, "in") in fanned else port_in[k]
 
+    # 7b. Channel lanes, so the lines nest (E2): a line coming down further right takes
+    #     a lower lane (it comes down in a later gap, or lower in the same gap, which is
+    #     further left); lines arriving from the spine on the left run below them.
+    dag_src = {k: u for u, _, k in dag}
+    for b, ks in enumerate(chan_edges):
+        was = {k: idx for idx, k in enumerate(ks)}
+        ks.sort(key=lambda k: (1, 0.0, 0.0, was[k]) if band_of[layer[dag_src[k]]] != b
+                else (0, float(layer[dag_src[k]]), -start_y(k), k))
+        for idx, k in enumerate(ks):
+            chan_y[(b, k)] = chan_top[b] + CHANNEL_LANE * (idx + 1)
+
+    # 8. The vertical runs of the lines, gap by gap (a gap is after a layer, or before
+    #    the first layer of a band), and how wide each gap must be to keep them apart.
     hops: Dict[Tuple[str, int], List[Tuple[float, float, int, int]]] = {}
     paths: Dict[int, List[Tuple[str, str, float, float, Tuple[str, int]]]] = {}
     for u, v, k in dag:
@@ -762,7 +782,13 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
     for key, items in hops.items():
         # So no two lines share a horizontal run: lines going down bend lowest start
         # first, lines going up bend highest start first.
-        items.sort(key=lambda t: (t[1] < t[0], -t[0] if t[1] > t[0] else t[0], t[1]))
+        # A line coming in from a channel on the right (to a later band, not via the
+        # spine) bends after the others going down, the one from the highest lane
+        # leftmost, so the lines from one channel nest (E2).
+        items.sort(key=lambda t: (t[1] < t[0], 1 if t[2] in cross and t[3] == 1
+                                  and t[2] not in spine else 0,
+                                  t[0] if t[2] in cross and t[3] == 1 and t[2] not in spine
+                                  else (-t[0] if t[1] > t[0] else t[0]), t[1]))
         for (_, _, k, h_i), x in zip(items, _spread(len(items), gap_lo[key], gap_w[key])):
             bend_x[(k, h_i)] = x
     routes: List[List[Point]] = [[] for _ in view.edges]
