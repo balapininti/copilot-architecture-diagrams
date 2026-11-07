@@ -272,3 +272,55 @@ def test_context_anchors_a_loose_end_next_to_its_left_column_source():
     col = sorted((b.y, k) for k, b in L.boxes.items() if b.x + b.w < g.x)
     names = [k for _, k in col]
     assert abs(names.index("missing:reader:X") - names.index("queue:CLM.REQ.LQ")) == 1
+
+
+def _crosses_box(route, box, pad=2.0):
+    """Does the polyline pass through the inside of ``box`` (sampled every 2px)?"""
+    for (x0, y0), (x1, y1) in zip(route, route[1:]):
+        n = max(1, int(max(abs(x1 - x0), abs(y1 - y0)) / 2))
+        for k in range(n + 1):
+            x, y = x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n
+            if box.x + pad < x < box.x + box.w - pad and box.y + pad < y < box.y + box.h - pad:
+                return True
+    return False
+
+
+def test_job_rows_stagger_step_skipping_lines():
+    """C6: lines that skip steps (or go back) each run at their own height above the lane,
+    clear of the boxes above it."""
+    v = claims_job()
+    v.edges += [VEdge("step:CLMD100.STEP010", "step:CLMD100.STEP030", "skip"),
+                VEdge("step:CLMD100.STEP020", "step:CLMD100.STEP040", "skip"),
+                VEdge("step:CLMD100.STEP010", "step:CLMD100.STEP040", "skip"),
+                VEdge("step:CLMD100.STEP040", "step:CLMD100.STEP020", "again")]
+    L = layout_for(v, lambda n: (140, 80))
+    runs = []
+    for k in range(len(v.edges) - 4, len(v.edges)):
+        r = L.routes[k]
+        assert len(r) == 4
+        runs.append((r[1][1], min(r[1][0], r[2][0]), max(r[1][0], r[2][0])))
+    for i in range(len(runs)):
+        for j in range(i + 1, len(runs)):
+            (ya, la, ha), (yb, lb, hb) = runs[i], runs[j]
+            if min(ha, hb) > max(la, lb):  # they run side by side: keep apart
+                assert abs(ya - yb) >= 8, (runs[i], runs[j])
+    for k in range(len(v.edges)):
+        e = v.edges[k]
+        for nid, b in L.boxes.items():
+            if nid not in (e.src, e.dst):
+                assert not _crosses_box(L.routes[k], b), (e.src, e.dst, nid)
+
+
+def test_job_rows_route_row_lines_around_boxes():
+    """C6: a line between the rows and a box outside the lane (the job, the scheduler, a
+    box in the same row) goes around the boxes between them."""
+    v = claims_job()
+    v.edges += [VEdge("dataset:PROD.CLAIMS.DAILY", "job:CLMD100", "x"),
+                VEdge("table:PAYMENT", "dataset:PROD.CLAIMS.EXTRACT", "y"),
+                VEdge("dataset:CLM.MASTER.KSDS", "table:PAYMENT", "z")]
+    L = layout_for(v, lambda n: (140, 80))
+    _routes_on_borders(v, L)
+    for k, e in enumerate(v.edges):
+        for nid, b in L.boxes.items():
+            if nid not in (e.src, e.dst):
+                assert not _crosses_box(L.routes[k], b), (e.src, e.dst, nid)

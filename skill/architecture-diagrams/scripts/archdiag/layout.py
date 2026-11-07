@@ -40,6 +40,7 @@ SWEEPS = 4             # down/up barycenter sweeps
 JOB_ROW_GAP = 60.0     # job_rows: vertical gap between the above row, lane and below row
 JOB_SPREAD_GAP = 30.0  # job_rows: least gap between two boxes in the above/below row
 JOB_DETOUR = 30.0      # job_rows: how far above the lane a step-skipping line runs
+JOB_DETOUR_STEP = 14.0 # job_rows: gap between two step-skipping lines that run side by side
 MAZE_STEP = 10.0       # layered: grid step for lines rerouted around a group
 MAZE_CLEAR = 8.0       # layered: how far a rerouted line keeps from boxes and groups
 MAZE_STUB = 12.0       # layered: straight run out of and into a box before a reroute bends
@@ -1177,7 +1178,28 @@ def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     other_w = max([sizes[i][0] for i in other] or [0.0])
     lane_x0 = other_w + COL_GAP if other else 0.0
     above_h, lane_h = band_h(above), band_h(lane)
-    lane_cy = above_h + (JOB_ROW_GAP if above else 0.0) + lane_h / 2
+    # Lines that skip a step or go back run above the lane, each at its own height: the
+    # lowest level where nothing else runs over the same stretch (short ones lowest).
+    lane_pos = {i: k for k, i in enumerate(lane)}
+    skips = [k for k, e in enumerate(view.edges)
+             if e.src in lane_pos and e.dst in lane_pos and e.src != e.dst
+             and lane_pos[e.dst] != lane_pos[e.src] + 1]
+    skips.sort(key=lambda k: (abs(lane_pos[view.edges[k].dst] - lane_pos[view.edges[k].src]),
+                              k))
+    level: Dict[int, int] = {}
+    taken: List[List[Tuple[int, int]]] = []
+    for k in skips:
+        e = view.edges[k]
+        lo, hi = sorted((lane_pos[e.src], lane_pos[e.dst]))
+        lv = 0
+        while lv < len(taken) and any(lo <= b and a <= hi for a, b in taken[lv]):
+            lv += 1
+        if lv == len(taken):
+            taken.append([])
+        taken[lv].append((lo, hi))
+        level[k] = lv
+    detour_room = JOB_DETOUR + JOB_DETOUR_STEP * (len(taken) - 1) + JOB_DETOUR if taken else 0.0
+    lane_cy = above_h + (max(JOB_ROW_GAP, detour_room) if above else detour_room) + lane_h / 2
     boxes: Dict[str, Box] = {}
     lane_cx: Dict[str, float] = {}
     for k, i in enumerate(lane):
@@ -1258,26 +1280,58 @@ def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
         b = boxes[me]
         return (port_x[(k, me)], b.y if side_of[(k, me)] == "top" else b.bottom)
 
-    lane_pos = {i: k for k, i in enumerate(lane)}
     lane_top = lane_cy - lane_h / 2
     routes: List[List[Point]] = []
+    blocks = list(boxes.values())
+    budget = MAZE_BUDGET
     for k, e in enumerate(view.edges):
         a, b = boxes[e.src], boxes[e.dst]
         if e.src == e.dst:
             routes.append(_self_loop(a))
         elif (k, e.src) in side_of and (k, e.dst) in side_of:
             routes.append([port(k, e.src), port(k, e.dst)])
-        elif e.src in lane_pos and e.dst in lane_pos:
-            if lane_pos[e.dst] == lane_pos[e.src] + 1:
-                routes.append([(a.right, a.cy), (b.x, b.cy)])
-            else:  # skips a step or goes back: run just above the lane
-                y = lane_top - JOB_DETOUR
-                ax = a.cx + a.w / 4 if lane_pos[e.dst] > lane_pos[e.src] else a.cx - a.w / 4
-                bx = b.cx - b.w / 4 if lane_pos[e.dst] > lane_pos[e.src] else b.cx + b.w / 4
-                routes.append([(ax, a.y), (ax, y), (bx, y), (bx, b.y)])
+        elif e.src in lane_pos and e.dst in lane_pos and k not in level:
+            routes.append([(a.right, a.cy), (b.x, b.cy)])
+        elif k in level:  # skips a step or goes back: run above the lane at its own level
+            lv = level[k]
+            y = lane_top - JOB_DETOUR - JOB_DETOUR_STEP * lv
+            na = max(0.0, min(JOB_DETOUR_STEP / 2 * lv, a.w / 4 - 4))
+            nb = max(0.0, min(JOB_DETOUR_STEP / 2 * lv, b.w / 4 - 4))
+            fwd = lane_pos[e.dst] > lane_pos[e.src]
+            ax = a.cx + a.w / 4 + na if fwd else a.cx - a.w / 4 - na
+            bx = b.cx - b.w / 4 - nb if fwd else b.cx + b.w / 4 + nb
+            routes.append([(ax, a.y), (ax, y), (bx, y), (bx, b.y)])
         else:
-            routes.append(_straight(a, b))
+            r = _straight(a, b)
+            others = [x for i, x in boxes.items() if i not in (e.src, e.dst)]
+            if any(_line_hits(r, x) for x in others) and budget > 0:
+                # around the boxes between them, leaving and entering the facing sides
+                sa, sb = _closest_sides(a, b)
+                pa, pb = _side_point(a, sa), _side_point(b, sb)
+                alt, spent = _maze_dirs(pa, _SIDES[sa], pb,
+                                        (-_SIDES[sb][0], -_SIDES[sb][1]), blocks,
+                                        min(budget, MAZE_POPS),
+                                        [seg for q in routes for seg in zip(q, q[1:])])
+                budget -= spent
+                if alt is not None:
+                    r = alt
+            routes.append(r)
     return boxes, routes
+
+
+def _line_hits(route: List[Point], box: Box, pad: float = 2.0) -> bool:
+    """Does the polyline (any direction) pass through the inside of the box? Tested every
+    CARD_SAMPLE px along each segment."""
+    for (x0, y0), (x1, y1) in zip(route, route[1:]):
+        if max(x0, x1) <= box.x + pad or min(x0, x1) >= box.right - pad \
+                or max(y0, y1) <= box.y + pad or min(y0, y1) >= box.bottom - pad:
+            continue
+        n = max(1, int(math.ceil(math.hypot(x1 - x0, y1 - y0) / (CARD_SAMPLE / 2))))
+        for q in range(n + 1):
+            x, y = x0 + (x1 - x0) * q / n, y0 + (y1 - y0) * q / n
+            if box.x + pad < x < box.right - pad and box.y + pad < y < box.bottom - pad:
+                return True
+    return False
 
 
 # ------------------------------------------------------------------ card grid
