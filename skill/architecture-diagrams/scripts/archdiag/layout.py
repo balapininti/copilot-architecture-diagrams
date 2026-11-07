@@ -32,6 +32,7 @@ GROUP_PAD = 20.0       # group rectangle padding around its members
 GROUP_TITLE = 24.0     # extra padding on top of a group for its title
 GROUP_ROW_GAP = 80.0   # layered: row gap where one group ends and another begins
 PORT_GAP = 16.0        # layered: least gap between two lines on one box side
+PORT_MIN = 9.0         # layered without fan-out: least gap between two line ends on a side
 PORT_INSET = 10.0      # layered: keep line ends this far from box corners
 LAYER_CAP = 4          # layered: most boxes per layer before loose ends move right
 SINK_REACH = 3         # layered: how many layers past its feeder a loose end may move
@@ -537,6 +538,15 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
         if not preds[u] and succs[u]:
             layer[u] = min(layer[v] for v in succs[u]) - 1
     _balance_sinks(view, ids, preds, succs, layer, cap, reach)
+    if not fan:
+        # (E8) every line stays on the left and right sides: a box too short to keep its
+        # line ends PORT_MIN apart grows (renderers draw boxes at their laid-out size)
+        sizes = dict(sizes)
+        for i in ids:
+            n = max(len(succs[i]), len(preds[i]))
+            need = (n - 1) * PORT_MIN + 2 * PORT_INSET
+            if n > 1 and sizes[i][1] < need:
+                sizes[i] = (sizes[i][0], need)
     maxw = max(w for w, _ in sizes.values())
     nlayers = max(layer.values()) + 1
 

@@ -572,3 +572,13 @@ def test_repomap_loose_stubs_go_straight_to_the_missing_box():
                 if nid not in (e.src, e.dst):
                     assert not _crosses_box(r, box), (size.__module__, e.label, nid)
         assert stubs >= 8
+
+
+def test_application_line_ends_keep_8px_apart_in_every_style():
+    """E8: on the application view, line ends on one box side are at least 8px apart in
+    every style (short Style B-D boxes grow to fit their lines, as Style A's do)."""
+    from conftest import fixture_view
+    v = fixture_view("application", "claims-online")
+    for size in _style_sizes():
+        L = layout_for(v, size)
+        assert _side_gaps(v, L) >= 8.0, (size.__module__, _side_gaps(v, L))
