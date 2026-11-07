@@ -589,19 +589,33 @@ class _Scan:
             seg = re.sub(r"\([^)]*\)", " ", seg)
             args: List[Optional[str]] = []
             qualifier = False
-            for t in _ARG_TOK.finditer(seg):
-                w = t.group(0)
+            special: Optional[str] = None  # "ADDRESS" / "LENGTH" waiting for OF X
+            toks = [t.group(0) for t in _ARG_TOK.finditer(seg)]
+            for k, w in enumerate(toks):
+                up = w.upper()
+                if special:
+                    if up == "OF" and not special.endswith(" OF"):
+                        special += " OF"
+                        continue
+                    # ADDRESS OF X / LENGTH OF X is one argument; never X's handle
+                    args.append("%s %s" % (special, up) if w[0].isalpha() else None)
+                    special = None
+                    continue
                 if qualifier:  # the group after OF / IN qualifies the argument before it
                     qualifier = False
                     continue
-                if w.upper() in ("OF", "IN"):
+                if up in ("ADDRESS", "LENGTH") and k + 1 < len(toks) \
+                        and toks[k + 1].upper() == "OF":
+                    special = up
+                    continue
+                if up in ("OF", "IN"):
                     qualifier = True
                     continue
-                if w.upper() in ("BY", "REFERENCE", "CONTENT", "VALUE", "ADDRESS"):
+                if up in ("BY", "REFERENCE", "CONTENT", "VALUE"):
                     continue
-                if w.upper() in _VERBS:
+                if up in _VERBS:
                     break
-                args.append(w.upper() if w[0].isalpha() else None)
+                args.append(up if w[0].isalpha() else None)
             return args
 
         opens: List[Tuple[int, Optional[str]]] = []   # (offset, handle variable)

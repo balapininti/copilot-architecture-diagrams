@@ -404,3 +404,19 @@ def test_prose_in_a_copylib_folder_is_not_a_copybook(tmp_path):
                        "copylib/PAYREC.txt": _REC})
     got = sorted(n.id for n in i.nodes.values() if n.kind == "copybook")
     assert got == ["copybook:CLMREC", "copybook:PAYREC"]
+
+
+# ------------------------------------------------------------------ Batch A fixes
+
+def test_mq_address_of_and_length_of_are_one_argument_each():
+    # A7: ADDRESS OF X / LENGTH OF X must not shift the handle position
+    q = _q("           MOVE 'CLM.REQ.Q' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQOPEN' USING HCONN, BY REFERENCE ADDRESS OF MQOD,\n"
+           "                OPTS, HREQ, CC, RC.\n"
+           "           MOVE 'CLM.RSP.Q' TO MQOD-OBJECTNAME\n"
+           "           CALL 'MQOPEN' USING HCONN, ADDRESS OF MQOD, OPTS, HRSP, CC, RC.\n"
+           "           CALL 'MQPUT' USING HCONN, HREQ, MQMD, PMO,\n"
+           "                BY VALUE LENGTH OF BUF, BUF, CC, RC.\n"
+           "           CALL 'MQGET' USING HCONN, HRSP, MQMD, GMO, LENGTH OF BUF,\n"
+           "                BUF, DLEN, CC, RC.\n")
+    assert {(r.op, r.target_name) for r in q} == {("put", "CLM.REQ.Q"), ("get", "CLM.RSP.Q")}
