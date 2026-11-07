@@ -1728,13 +1728,24 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     sides: Dict[int, Tuple[str, str]] = {}
     bend: Dict[int, float] = {}
     on_side: Dict[Tuple[str, str], List[Tuple[float, int, int]]] = {}
+    kinds = {nd.id: nd.kind for nd in view.nodes}
+    straight: set = set()
+    mazed: set = set()
     for k, e in enumerate(view.edges):
         a, b = boxes[e.src], boxes[e.dst]
+        others = [x for i, x in boxes.items() if i not in (e.src, e.dst)]
         if e.src == e.dst:
             sides[k], bend[k] = ("right", "top"), 1.0
+        elif "missing" in (kinds[e.src], kinds[e.dst]):
+            # a loose stub: straight from the nearest card side to the missing box (E7);
+            # a curve only when every straight line would cross a card
+            sides[k], bend[k], how = _stub_sides(a, b, others)
+            if how != "curve":
+                straight.add(k)
+            if how == "maze":
+                mazed.add(k)
         else:
-            sides[k], bend[k] = _clear_sides(a, b, [x for i, x in boxes.items()
-                                                    if i not in (e.src, e.dst)])
+            sides[k], bend[k] = _clear_sides(a, b, others)
         for end, (me, you) in enumerate(((a, b), (b, a))):
             side = sides[k][end]
             along = you.cy if side in ("left", "right") else you.cx
@@ -1752,8 +1763,45 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
         a, b = boxes[e.src], boxes[e.dst]
         sa, sb = sides[k]
         p0, p3 = _side_point(a, sa, offset[(k, 0)]), _side_point(b, sb, offset[(k, 1)])
-        routes.append(_card_curve(p0, sa, p3, sb, bend[k]))
+        routes.append([p0, p3] if k in straight else _card_curve(p0, sa, p3, sb, bend[k]))
+    # a stub whose straight line would cross a card goes round the cards at right angles
+    budget = MAZE_BUDGET
+    blocks = list(boxes.values())
+    for k in sorted(mazed):
+        sa, sb = sides[k]
+        p0, p3 = routes[k][0], routes[k][-1]
+        r, spent = (None, 0)
+        if budget > 0:
+            nb = _SIDES[sb]
+            r, spent = _maze_dirs(p0, _SIDES[sa], p3, (-nb[0], -nb[1]), blocks,
+                                  min(budget, MAZE_POPS),
+                                  [seg for j, q in enumerate(routes) if j != k
+                                   for seg in zip(q, q[1:])])
+            budget -= spent
+        routes[k] = r if r is not None else _card_curve(p0, sa, p3, sb, 1.0)
     return boxes, routes
+
+
+def _stub_sides(a: Box, b: Box, others: List[Box]) -> Tuple[Tuple[str, str], float, str]:
+    """Sides for a line to or from a missing box (E7): the nearest pair of sides that
+    face each other (each end leaves its card outward, never round the back), joined by
+    a straight line ("straight") when it crosses no card, else by a path round the cards
+    at right angles ("maze", routed once every side is known). (sides, bend, how)."""
+    best = None
+    for facing in (True, False):
+        for sa, na in _SIDES.items():
+            pa = _side_point(a, sa)
+            for sb, nb in _SIDES.items():
+                pb = _side_point(b, sb)
+                if facing and (na[0] * (pb[0] - pa[0]) + na[1] * (pb[1] - pa[1]) <= 0
+                               or nb[0] * (pa[0] - pb[0]) + nb[1] * (pa[1] - pb[1]) <= 0):
+                    continue
+                score = (_cards_hit([pa, pb], others), math.hypot(pb[0] - pa[0], pb[1] - pa[1]))
+                if best is None or score < best[0]:
+                    best = (score, (sa, sb))
+        if best is not None:
+            break
+    return best[1], 1.0, "straight" if best[0][0] == 0 else "maze"
 
 
 def _card_curve(p0: Point, sa: str, p3: Point, sb: str, bend: float) -> List[Point]:

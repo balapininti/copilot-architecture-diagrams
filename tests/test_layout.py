@@ -547,3 +547,28 @@ def test_groups_on_a_job_flow_or_repomap_are_reported_not_dropped_silently():
     v = ViewGraph("t", "flow_job", "J", [VNode("job:J", "J", kind="job")], [], [])
     layout_for(v, lambda n: (140, 80))
     assert v.notes == []
+
+
+def test_repomap_loose_stubs_go_straight_to_the_missing_box():
+    """E7: a line to or from a missing box leaves the nearest card side and goes straight
+    (or round the cards at right angles) to it: it never overshoots past either box and
+    comes back, and crosses no card on the way."""
+    from conftest import fixture_view
+    v = fixture_view("repomap", None)
+    kinds = {n.id: n.kind for n in v.nodes}
+    for size in _style_sizes():
+        L = layout_for(v, size)
+        stubs = 0
+        for k, e in enumerate(v.edges):
+            if "missing" not in (kinds[e.src], kinds[e.dst]) or e.src == e.dst:
+                continue
+            stubs += 1
+            a, b, r = L.boxes[e.src], L.boxes[e.dst], L.routes[k]
+            lo_y, hi_y = min(a.y, b.y) - 40, max(a.y + a.h, b.y + b.h) + 40
+            lo_x, hi_x = min(a.x, b.x) - 40, max(a.x + a.w, b.x + b.w) + 40
+            assert all(lo_x <= x <= hi_x and lo_y <= y <= hi_y for x, y in r), \
+                (size.__module__, e.label)
+            for nid, box in L.boxes.items():
+                if nid not in (e.src, e.dst):
+                    assert not _crosses_box(r, box), (size.__module__, e.label, nid)
+        assert stubs >= 8
