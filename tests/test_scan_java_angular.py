@@ -544,3 +544,62 @@ def test_b3_repeated_route_items_keep_their_own_lines(tmp_path):
     lines = sorted(r.evidence.line for r in inv.refs
                    if r.op == "uses" and r.src in ("page:r/a/b", "page:r/b"))
     assert lines == [3, 4, 5]
+
+
+# ------------------------------------------------------------------ B4: WebClient, comma joins, CTG
+
+def _webclient(bases):
+    return ("import org.springframework.web.reactive.function.client.WebClient;\n"
+            "class Tmp {\n"
+            + "".join('  WebClient c%d = WebClient.builder().baseUrl("%s").build();\n' % (i, b)
+                      for i, b in enumerate(bases))
+            + '  void f() { c0.get().uri("/claims").retrieve(); }\n}\n')
+
+
+def test_b4_webclient_path_only_without_a_single_base_has_a_reason(tmp_path):
+    for i, bases in enumerate(([], ["https://a.example", "https://b.example"])):
+        root = tmp_path / str(i)
+        root.mkdir()
+        inv = java_inv(root, _webclient(bases)) if bases else java_inv(
+            root, _webclient([]).replace("c0.get()", "client.get()"))
+        (r,) = [r for r in inv.refs if r.op == "http"]
+        assert r.target_name == "GET /claims"
+        assert r.reason and r.reason.startswith("base URL not worked out"), r.reason
+
+
+def test_b4_webclient_single_base_is_joined(tmp_path):
+    inv = java_inv(tmp_path, _webclient(["https://a.example/api"]))
+    (r,) = [r for r in inv.refs if r.op == "http"]
+    assert r.target_name == "GET https://a.example/api/claims" and r.reason is None
+
+
+def test_b4_comma_join_after_an_explicit_join():
+    from archdiag.scan.java import sql_tables
+    got = {(op, t) for op, t, _ in sql_tables(
+        "SELECT * FROM A.CLAIM c JOIN A.POLICY p ON c.P = p.ID, A.AGENT g, "
+        "(SELECT 1 FROM A.X) z WHERE g.ID = c.G")}
+    assert got == {("select", "A.CLAIM"), ("select", "A.POLICY"), ("select", "A.AGENT"),
+                   ("select", "A.X")}
+    got = {(op, t) for op, t, _ in sql_tables(
+        "SELECT a, b FROM T1 LEFT JOIN T2 ON (T1.K = COALESCE(T2.K, 0)), T3 ORDER BY a")}
+    assert got == {("select", "T1"), ("select", "T2"), ("select", "T3")}
+
+
+def test_b4_eci_request_program_by_known_constructor_shape(tmp_path):
+    src = ('class Tmp {\n'
+           ' void f() {\n'
+           '  new ECIRequest(ECIRequest.ECI_SYNC, "S", "U", "P", "PROG7", "TX", buf);\n'
+           '  new ECIRequest(1, "S", "U", "P", "PROG10", "TX", buf, 10, 0, 0);\n'
+           '  new ECIRequest(1, "S", "U", "P", "PROG9", "TX", ch, 0, 0);\n'
+           '  new ECIRequest("S", "U", "P", "PROG6", "TX", buf);\n'
+           '  new ECIRequest("PROG1", "X", "Y", "Z", "W");\n'
+           ' } }')
+    inv = java_inv(tmp_path, src)
+    got = {(r.target_name, bool(r.reason)) for r in inv.refs if r.op == "ctg_call"}
+    assert ("PROG7", False) in got and ("PROG10", False) in got and ("PROG9", False) in got
+    rest = [r for r in inv.refs if r.op == "ctg_call" and r.evidence.line >= 6]
+    assert len(rest) == 2 and all(r.reason and "constructor" in r.reason for r in rest)
+    from archdiag.resolve import resolve
+    res = resolve(inv, Config())
+    assert all(e.status != "confirmed" for e in res.edges
+               if e.op == "ctg_call" and e.evidence[0].line >= 6)

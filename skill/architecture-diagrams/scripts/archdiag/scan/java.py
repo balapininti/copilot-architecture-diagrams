@@ -393,7 +393,7 @@ class _Out:
 
     def add(self, off: int, op: str, kind: str, name: Optional[str],
             reason: Optional[str] = None, attrs: Optional[Dict[str, object]] = None,
-            keep_reason: bool = False) -> None:
+            keep_reason: bool = False, candidates: Optional[List[str]] = None) -> None:
         src = self.s.class_id(off)
         if src is None:
             return
@@ -403,7 +403,8 @@ class _Out:
             return
         self.seen.add(key)
         why = (reason or "unknown") if not name else (reason if keep_reason else None)
-        self.refs.append(Ref(src, op, kind, name, ev, why, attrs=attrs or {}))
+        self.refs.append(Ref(src, op, kind, name, ev, why, list(candidates or []),
+                             attrs=attrs or {}))
 
 
 # ---------------------------------------------------------------------- SQL
@@ -413,6 +414,42 @@ _KW_END = (r"(?=\b(?:WHERE|GROUP|ORDER|HAVING|UNION|LIMIT|FETCH|FOR|ON|USING|SET
            r"INTERSECT|EXCEPT)\b|[;)]|$)")
 _TABLE = re.compile(r'^(?:"[^"]+"|`[^`]+`|[A-Za-z_#$@][\w#$@]*)'
                     r'(?:\.(?:"[^"]+"|`[^`]+`|[\w#$@]+))*$')
+
+
+_FROM_STOP = re.compile(r"(?:WHERE|GROUP|ORDER|HAVING|UNION|LIMIT|FETCH|FOR|SET|WITH|VALUES|"
+                        r"SELECT|OFFSET|INTERSECT|EXCEPT|RETURNING|WINDOW)\b", re.I)
+
+
+def _from_parts(s: str, i: int) -> List[str]:
+    """The comma-separated parts of a FROM clause starting at ``i``, split at top level, up
+    to the clause's end (a closing paren, ``;`` or a keyword that ends it)."""
+    parts: List[str] = []
+    depth = 0
+    start = i
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch in "'\"`":
+            j = s.find(ch, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                break
+        elif ch == ";" and depth == 0:
+            break
+        elif ch == "," and depth == 0:
+            parts.append(s[start:i])
+            start = i + 1
+        elif depth == 0 and (i == 0 or not (s[i - 1].isalnum() or s[i - 1] in "_.$#@")) \
+                and _FROM_STOP.match(s, i):
+            break
+        i += 1
+    parts.append(s[start:i])
+    return parts
 
 
 def sql_tables(sql: str) -> List[Tuple[str, Optional[str], str]]:
@@ -443,10 +480,11 @@ def sql_tables(sql: str) -> List[Tuple[str, Optional[str], str]]:
         take("update", m.group(1))
     for m in re.finditer(r"\bDELETE\s+FROM\s+([^\s(;]+)", s, re.I):
         take("delete", m.group(1))
-    for m in re.finditer(r"\bFROM\s+(.*?)" + _KW_END, s, re.I):
+    for m in re.finditer(r"\bFROM\s+", s, re.I):
         if re.search(r"\bDELETE\s*$", s[:m.start()], re.I):
             continue
-        for part in m.group(1).split(","):
+        # every top-level comma part of the FROM clause, also one after a JOIN ... ON (B4)
+        for part in _from_parts(s, m.end()):
             tok = part.strip().split(" ")[0]
             if tok:
                 take("select", tok)
@@ -527,6 +565,9 @@ def param_type(p: str) -> Optional[str]:
     p = re.sub(r"\bfinal\s+", "", p)
     m = re.match(r"([A-Za-z_][\w.]*)\s+\w+$", p)
     return m.group(1).split(".")[-1] if m else None
+
+
+_ECI_ARITIES = (7, 9, 10)
 
 
 def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
@@ -694,6 +735,12 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
             url = b.rstrip("/") + url
         if url is None:
             out.add(m.start(), "http", "endpoint", None, "URL not worked out: %s" % why)
+        elif url.startswith("/") and len(base_urls) != 1:
+            # a path with no single base URL in the file: the host is not known (B4)
+            out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url),
+                    "base URL not worked out (%s)" % (
+                        "baseUrl set %d times in this file" % len(base_urls) if base_urls
+                        else "no baseUrl in this file"), keep_reason=True)
         else:
             out.add(m.start(), "http", "endpoint", "%s %s" % (meth, url))
 
@@ -757,9 +804,16 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
     # CICS Transaction Gateway --------------------------------------------------------------------
     for m in re.finditer(r"(?<![\w.])ECIRequest\s*\(", s.masked):
         args, _ = args_at(s.clean, m.end() - 1)
-        if len(args) < 5:
+        # the CTG constructors that take a program: (callType, server, userid, password,
+        # program, transid, commarea|channel [, length, extend mode, LUW token]) - 7, 9 or
+        # 10 arguments, the call type a number or constant; any other shape is not trusted
+        if len(args) not in _ECI_ARITIES or re.match(r"\s*[\"']", args[0]):
+            lits = sorted(set(v.strip().upper() for v in (
+                s.eval(a, m.start())[0] for a in args
+                if re.fullmatch(r'\s*"(?:[^"\\]|\\.)*"\s*', a)) if v and v.strip()))
             out.add(m.start(), "ctg_call", "program", None,
-                    "ECIRequest program argument not found")
+                    "ECIRequest constructor with %d argument(s) is not a known shape; "
+                    "program not worked out" % len(args), candidates=lits)
             continue
         prog, why = s.eval(args[4], m.start())
         if prog is not None and prog.strip():
