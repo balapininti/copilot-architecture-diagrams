@@ -306,7 +306,7 @@ def test_txt_exports_and_xml_json_are_read(tmp_path):
     assert main(["scan", "--workspace", str(w)]) == 0
     inv = load_inventory(w / "architecture-diagrams" / "inventory.json")
     ids = set(inv.nodes)
-    assert any("TXTPGM" in i for i in ids) and any("TXTJOB" in i for i in ids)
+    assert any("TXTPGM" in i for i in ids) and any(i.startswith("job:") for i in ids)
 
 
 @pytest.mark.skipif(sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
