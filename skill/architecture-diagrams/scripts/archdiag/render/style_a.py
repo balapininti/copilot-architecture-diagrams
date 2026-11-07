@@ -341,6 +341,7 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                         pts))
     present = {line_style(e.status, e.kind) for e in view.edges}  # the legend, as in the SVG
     cx, cy = 20.0, L.height + 24
+    page_w, page_h = L.width, L.height
     for key, label in _LEGEND:
         if key not in present:
             continue
@@ -352,12 +353,13 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
         cells.append('<mxCell id="lg-text-%s" value="%s" style="text;html=0;align=left;'
                      'verticalAlign=middle;fontSize=11;fontColor=#334155;" vertex="1" parent="1">%s'
                      '</mxCell>' % (key, esc(label), _geom(cx + 52, cy - 9, w, 18)))
+        page_w, page_h = max(page_w, cx + 52 + w + 20), max(page_h, cy + 9 + 20)
         cx += 52 + w + 24
     return ('<mxfile host="archdiag" type="device"><diagram id="archdiag" name="%s">'
             '<mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" '
             'connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="%s" '
             'pageHeight="%s" math="0" shadow="0"><root>%s</root></mxGraphModel></diagram>'
-            '</mxfile>\n' % (esc(view.title), num(L.width), num(L.height), "".join(cells)))
+            '</mxfile>\n' % (esc(view.title), num(page_w), num(page_h), "".join(cells)))
 
 
 # ------------------------------------------------------------------ entry point

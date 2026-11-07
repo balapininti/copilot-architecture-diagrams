@@ -62,3 +62,57 @@ def test_excalidraw_matches_legend_and_has_one():
         from conftest import EXCALIDRAW_DASH
         have = {(e["strokeColor"], EXCALIDRAW_DASH[e["strokeStyle"]]) for e in legend.values()}
         assert have == want
+
+
+# ------------------------------------------------------------------ Batch C (C10)
+
+def test_drawio_legend_lines_match_legend_and_fit_the_page():
+    for v in _views():
+        out = style_a.render(v)["drawio"]
+        root = ET.fromstring(out)
+        found = {}
+        bottom = right = 0.0
+        for c in root.iter("mxCell"):
+            cid = c.get("id", "")
+            if cid.startswith("lg-line-"):
+                st = dict(kv.split("=", 1) for kv in c.get("style").split(";") if "=" in kv)
+                found[cid[8:]] = (st["strokeColor"],
+                                  st.get("dashPattern", "") if st.get("dashed") == "1" else "")
+                for p in c.iter("mxPoint"):
+                    bottom = max(bottom, float(p.get("y")))
+                    right = max(right, float(p.get("x")))
+            g = c.find("mxGeometry")
+            if g is not None and g.get("height") is not None and g.get("relative") != "1":
+                bottom = max(bottom, float(g.get("y", 0)) + float(g.get("height")))
+                right = max(right, float(g.get("x", 0)) + float(g.get("width")))
+        want = {}
+        from archdiag.render.common import line_style
+        for e in v.edges:
+            want[line_style(e.status, e.kind)] = expected_line(e.status, e.kind)
+        assert found == want, v.title
+        model = root.find("diagram/mxGraphModel")
+        assert float(model.get("pageHeight")) >= bottom, (v.title, model.get("pageHeight"), bottom)
+        assert float(model.get("pageWidth")) >= right, (v.title, model.get("pageWidth"), right)
+
+
+def test_style_d_heads_match_their_line():
+    """Each line's chevron (or loose-end dot) is drawn in the line's own color, undashed."""
+    ns = "{http://www.w3.org/2000/svg}"
+    for v in _views():
+        root = ET.fromstring(style_d.render(v)["svg"])
+        kids = [el for el in root.iter() if el.tag in (ns + "path", ns + "circle")]
+        seen = 0
+        for k, el in enumerate(kids):
+            i = el.get("id", "")
+            if not i.startswith("edge-"):
+                continue
+            e = v.edges[int(i[5:])]
+            color, _ = expected_line(e.status, e.kind)
+            head = kids[k + 1]
+            if e.status == "loose":
+                assert head.tag == ns + "circle" and head.get("fill") == color, (v.title, i)
+            else:
+                assert head.tag == ns + "path" and head.get("stroke") == color, (v.title, i)
+                assert head.get("stroke-dasharray") is None, (v.title, i)
+            seen += 1
+        assert seen == len(v.edges)
