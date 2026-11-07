@@ -285,7 +285,7 @@ def _gitdiagram_lines(view, gd, links: Path) -> None:
     n = len(ung.members) if ung is not None else 0
     if n:
         print("Not yet grouped: %d file%s (see %s)" % (n, "" if n == 1 else "s", links))
-    problems = [" ".join(p.split()) for p in gd.problems if p != FALLBACK_NOTE]
+    problems = [" ".join(p.split()) for p in view.problems if p != FALLBACK_NOTE]
     if gd.file_state == "missing":
         print(FALLBACK_NOTE)
     elif gd.file_state == "unusable":
@@ -354,7 +354,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     _write(links, report.links_report(view, r))
     written.append(links)
     # the gitdiagram's own notes are said once, by the lines printed below
-    said = set(gd.problems) | {FALLBACK_NOTE} if gd is not None else set()
+    said = set(view.problems) | {FALLBACK_NOTE} if gd is not None else set()
     for note in view.notes + layout_notes(view):
         if note in said or (gd is not None and re.match(r"^\d+ files? not yet grouped$", note)):
             continue  # the "Not yet grouped: N files" line below says it

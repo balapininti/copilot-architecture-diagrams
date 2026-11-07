@@ -193,3 +193,25 @@ def test_group_named_question_mark_draws_every_style(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "Traceback" not in out and "Summary:" in out
+
+
+def test_undrawn_suggested_links_are_problems(tmp_path, capsys):
+    """A suggested link the view cannot draw (an entry box the repo does not have, or both
+    ends one box) is a problem in the file: printed and listed in the report's section."""
+    w = _estate(tmp_path)
+    d = w / "architecture-diagrams"
+    (d / "gitdiagram-claims-batch.json").write_text(json.dumps(
+        {"repo": "claims-batch", "groups": [{"name": "Jobs", "files": ["jcl/", "proc/"]},
+                                            {"name": "Code", "files": ["cobol/"]}],
+         "suggested_links": [{"from": "CICS transactions", "to": "Code", "note": "n"},
+                             {"from": "Jobs", "to": "Jobs", "note": "n"}]}), encoding="utf-8")
+    assert main(["draw", "--workspace", str(w), "--level", "gitdiagram",
+                 "--scope", "claims-batch"]) == 0
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if "Copilot suggests a link" in ln]
+    assert len(lines) == 2, out
+    assert all(ln.startswith("Problem in gitdiagram-claims-batch.json: ") for ln in lines), lines
+    report = (d / "gitdiagram-claims-batch-links.md").read_text(encoding="utf-8")
+    sec = report.split("## Problems in the gitdiagram file")[1]
+    assert "CICS transactions → Code" in sec and "Jobs → Jobs" in sec
+    assert "Copilot suggests" not in report.split("## Notes")[1].split("## Clickable")[0]

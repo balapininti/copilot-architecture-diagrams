@@ -576,14 +576,16 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             return aid if aid in boxes else None
         return None
 
+    undrawn: List[str] = []  # problems in the file, said with the loader's own
     for link in gd.suggested_links:
         s, d = box_of(link["from"]), box_of(link["to"])
         if s is None or d is None or s == d:
             bad = [x for x, b in ((link["from"], s), (link["to"], d)) if b is None]
             why = ("%s names no group or entry point in this picture"
                    % " and ".join(repr(x) for x in bad)) if bad else "both ends are one box"
-            notes.append("Copilot suggests a link %s → %s; not drawn: %s"
-                         % (link["from"], link["to"], why))
+            undrawn.append("Copilot suggests a link %s → %s; not drawn: %s"
+                           % (link["from"], link["to"], why))
+            notes.append(undrawn[-1])
             continue
         reason = "suggested by Copilot: %s" % link["note"] if link.get("note") else \
             "suggested by Copilot"
@@ -603,5 +605,5 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     v = ViewGraph("Gitdiagram %s" % repo, "gitdiagram", repo, vnodes, vedges, [], notes)
     v.overview = gd.overview
     v.repo_path = repo_path
-    v.problems = list(gd.problems)
+    v.problems = list(gd.problems) + undrawn
     return v
