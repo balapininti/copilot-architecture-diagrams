@@ -291,6 +291,8 @@ def _gitdiagram_lines(view, gd, links: Path) -> None:
               % (problems[0] if problems else "unknown problem"))
     for p in problems[:5]:
         print("Problem in gitdiagram-%s.json: %s" % (gd.repo, p))
+    if len(problems) > 5:
+        print("... and %d more (see %s)" % (len(problems) - 5, links))
 
 
 def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
@@ -352,8 +354,8 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     # the gitdiagram's own notes are said once, by the lines printed below
     said = set(gd.problems) | {FALLBACK_NOTE} if gd is not None else set()
     for note in view.notes + layout_notes(view):
-        if note in said:
-            continue
+        if note in said or (gd is not None and re.match(r"^\d+ files? not yet grouped$", note)):
+            continue  # the "Not yet grouped: N files" line below says it
         notice("Note: %s" % note)
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:

@@ -97,11 +97,14 @@ replaced by a grouping by top-level folder, and `draw` says so.
      "description": "Prices each claim"}
   ],
   "suggested_links": [
-    {"from": "Claim pricing", "to": "Nightly jobs", "label": "rates file",
-     "note": "CLMB200 reads a rates file the JCL does not name"}
+    {"from": "Claim pricing", "to": "Nightly jobs", "label": "rates file (example)",
+     "note": "(example) <program> reads a file the JCL doesn't name"}
   ]
 }
 ```
+
+The suggested link above is only an illustration of the shape. Never copy it; write one only
+for a connection you have a real reason to believe in.
 
 | Field | Meaning |
 |---|---|

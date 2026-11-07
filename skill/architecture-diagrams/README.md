@@ -123,6 +123,8 @@ Later runs reuse that file. Edit it by hand or ask Copilot; your groups are kept
 files added since are listed in a "Not yet grouped" box until they are placed. Without the
 file, `draw` groups by top-level folder and says so.
 
+An example, abbreviated from the test fixture `gitdiagram-claims-batch.json`:
+
 ```json
 {
   "repo": "claims-batch",

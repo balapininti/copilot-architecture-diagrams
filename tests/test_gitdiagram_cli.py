@@ -91,6 +91,9 @@ def test_not_yet_grouped_line(tmp_path, capsys):
     assert "gitdiagram-claims-batch-links.md" in out.split("Not yet grouped: ")[1].split("\n")[0]
     assert "Problem in gitdiagram-claims-batch.json:" in out
     assert out.count("Problem in gitdiagram-claims-batch.json:") <= 5
+    assert "files not yet grouped" not in out and "file not yet grouped" not in out
+    n = out.count("Problem in gitdiagram-claims-batch.json:")
+    assert (n < 5) or "... and " in out
     assert "Grouped by folder" not in out
     assert out.index("Not yet grouped:") < out.index("Wrote:")
 
@@ -131,3 +134,16 @@ def test_cli_never_writes_gitdiagram_file(tmp_path, capsys):
           "--style", "all"])
     main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "nope"])
     assert not list((w / "architecture-diagrams").glob("gitdiagram-*.json"))
+
+
+def test_more_than_five_problems_are_summarised(tmp_path, capsys):
+    w = _estate(tmp_path)
+    gd = {"repo": "claims-batch", "overview": "x",
+          "groups": [{"name": "G%d" % i, "files": ["no/such/p%d.txt" % i]} for i in range(8)]}
+    (w / "architecture-diagrams" / "gitdiagram-claims-batch.json").write_text(
+        json.dumps(gd), encoding="utf-8")
+    assert main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "claims-batch"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("Problem in gitdiagram-claims-batch.json:") == 5
+    assert "... and 3 more (see " in out and "gitdiagram-claims-batch-links.md" in out.split("... and 3 more")[1].split("\n")[0]
+    assert "not yet grouped" not in out.replace("Not yet grouped", "")

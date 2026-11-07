@@ -210,11 +210,12 @@ What `draw` prints, and what to do:
 
 - `Grouped by folder. Ask Copilot to name groups for this repo.` No file yet. Do steps 1-4.
 - `The gitdiagram file couldn't be used (...); folders were used instead.` Say so, fix the
-  file (or ask), draw again.
+  file, **show the user the changed grouping and wait**, then draw again.
 - `Not yet grouped: N files (see ...)` Offer to place them. Add patterns to the right
   groups, keep the rest as they were, draw again.
 - `Problem in gitdiagram-<repo>.json: ...` (a pattern that matches nothing, a dropped
-  suggested link). Fix the pattern it names, draw again.
+  suggested link). Fix the pattern it names, draw again. `draw` prints at most 5 of these;
+  any more are summarised as `... and N more (see ...)`, and the rest are in the links report.
 
 Report as in step 5: paths, the `Summary:` line and `Top issues:` verbatim, every `Note:`
 and `WARNING:`. Grey thin "starts" lines only say a job exists; who schedules it is not in
