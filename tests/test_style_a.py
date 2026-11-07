@@ -75,8 +75,8 @@ def test_drawio_parses_and_has_cells():
         root = ET.fromstring(style_a.render(v)["drawio"])
         assert root.tag == "mxfile" and root.find("diagram/mxGraphModel/root") is not None
         cells = list(root.iter("mxCell"))
-        vertices = [c for c in cells if c.get("vertex") == "1"]
-        edges = [c for c in cells if c.get("edge") == "1"]
+        vertices = [c for c in cells if c.get("vertex") == "1" and not c.get("id").startswith("lg-")]
+        edges = [c for c in cells if c.get("edge") == "1" and not c.get("id").startswith("lg-")]
         L = layout_for(v, style_a.node_size)
         # one container per group drawn (Layout.groups), as in the SVG
         assert len(vertices) == len(v.nodes) + len(L.groups), level
@@ -91,7 +91,8 @@ def test_drawio_parses_and_has_cells():
 def test_drawio_line_styles():
     v = fixture_view("flow_job", "CLMD100")
     root = ET.fromstring(style_a.render(v)["drawio"])
-    styles = [c.get("style") for c in root.iter("mxCell") if c.get("edge") == "1"]
+    styles = [c.get("style") for c in root.iter("mxCell")
+              if c.get("edge") == "1" and not c.get("id").startswith("lg-")]
     by = {}
     for e, s in zip(v.edges, styles):
         by.setdefault(e.status, []).append(s)
@@ -225,7 +226,8 @@ def test_drawio_draws_only_laid_out_groups():
                   [VGroup("g1", "app", "#3b82f6")])
     out = style_a.render(v)
     root = ET.fromstring(out["drawio"])
-    assert len([c for c in root.iter("mxCell") if c.get("vertex") == "1"]) == 2
+    assert len([c for c in root.iter("mxCell") if c.get("vertex") == "1"
+                and not c.get("id").startswith("lg-")]) == 2
     assert "app" not in svg_text(out["svg"])
 
 

@@ -51,3 +51,57 @@ def assert_office_safe(svg):
     for el in root.iter():
         assert "style" not in el.attrib, "style attribute on <%s>" % el.tag
     return root
+
+
+# ------------------------------------------------------------------ line encoding
+
+def expected_line(status, kind):
+    """(color, dash) the legend promises for a line of this status and kind: dash is the
+    SVG dasharray ("" for solid)."""
+    import re
+    from archdiag.render.common import LINE_COLORS, _LINE_ATTRS, line_style
+
+    key = line_style(status, kind)
+    m = re.search(r'stroke-dasharray="([^"]+)"', _LINE_ATTRS[key])
+    return LINE_COLORS[key], (m.group(1) if m else "")
+
+
+def svg_edge_encodings(svg):
+    """{edge index: (stroke, dasharray)} of the ``id="edge-N"`` paths of an SVG."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(svg)
+    out = {}
+    for el in root.iter("{http://www.w3.org/2000/svg}path"):
+        i = el.get("id", "")
+        if i.startswith("edge-"):
+            out[int(i[5:])] = (el.get("stroke"), el.get("stroke-dasharray") or "")
+    return out
+
+
+def drawio_edge_encodings(xml):
+    """{edge index: (strokeColor, dashPattern)} of the diagram's own edges (``e<N>``)."""
+    import xml.etree.ElementTree as ET
+
+    out = {}
+    for c in ET.fromstring(xml).iter("mxCell"):
+        cid = c.get("id", "")
+        if c.get("edge") == "1" and cid.startswith("e") and cid[1:].isdigit():
+            st = dict(kv.split("=", 1) for kv in c.get("style").split(";") if "=" in kv)
+            dash = st.get("dashPattern", "") if st.get("dashed") == "1" else ""
+            out[int(cid[1:])] = (st["strokeColor"], dash)
+    return out
+
+
+EXCALIDRAW_DASH = {"solid": "", "dotted": "3 4", "dashed": "7 4"}
+
+
+def excalidraw_edge_encodings(js):
+    """{edge index: (strokeColor, dash)} of the ``arrow-N`` elements."""
+    import json
+
+    out = {}
+    for e in json.loads(js)["elements"]:
+        if e["type"] == "arrow":
+            out[int(e["id"][6:])] = (e["strokeColor"], EXCALIDRAW_DASH[e["strokeStyle"]])
+    return out

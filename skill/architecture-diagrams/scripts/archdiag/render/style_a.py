@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LOOSE_COLOR,
+from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
                                     PARTIAL_COLOR, REPO_COLORS, circled, esc, legend,
                                     legend_width, line_attrs, line_style, notes_block,
                                     notes_height, num, path_d, svg_doc, text, text_width, tint,
@@ -339,6 +339,20 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                      '</mxGeometry></mxCell>'
                      % (i, esc(_edge_text(e)), style, node_cell[e.src], node_cell[e.dst], ends,
                         pts))
+    present = {line_style(e.status, e.kind) for e in view.edges}  # the legend, as in the SVG
+    cx, cy = 20.0, L.height + 24
+    for key, label in _LEGEND:
+        if key not in present:
+            continue
+        cells.append('<mxCell id="lg-line-%s" value="" style="edgeStyle=none;html=0;%s" edge="1" '
+                     'parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="%s" y="%s" '
+                     'as="sourcePoint"/><mxPoint x="%s" y="%s" as="targetPoint"/></mxGeometry>'
+                     '</mxCell>' % (key, _EDGE_STYLE[key], num(cx), num(cy), num(cx + 44), num(cy)))
+        w = text_width(label, LEGEND_SIZE) + 10
+        cells.append('<mxCell id="lg-text-%s" value="%s" style="text;html=0;align=left;'
+                     'verticalAlign=middle;fontSize=11;fontColor=#334155;" vertex="1" parent="1">%s'
+                     '</mxCell>' % (key, esc(label), _geom(cx + 52, cy - 9, w, 18)))
+        cx += 52 + w + 24
     return ('<mxfile host="archdiag" type="device"><diagram id="archdiag" name="%s">'
             '<mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" '
             'connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="%s" '

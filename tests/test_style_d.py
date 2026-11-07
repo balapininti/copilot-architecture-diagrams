@@ -62,7 +62,7 @@ def test_line_types_stay_distinct():
     ex = json.loads(out["excalidraw"])
     arrows = [e for e in ex["elements"] if e["type"] == "arrow"]
     assert {a["strokeStyle"] for a in arrows} >= {"solid", "dotted", "dashed"}
-    assert any(a["strokeColor"] == "#e03131" for a in arrows)
+    assert any(a["strokeColor"] == "#dc2626" and a["endArrowhead"] == "circle" for a in arrows)
 
 
 def test_excalidraw_valid():

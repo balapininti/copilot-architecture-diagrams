@@ -22,8 +22,9 @@ import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (FONT, LOOSE_COLOR, PARTIAL_COLOR, SHARED_COLOR, circled,
-                                    esc, legend, legend_width, line_attrs, line_style,
+from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
+                                    PARTIAL_COLOR, SHARED_COLOR, _LEGEND, circled,
+                                    esc, legend, legend_width, line_style,
                                     loose_dot, note_lines, num, path_d, svg_doc, text,
                                     text_width, wrap)
 from archdiag.render.pills import Pill, place_pills
@@ -212,7 +213,7 @@ def _text_block(t: _NodeText, cx: float, top: float, ink: str, sub_ink: str) -> 
 
 
 def _node_svg(R: Rough, n: VNode, b: Box, idx: Optional[int], grouped: bool, i: int,
-              ends_in_dot: bool, ox: float, oy: float) -> str:
+              ox: float, oy: float) -> str:
     t = _NodeText(n)
     x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
     cx = x + w / 2
@@ -296,15 +297,11 @@ def _chevron(R: Rough, prev: Tuple[float, float], tip: Tuple[float, float]
 
 
 def _edge_attrs(style: str) -> Tuple[str, float, str]:
-    """(stroke color, width, dasharray) of a line type: the same patterns as every style."""
-    a = line_attrs("partial" if style == "partial" else "loose" if style == "loose"
-                   else "confirmed", "shared_code" if style == "shared_code" else "runtime")
-    if style == "confirmed":
-        return INK, STROKE_W, ""
-    color = {"partial": PARTIAL_COLOR, "loose": LOOSE_COLOR, "shared_code": SHARED_COLOR}[style]
-    dash = {"partial": "3 4", "loose": "", "shared_code": "7 4"}[style]
-    assert color in a
-    return color, 2.4 if style != "shared_code" else 2.0, dash
+    """(stroke color, width, dasharray) of a line type: the same colors and patterns as the
+    legend and every other style. Box outlines are ink; lines are never ink."""
+    color = LINE_COLORS[style]
+    dash = {"confirmed": "", "partial": "3 4", "loose": "", "shared_code": "7 4"}[style]
+    return color, {"confirmed": STROKE_W, "shared_code": 2.0}.get(style, 2.4), dash
 
 
 def _edge_svg(R: Rough, i: int, route: Sequence[Tuple[float, float]], style: str,
@@ -414,8 +411,6 @@ class _Scene:
                                                   max(self.width - 60, 560.0))
         self.width = max([self.width] + [s.x + s.w + 30 for s in self.stickies])
         self.height = notes_y + (notes_h + 28 if view.notes else 4)
-        dot_ends = {e.dst for e, s in zip(view.edges, self.styles) if s == "loose"}
-        self.dot_ends = dot_ends
         self.gidx = _group_index(view)
 
     def lane(self) -> Optional[Tuple[float, float, float, float]]:
@@ -453,7 +448,7 @@ def _svg(S: _Scene, seed: int) -> str:
             continue
         grouped = n.group in L.groups and n.group is not None
         idx = S.gidx.get(n.group or "")
-        body.append(_node_svg(R, n, b, idx, grouped, i, n.id in S.dot_ends, ox, oy))
+        body.append(_node_svg(R, n, b, idx, grouped, i, ox, oy))
     body.extend(_pill_svg(p, ox, oy) for p in S.pills)
     body.append(S.leg)
     body.extend(_sticky_svg(R, s) for s in S.stickies)
@@ -559,7 +554,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
             bg = "#fff3bf"
         X.box(eid, "rectangle", x, y, b.w, b.h, bg, stroke)
         if n.kind in CYLINDERS:
-            X.box(eid + "-cap", "ellipse", x, y, b.w, 22, bg, stroke)
+            X.box(eid + "-cap", "ellipse", x, y, b.w, 22, "transparent", stroke)  # outline only: never hides the label
         X.label(eid + "-text", x + 6, y + 6, t.plain(), 14, ink, container=eid, align="center",
                 w=b.w - 12, h=b.h - 12)
     for i, e in enumerate(view.edges):
@@ -568,7 +563,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
             continue
         pts = [(x + ox, y + oy) for x, y in route]
         style = S.styles[i]
-        color = "#e03131" if style == "loose" else _edge_attrs(style)[0]
+        color = _edge_attrs(style)[0]
         stroke_style = {"partial": "dotted", "shared_code": "dashed"}.get(style, "solid")
         x0, y0 = pts[0]
         rel = [[round(px - x0, 1), round(py - y0, 1)] for px, py in pts]
@@ -576,7 +571,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         aid = "arrow-%d" % i
         a = X.base(aid, "arrow", x0, y0, max(xs) - min(xs), max(ys) - min(ys),
                    strokeColor=color, strokeStyle=stroke_style, points=rel,
-                   startArrowhead=None, endArrowhead="dot" if style == "loose" else "arrow",
+                   startArrowhead=None, endArrowhead="circle" if style == "loose" else "arrow",
                    lastCommittedPoint=None,
                    startBinding={"elementId": node_el[e.src], "focus": 0, "gap": 4},
                    endBinding={"elementId": node_el[e.dst], "focus": 0, "gap": 4})
@@ -586,6 +581,22 @@ def _excalidraw(S: _Scene, seed: int) -> str:
     for p in S.pills:
         X.label("label-%d" % p.i, p.x + ox + 7, p.y + oy + 2.5, "\n".join(p.lines), 12,
                 _PILL_INK[p.style], align="center", w=p.w - 14)
+    cx = 30.0  # the legend: one short line per type present, as in the SVG
+    cy = S.leg_y + 9
+    for key, lab in _LEGEND:
+        if key not in S.present:
+            continue
+        length = 36.0 if key == "loose" else 44.0
+        color = LINE_COLORS[key]
+        style = {"partial": "dotted", "shared_code": "dashed"}.get(key, "solid")
+        ln = X.base("legend-%s" % key, "line", cx, cy, length, 0, strokeColor=color,
+                    strokeStyle=style, points=[[0, 0], [length, 0]], startArrowhead=None,
+                    endArrowhead=None, lastCommittedPoint=None)
+        ln["strokeWidth"] = 2
+        if key == "loose":
+            X.box("legend-loose-dot", "ellipse", cx + 34, cy - 6, 12, 12, color, color)
+        X.label("legend-%s-text" % key, cx + 54, cy - 7, lab, 12, "#334155")
+        cx += 54 + text_width(lab, LEGEND_SIZE) + 24
     for k, s in enumerate(S.stickies):
         sid = "note-%d" % k
         X.box(sid, "rectangle", s.x, s.y, s.w, s.h, STICKY, STICKY_EDGE, s.tilt, False)
