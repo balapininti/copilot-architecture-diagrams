@@ -1,0 +1,15 @@
+{
+  "repo": "claims-batch",
+  "overview": "Nightly claims batch. CLMD100 sorts the claim master, prices each claim (CLMB200, with CLMB210), posts payments to DB2 (CLMB300) and sends the extract to Finance by Connect:Direct. CLMD300 runs the payment feed (CLMPRC, CLMB400). DATEUTIL is assembler and is not analysed.",
+  "groups": [
+    {"name": "Nightly jobs", "tech": "JCL", "files": ["jcl/**", "jcl.pds/**", "proc/**"],
+     "description": "Job streams and the procs they call"},
+    {"name": "Claim pricing", "tech": "COBOL", "files": ["cobol/CLMB200.cbl", "cobol/CLMB210.cbl"],
+     "description": "Prices each claim"},
+    {"name": "Payments", "tech": "COBOL", "files": ["cobol/CLMB300.cbl", "cobol.pds/CLMB400"],
+     "description": "Posts payments and reads the payment feed"},
+    {"name": "Not analyzed", "tech": "Assembler", "files": ["asm/**"],
+     "description": "Assembler the scanner does not analyse"}
+  ],
+  "suggested_links": []
+}

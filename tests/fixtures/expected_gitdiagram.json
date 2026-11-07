@@ -1,0 +1,66 @@
+{
+  "claims-batch": {
+    "files": {
+      "jcl/CLMD100.jcl": "grp:Nightly jobs",
+      "jcl/test/CLMD100.jcl": "grp:Nightly jobs",
+      "jcl.pds/CLMD300": "grp:Nightly jobs",
+      "proc/CLMEXT.proc": "grp:Nightly jobs",
+      "proc/CLMPRC.proc": "grp:Nightly jobs",
+      "cobol/CLMB200.cbl": "grp:Claim pricing",
+      "cobol/CLMB210.cbl": "grp:Claim pricing",
+      "cobol/CLMB300.cbl": "grp:Payments",
+      "cobol.pds/CLMB400": "grp:Payments",
+      "asm/DATEUTIL.asm": "grp:Not analyzed",
+      "cobol/CLMB500.cbl": "grp:?",
+      "cobol/CLMB510.cbl": "grp:?"
+    },
+    "lines": [
+      {"id": "B1", "src": "act:scheduler", "dst": "grp:Nightly jobs", "label_family": "starts", "status": "structural"},
+      {"id": "B2", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "confirmed", "label_has": "via &&SORTED"},
+      {"id": "B3", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "partial"},
+      {"id": "B4", "src": "grp:Nightly jobs", "dst": "grp:Payments", "label_family": "runs", "status": "confirmed"},
+      {"id": "B5", "src": "grp:Claim pricing", "dst": "dataset:CLAIMS.DAILY", "label_family": "writes", "status": "confirmed"},
+      {"id": "B6", "src": "grp:Nightly jobs", "dst": "dataset:CLAIMS.DAILY", "label_family": "reads", "status": "confirmed"},
+      {"id": "B7", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no writer found", "status": "loose"},
+      {"id": "B8", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no reader found", "status": "loose"},
+      {"id": "B9", "src": "grp:Nightly jobs", "dst": "out:external", "label_family": "file transfer", "status": "partial"},
+      {"id": "B10", "src": "grp:Claim pricing", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
+      {"id": "B11", "src": "grp:Claim pricing", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
+      {"id": "B12", "src": "grp:Claim pricing", "dst": "grp:Not analyzed", "label_family": "CALL", "status": "confirmed"},
+      {"id": "B13", "src": "grp:Payments", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
+      {"id": "B14", "src": "grp:Payments", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
+      {"id": "B15", "src": "grp:Payments", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed"},
+      {"id": "B16", "src": "grp:?", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
+      {"id": "B17", "src": "grp:?", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed"},
+      {"id": "B18", "src": "grp:?", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"}
+    ]
+  },
+  "claims-api": {
+    "files": {
+      "src/main/java/com/acme/claims/ClaimController.java": "grp:REST controllers",
+      "src/main/java/com/acme/claims/MqClaimGateway.java": "grp:MQ gateway",
+      "src/main/java/com/acme/claims/AuditPublisher.java": "grp:MQ gateway",
+      "src/main/java/com/acme/claims/ClaimStatusClient.java": "grp:z/OS Connect client",
+      "src/main/java/com/acme/claims/ClaimRepository.java": "grp:Data access",
+      "src/main/java/com/acme/claims/ClaimHistoryRepository.java": "grp:Data access",
+      "src/main/java/com/acme/claims/PaymentArchiveRepository.java": "grp:Data access",
+      "src/main/java/com/acme/claims/PartnerClient.java": "grp:Outbound clients",
+      "src/main/java/com/acme/claims/RatesClient.java": "grp:Outbound clients",
+      "src/main/resources/application.yml": "grp:?"
+    },
+    "lines": [
+      {"id": "A1", "src": "act:endpoint", "dst": "grp:REST controllers", "label_family": "runs", "status": "confirmed"},
+      {"id": "A2", "src": "out:claims-portal", "dst": "act:endpoint", "label_family": "REST", "status": "confirmed"},
+      {"id": "A3", "src": "grp:Outbound clients", "dst": "grp:REST controllers", "label_family": "REST", "status": "partial"},
+      {"id": "A4", "src": "grp:REST controllers", "dst": "grp:MQ gateway", "label_family": "uses", "status": "confirmed"},
+      {"id": "A5", "src": "grp:REST controllers", "dst": "grp:z/OS Connect client", "label_family": "uses", "status": "confirmed"},
+      {"id": "A6", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ PUT", "status": "confirmed"},
+      {"id": "A7", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ GET", "status": "confirmed"},
+      {"id": "A8", "src": "grp:MQ gateway", "dst": "out:missing", "label_family": "no consumer found", "status": "partial"},
+      {"id": "A9", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "partial"},
+      {"id": "A10", "src": "grp:z/OS Connect client", "dst": "out:claims-online", "label_family": "REST", "status": "partial"},
+      {"id": "A11", "src": "grp:Outbound clients", "dst": "out:external", "label_family": "REST", "status": "loose"},
+      {"id": "A12", "src": "grp:REST controllers", "dst": "grp:Data access", "label_family": "looks up claims in", "status": "partial", "suggested": true}
+    ]
+  }
+}

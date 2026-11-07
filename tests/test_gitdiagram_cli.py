@@ -10,6 +10,10 @@ from conftest import ESTATE
 def _estate(tmp_path):
     w = tmp_path / "estate"
     shutil.copytree(str(ESTATE), str(w))
+    # these tests start with no gitdiagram file; the fixture's own (the release gate's,
+    # tests/test_gitdiagram_gate.py) are removed, and a test that wants one writes it
+    for f in (w / "architecture-diagrams").glob("gitdiagram-*.json"):
+        f.unlink()
     return w
 
 

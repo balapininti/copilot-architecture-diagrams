@@ -1,0 +1,27 @@
+{
+  "repo": "claims-api",
+  "overview": "Claims REST API (Spring). The controller takes new claims onto MQ for CICS (CLM.REQ, replies on CLM.RSP), asks z/OS Connect for a claim's status, reads the claims schema through JDBC repositories, publishes audit events and calls two outside services.",
+  "groups": [
+    {"name": "REST controllers", "tech": "Spring MVC",
+     "files": ["src/main/java/com/acme/claims/ClaimController.java"],
+     "description": "GET and POST /api/claims"},
+    {"name": "MQ gateway", "tech": "JMS",
+     "files": ["src/main/java/com/acme/claims/MqClaimGateway.java",
+               "src/main/java/com/acme/claims/AuditPublisher.java"],
+     "description": "Request/reply and audit queues"},
+    {"name": "z/OS Connect client", "tech": "RestTemplate",
+     "files": ["src/main/java/com/acme/claims/ClaimStatusClient.java"],
+     "description": "Claim status from the mainframe"},
+    {"name": "Data access", "tech": "JDBC",
+     "files": ["src/main/java/com/acme/claims/*Repository.java"],
+     "description": "Reads the claims schema"},
+    {"name": "Outbound clients", "tech": "RestTemplate",
+     "files": ["src/main/java/com/acme/claims/PartnerClient.java",
+               "src/main/java/com/acme/claims/RatesClient.java"],
+     "description": "Partner and rates services"}
+  ],
+  "suggested_links": [
+    {"from": "REST controllers", "to": "Data access", "label": "looks up claims in",
+     "note": "the controller's package holds the repositories; no field or call ties them yet"}
+  ]
+}
