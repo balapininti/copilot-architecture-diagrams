@@ -15,7 +15,7 @@ Line types encode certainty and are the same on every diagram:
 from __future__ import annotations
 
 import math
-from typing import Callable, Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 FONT = "Segoe UI, Arial, sans-serif"
 MONO = "Consolas, monospace"
@@ -110,6 +110,16 @@ def tint(color: str, amount: float) -> str:
         return "#f1f5f9"
     mix = lambda v: int(round(255 - (255 - v) * amount))  # noqa: E731
     return "#%02x%02x%02x" % (mix(r), mix(g), mix(b))
+
+
+def circled(n: Optional[int]) -> str:
+    """``①``…``⑳`` for 1-20, then ``(21)``; empty for no number."""
+    if n is None:
+        return ""
+    if 1 <= n <= 20:
+        return chr(0x2460 + n - 1)
+    return "(%d)" % n
+
 
 
 # ------------------------------------------------------------------ lines

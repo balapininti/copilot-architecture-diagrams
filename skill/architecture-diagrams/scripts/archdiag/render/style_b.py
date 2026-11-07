@@ -1,0 +1,389 @@
+"""Style B: C4-style boxes, with a Mermaid copy.
+
+Looks like diagram 1 of ``docs/samples/mainframe-samples.html`` and option B of
+``docs/samples/style-options.html``: solid blue boxes with three lines of text (name in bold,
+``[Kind: tech]``, a description), tables and datasets as cylinders, grey dashed repository
+boundaries labelled bottom-left, and edge labels of a sentence plus a ``[tech]`` line.
+Line types encode certainty exactly as in Style A (see ``common``).
+
+render(view) -> {"svg": ..., "md": ...}; the Markdown holds a Mermaid ``flowchart LR`` and
+a legend.
+"""
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Optional, Set, Tuple
+
+from archdiag.layout import Box, Layout, layout_for
+from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, circled, esc, legend,
+                                    legend_width, line_style, notes_block, notes_height, num,
+                                    svg_doc, text, text_width, wrap)
+from archdiag.render.pills import edge_svg, place_pills
+from archdiag.views import VEdge, VNode, ViewGraph
+
+NAME_SIZE, NAME_LINE = 13.0, 17.0
+KIND_SIZE, KIND_LINE = 10.5, 14.0
+DESC_SIZE, DESC_LINE = 10.5, 13.5
+MAX_TEXT_W = 190.0
+MIN_W = 150.0
+PAD_TOP, PAD_BOTTOM = 10.0, 10.0
+CYL_RY = 11.0                 # the cylinder's elliptical cap
+PERSON_HEAD = 30.0            # a person's head, above the body
+TITLE_H = 44.0
+MAX_DESC_LINES = 4
+
+BOX = "#1168bd"
+PERSON = "#08427b"
+EXTERNAL = "#999999"
+QUEUE = "#438dd5"
+NOTANALYZED = "#cbd5e1"
+CAP = "#2a7fd4"               # a cylinder's top ellipse
+SUB_TEXT = "#cfe0f5"
+
+CYLINDERS = ("table", "dataset", "vsam", "gdg", "datastore")
+
+_KIND_NAME = {
+    "application": "Application", "datastore": "Datastore", "program": "Program",
+    "utility": "Utility", "job": "Job", "step": "Job step", "dataset": "Dataset",
+    "gdg": "Generation dataset", "vsam": "VSAM dataset", "table": "Table", "queue": "Queue",
+    "transaction": "Transaction", "map": "Map", "cicsfile": "CICS file",
+    "external": "External system", "notanalyzed": "Not analyzed", "repo": "Repository",
+    "page": "Page", "component": "Component", "class": "Class", "endpoint": "Endpoint",
+    "person": "Person", "neighbor": "Neighbor", "missing": "Not found", "more": "More",
+    "sysout": "Output",
+}
+_KIND_TECH = {
+    "program": "COBOL", "job": "JCL", "step": "JCL", "utility": "z/OS utility",
+    "dataset": "z/OS", "gdg": "z/OS", "vsam": "VSAM", "table": "DB2", "queue": "IBM MQ",
+    "transaction": "CICS", "map": "BMS", "cicsfile": "CICS", "page": "Angular",
+    "component": "Angular", "class": "Java", "endpoint": "REST",
+}
+_FROM_SUBLABEL = ("application", "datastore", "repo")  # the sublabel is the technology
+
+
+# ------------------------------------------------------------------ the three lines of text
+
+def _card(n: VNode) -> Tuple[str, str, List[str]]:
+    """(name, ``[Kind: tech]``, description lines) for one box."""
+    kind = _KIND_NAME.get(n.kind, n.kind.title())
+    tech = ""
+    desc: List[str] = []
+    if n.kind in _FROM_SUBLABEL:
+        tech = n.sublabel
+        details = list(n.detail_lines)
+        if n.kind == "repo" and len(details) > MAX_DESC_LINES:
+            details = details[:MAX_DESC_LINES - 1] + ["+%d more" % (len(details) - MAX_DESC_LINES + 1)]
+        desc = details
+    elif n.kind == "missing":
+        desc = [n.sublabel] if n.sublabel else []
+    else:
+        tech = _KIND_TECH.get(n.kind, "")
+        m = re.match(r"^(\S+) program", n.sublabel or "")
+        if n.kind == "program" and m:
+            tech = m.group(1)
+        sub = n.sublabel or ""
+        if " · " in sub:
+            rest = sub.split(" · ", 1)[1]
+        elif tech and tech.lower() in sub.lower():
+            rest = ""
+        else:
+            rest = sub
+        if rest:
+            desc = [rest]
+    if tech and tech.lower() in kind.lower():
+        tech = ""
+    kind_line = "[%s: %s]" % (kind, tech) if tech else "[%s]" % kind
+    if n.kind == "missing":
+        kind_line = ""
+    return n.label, kind_line, desc
+
+
+class _Text:
+    def __init__(self, n: VNode) -> None:
+        name, kind_line, desc = _card(n)
+        self.name = wrap(name, MAX_TEXT_W, NAME_SIZE)
+        self.kind = [kind_line] if kind_line else []
+        self.desc: List[str] = []
+        for d in desc:
+            self.desc.extend(wrap(d, MAX_TEXT_W, DESC_SIZE))
+        self.desc = self.desc[:MAX_DESC_LINES + 1]
+        widths = [text_width(s, NAME_SIZE) + 6 for s in self.name]
+        widths += [text_width(s, KIND_SIZE) for s in self.kind]
+        widths += [text_width(s, DESC_SIZE) for s in self.desc]
+        self.width = max(widths) if widths else 0.0
+        self.height = (NAME_LINE * len(self.name) + KIND_LINE * len(self.kind)
+                       + DESC_LINE * len(self.desc) + (4 if self.desc else 0))
+
+
+def _extra_top(n: VNode) -> float:
+    if n.kind in CYLINDERS:
+        return 2 * CYL_RY - 4
+    if n.kind == "person":
+        return PERSON_HEAD
+    return 0.0
+
+
+def node_size(n: VNode) -> Tuple[float, float]:
+    t = _Text(n)
+    w = max(MIN_W, t.width + 24)
+    return w, PAD_TOP + t.height + PAD_BOTTOM + _extra_top(n) + (6 if n.kind in CYLINDERS else 0)
+
+
+# ------------------------------------------------------------------ SVG
+
+def _fill(n: VNode) -> str:
+    if n.kind == "person":
+        return PERSON
+    if n.kind == "external":
+        return EXTERNAL
+    if n.kind in ("queue",):
+        return QUEUE
+    if n.kind in ("notanalyzed", "neighbor"):
+        return NOTANALYZED
+    return BOX
+
+
+def _node_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
+    t = _Text(n)
+    x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
+    cx = x + w / 2
+    parts: List[str] = []
+    name_fill, kind_fill, desc_fill = "#ffffff", SUB_TEXT, "#ffffff"
+    top = y + PAD_TOP
+    if n.kind == "missing":
+        partial = n.status == "partial"
+        c = PARTIAL_COLOR if partial else LOOSE_COLOR
+        dash = ' stroke-dasharray="3 4"' if partial else ""
+        parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="%s" stroke="%s" '
+                     'stroke-width="1.6"%s/>' % (num(x), num(y), num(w), num(h),
+                                                 "#fffbeb" if partial else "#fef2f2", c, dash))
+        name_fill = kind_fill = desc_fill = "#b45309" if partial else "#b91c1c"
+        top = y + (h - t.height) / 2
+    elif n.kind in CYLINDERS:
+        ry = CYL_RY
+        parts.append('<path d="M%s,%s L%s,%s A%s,%s 0 0,0 %s,%s L%s,%s" fill="%s"/>'
+                     % (num(x), num(y + ry), num(x), num(y + h - ry), num(w / 2), num(ry),
+                        num(x + w), num(y + h - ry), num(x + w), num(y + ry), BOX))
+        parts.append('<ellipse cx="%s" cy="%s" rx="%s" ry="%s" fill="%s"/>'
+                     % (num(cx), num(y + ry), num(w / 2), num(ry), CAP))
+        top = y + 2 * ry - 2 + PAD_TOP / 2
+    elif n.kind == "person":
+        parts.append('<circle cx="%s" cy="%s" r="%s" fill="%s"/>'
+                     % (num(cx), num(y + PERSON_HEAD / 2 + 2), num(PERSON_HEAD / 2 + 2), PERSON))
+        parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="16" fill="%s"/>'
+                     % (num(x), num(y + PERSON_HEAD), num(w), num(h - PERSON_HEAD), PERSON))
+        top = y + PERSON_HEAD + PAD_TOP
+    else:
+        fill = _fill(n)
+        stroke = ""
+        if n.kind in ("notanalyzed", "neighbor"):
+            stroke = ' stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3"'
+            name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
+        parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="%s"%s/>'
+                     % (num(x), num(y), num(w), num(h), fill, stroke))
+        if n.kind == "queue":
+            kind_fill = "#e3eefa"
+    ty = top
+    for s in t.name:
+        ty += NAME_LINE
+        parts.append(text(cx, ty - 4, s, NAME_SIZE, name_fill, "middle", "700"))
+    for s in t.kind:
+        ty += KIND_LINE
+        parts.append(text(cx, ty - 3.5, s, KIND_SIZE, kind_fill, "middle"))
+    if t.desc:
+        ty += 4
+    for s in t.desc:
+        ty += DESC_LINE
+        parts.append(text(cx, ty - 3.5, s, DESC_SIZE, desc_fill, "middle"))
+    return "<g>%s</g>" % "".join(parts)
+
+
+def group_title(label: str) -> str:
+    return "%s [repo]" % label
+
+
+def _edge_text(e: VEdge) -> str:
+    """A sentence, then its ``[tech]`` on a second line (``REST · GET /x`` -> two lines)."""
+    label = e.label
+    head, tail = (label.split(" · ", 1) + [""])[:2] if " · " in label else (label, "")
+    num_s = circled(e.number)
+    first = ("%s %s" % (num_s, head)).strip() if num_s else head
+    return "%s\n[%s]" % (first, tail) if tail else first
+
+
+def _title_zone(g, gb) -> Optional[Tuple[float, float, float, float]]:
+    w = text_width(group_title(g.label), 11) + 10
+    return (gb[0] + 4, gb[1] + gb[3] - 24, w, 22)
+
+
+def _svg(view: ViewGraph, L: Layout) -> str:
+    styles = [line_style(e.status, e.kind) for e in view.edges]
+    routes = [list(r) for r in L.routes]
+    pills = place_pills(view, L, styles, routes, _edge_text, _title_zone)
+
+    min_x = min([p.x for p in pills] + [0.0])
+    min_y = min([p.y for p in pills] + [0.0])
+    ox = max(0.0, 14 - min_x) if min_x < 14 else 0.0
+    oy = TITLE_H + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
+    content_w = max([L.width] + [p.x + p.w + 14 for p in pills]) + ox
+    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
+
+    present: Set[str] = set(styles)
+    leg_y = content_h + 6
+    leg, leg_h = legend(30, leg_y, present)
+    title_w = text_width(view.title, 16) + 60
+    width = max(content_w, legend_width(present) + 60, title_w, 360.0)
+    note_w = max(width - 60, 560.0)
+    width = max(width, note_w + 60)
+    notes_y = leg_y + leg_h + (14 if leg_h else 0)
+    n_h = notes_height(view.notes, note_w)
+    height = notes_y + n_h + (16 if n_h else 4)
+
+    body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
+    for g in view.groups:
+        gb = L.groups.get(g.id)
+        if gb is None:
+            continue
+        body.append('<rect x="%s" y="%s" width="%s" height="%s" rx="4" fill="none" '
+                    'stroke="#888888" stroke-width="1.3" stroke-dasharray="7 5"/>'
+                    % (num(gb.x + ox), num(gb.y + oy), num(gb.w), num(gb.h)))
+        body.append(text(gb.x + ox + 8, gb.y + oy + gb.h - 8, group_title(g.label), 11,
+                         "#555555"))
+    for i, e in enumerate(view.edges):
+        if i < len(routes):
+            body.append(edge_svg(i, routes[i], styles[i], e.status, e.kind, ox, oy))
+    for n in view.nodes:
+        b = L.boxes.get(n.id)
+        if b is not None:
+            body.append(_node_svg(n, b, ox, oy))
+    body.extend(p.svg(ox, oy) for p in pills)
+    body.append(leg)
+    body.append(notes_block(view.notes, 30, notes_y, note_w))
+    return svg_doc(width, height, "".join(body), title=view.title)
+
+
+# ------------------------------------------------------------------ Mermaid
+
+_LINE_STYLE = {
+    "confirmed": "stroke:#334155,stroke-width:2px",
+    "partial": "stroke:#d97706,stroke-width:2px",
+    "loose": "stroke:#dc2626,stroke-width:2px",
+    "shared_code": "stroke:#a16207,stroke-width:2px,stroke-dasharray:7 4",
+}
+_ARROW = {"confirmed": "-->", "partial": "-.->", "loose": "--x", "shared_code": "-->"}
+
+_CLASSES = (
+    ("box", "fill:#1168bd,stroke:#0b4884,color:#ffffff"),
+    ("person", "fill:#08427b,stroke:#052e56,color:#ffffff"),
+    ("external", "fill:#999999,stroke:#6b6b6b,color:#ffffff"),
+    ("queue", "fill:#438dd5,stroke:#2e6295,color:#ffffff"),
+    ("notanalyzed", "fill:#cbd5e1,stroke:#94a3b8,color:#1e293b,stroke-dasharray:4 3"),
+    ("missingLoose", "fill:#fef2f2,stroke:#dc2626,color:#b91c1c"),
+    ("missingPartial", "fill:#fffbeb,stroke:#d97706,color:#b45309,stroke-dasharray:3 4"),
+)
+
+
+def mm(s: str) -> str:
+    """Text safe inside a double-quoted Mermaid label: ``#`` first, then the characters
+    Mermaid reads as syntax, as ``#name;`` entity codes."""
+    s = " ".join(str(s).split())
+    for ch, code in (("#", "#35;"), ('"', "#quot;"), ("<", "#lt;"), (">", "#gt;"),
+                     ("&", "#amp;"), ("`", "#96;")):
+        s = s.replace(ch, code)
+    return s
+
+
+def _node_class(n: VNode) -> str:
+    if n.kind == "missing":
+        return "missingPartial" if n.status == "partial" else "missingLoose"
+    if n.kind == "person":
+        return "person"
+    if n.kind == "external":
+        return "external"
+    if n.kind == "queue":
+        return "queue"
+    if n.kind in ("notanalyzed", "neighbor"):
+        return "notanalyzed"
+    return "box"
+
+
+def _node_mermaid(i: int, n: VNode) -> str:
+    name, kind_line, desc = _card(n)
+    label = "<br/>".join(["<b>%s</b>" % mm(name)]
+                         + ([mm(kind_line)] if kind_line else []) + [mm(d) for d in desc])
+    if n.kind in CYLINDERS:
+        return 'n%d[("%s")]' % (i, label)
+    return 'n%d["%s"]' % (i, label)
+
+
+def _mermaid(view: ViewGraph) -> str:
+    index = {n.id: i for i, n in enumerate(view.nodes)}
+    lines = ["flowchart LR"]
+    members: Dict[str, List[int]] = {g.id: [] for g in view.groups}
+    loose_nodes: List[int] = []
+    for i, n in enumerate(view.nodes):
+        if n.group in members:
+            members[n.group].append(i)
+        else:
+            loose_nodes.append(i)
+    for k, g in enumerate(view.groups):
+        lines.append('  subgraph sg%d["%s"]' % (k, mm(group_title(g.label))))
+        for i in members[g.id]:
+            lines.append("    " + _node_mermaid(i, view.nodes[i]))
+        lines.append("  end")
+    for i in loose_nodes:
+        lines.append("  " + _node_mermaid(i, view.nodes[i]))
+    styles: List[str] = []
+    for e in view.edges:
+        st = line_style(e.status, e.kind)
+        styles.append(st)
+        num_s = circled(e.number)
+        label = ("%s %s" % (num_s, e.label)).strip() if num_s else e.label
+        arrow = _ARROW[st]
+        a, b = "n%d" % index[e.src], "n%d" % index[e.dst]
+        if label:
+            lines.append('  %s %s|"%s"| %s' % (a, arrow, mm(label), b))
+        else:
+            lines.append("  %s %s %s" % (a, arrow, b))
+    for i, st in enumerate(styles):
+        lines.append("  linkStyle %d %s" % (i, _LINE_STYLE[st]))
+    for name, style in _CLASSES:
+        lines.append("  classDef %s %s" % (name, style))
+    by_class: Dict[str, List[str]] = {}
+    for i, n in enumerate(view.nodes):
+        by_class.setdefault(_node_class(n), []).append("n%d" % i)
+    for name, _ in _CLASSES:
+        if name in by_class:
+            lines.append("  class %s %s" % (",".join(by_class[name]), name))
+    return "\n".join(lines)
+
+
+_MD_LEGEND = (
+    ("confirmed", "Solid dark line (`-->`): confirmed, both ends found in code"),
+    ("partial", "Dotted amber line (`-.->`): partly known or suggested"),
+    ("loose", "Red line ending in a cross (`--x`): loose end, only one side found"),
+    ("shared_code", "Dashed brown line: shared code (copybook, package)"),
+)
+
+
+def _markdown(view: ViewGraph) -> str:
+    styles = {line_style(e.status, e.kind) for e in view.edges}
+    out = ["# %s" % " ".join(view.title.split()), "", "```mermaid", _mermaid(view), "```", "",
+           "## Legend", ""]
+    for key, label in _MD_LEGEND:
+        if key in styles:
+            out.append("- %s" % label)
+    out.append("- Blue box: a thing found in the repositories; grey box: outside them; "
+               "light grey: not analyzed; red or amber outline: not found / partly known")
+    out.append("- Cylinder: a table or dataset; a dashed box groups one repository")
+    if view.notes:
+        out += ["", "## Notes", ""] + ["- %s" % n for n in view.notes]
+    return "\n".join(out) + "\n"
+
+
+# ------------------------------------------------------------------ entry point
+
+def render(view: ViewGraph) -> Dict[str, str]:
+    """The C4-style SVG and its Mermaid Markdown, from one layout of ``view``."""
+    L = layout_for(view, node_size)
+    return {"svg": _svg(view, L), "md": _markdown(view)}
