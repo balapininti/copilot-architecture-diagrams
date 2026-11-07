@@ -23,9 +23,9 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
-                                    PARTIAL_COLOR, SHARED_COLOR, _LEGEND, circled,
+                                    PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
                                     esc, legend, legend_width, line_style,
-                                    loose_dot, note_lines, num, path_d, svg_doc, text,
+                                    loose_dot, note_lines, num, path_d, step_text, svg_doc, text,
                                     text_width, wrap)
 from archdiag.render.pills import Pill, place_pills
 from archdiag.views import VNode, ViewGraph
@@ -333,15 +333,16 @@ def _pill_svg(p: Pill, ox: float, oy: float) -> str:
     x, y = p.x + ox, p.y + oy
     parts = ['<rect id="pill-%d" x="%s" y="%s" width="%s" height="%s" rx="5" fill="%s" '
              'fill-opacity="0.92"/>' % (p.i, num(x), num(y), num(p.w), num(p.h), BG)]
+    parts.append(p.mark(x, y, _PILL_INK[p.style], BG))
     for k, s in enumerate(p.lines):
-        parts.append(text(x + p.w / 2, y + 2.5 + 13.5 * (k + 1) - 3, s, PILL_FONT,
+        parts.append(text(p.text_cx(x), y + 2.5 + 13.5 * (k + 1) - 3, s, PILL_FONT,
                           _PILL_INK[p.style], "middle"))
     return "".join(parts)
 
 
 def _edge_text(e) -> str:
-    s = circled(e.number)
-    return "%s %s" % (s, e.label) if s and e.label else s or e.label
+    """The pill text (the pill draws the step number itself)."""
+    return e.label
 
 
 def _title_zone(g, gb):
@@ -579,8 +580,12 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         for nid in (node_el[e.src], node_el[e.dst]):
             X.by_id[nid]["boundElements"].append({"id": aid, "type": "arrow"})
     for p in S.pills:
-        X.label("label-%d" % p.i, p.x + ox + 7, p.y + oy + 2.5, "\n".join(p.lines), 12,
-                _PILL_INK[p.style], align="center", w=p.w - 14)
+        lines = list(p.lines)
+        if p.number is not None:  # text only here: the number written as in draw.io
+            lines = [(step_text(p.number) + " " + (lines[0] if lines else "")).strip()] \
+                + lines[1:]
+        X.label("label-%d" % p.i, p.x + ox + 7, p.y + oy + 2.5, "\n".join(lines), 12,
+                _PILL_INK[p.style], align="center", w=max(p.w - 14, 30.0))
     cx = 30.0  # the legend: one short line per type present, as in the SVG
     cy = S.leg_y + 9
     for key, lab in _LEGEND:

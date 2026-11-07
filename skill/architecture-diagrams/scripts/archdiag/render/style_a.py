@@ -14,10 +14,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
-                                    PARTIAL_COLOR, REPO_COLORS, circled, esc, legend,
+                                    PARTIAL_COLOR, REPO_COLORS, esc, legend,
                                     legend_width, line_attrs, line_style, notes_block,
-                                    notes_height, num, path_d, svg_doc, text, text_width, tint,
-                                    wrap)
+                                    notes_height, num, path_d, step_text, svg_doc, text,
+                                    text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, place_pills as _place_pills
 from archdiag.views import VNode, ViewGraph
 
@@ -99,10 +99,14 @@ def group_title(gid: str, label: str) -> str:
 
 
 def _edge_text(e) -> str:
-    num_s = circled(e.number)
-    if num_s and e.label:
-        return "%s %s" % (num_s, e.label)
-    return num_s or e.label
+    """The pill text (the pill draws the step number itself)."""
+    return e.label
+
+
+def _plain_edge_text(e) -> str:
+    """The label in the text-only draw.io copy: ``(3) LINK``."""
+    num_s = step_text(e.number)
+    return "%s %s" % (num_s, e.label) if num_s and e.label else num_s or e.label
 
 
 def draw_routes(view: ViewGraph, L: Layout) -> List[List[Tuple[float, float]]]:
@@ -337,7 +341,7 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                      'labelBackgroundColor=#ffffff;fontSize=10;%s" edge="1" parent="1" '
                      'source="%s" target="%s"><mxGeometry relative="1" as="geometry">%s%s'
                      '</mxGeometry></mxCell>'
-                     % (i, esc(_edge_text(e)), style, node_cell[e.src], node_cell[e.dst], ends,
+                     % (i, esc(_plain_edge_text(e)), style, node_cell[e.src], node_cell[e.dst], ends,
                         pts))
     present = {line_style(e.status, e.kind) for e in view.edges}  # the legend, as in the SVG
     cx, cy = 20.0, L.height + 24

@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Tuple
 
 from archdiag.layout import Layout
-from archdiag.render.common import (arrowhead, line_attrs, line_color, loose_dot, num, path_d,
-                                    text, text_width, wrap)
+from archdiag.render.common import (STEP_R, arrowhead, line_attrs, line_color, loose_dot, num,
+                                    path_d, step_mark, text, text_width, wrap)
 from archdiag.views import ViewGraph
 
 PILL_SIZE, PILL_LINE = 10.5, 13.5
@@ -23,15 +23,32 @@ _PILL_TEXT = {"confirmed": "#334155", "partial": "#b45309", "loose": "#b91c1c",
 
 
 class Pill:
+    """A line's label: its text (``\\n`` starts a new line) and, for a numbered step, the
+    number drawn as a circle at the left (``step_mark``)."""
+
     def __init__(self, i: int, s: str, at: Tuple[float, float], style: str,
-                 max_w: float = PILL_MAX_W) -> None:
+                 max_w: float = PILL_MAX_W, number: Optional[int] = None) -> None:
         self.i = i
-        self.lines = [w for part in s.split("\n") for w in wrap(part, max_w, PILL_SIZE)]
-        self.w = max(text_width(x, PILL_SIZE) for x in self.lines) + 14
-        self.h = 5 + PILL_LINE * len(self.lines)
+        self.number = number
+        self.lines = [w for part in s.split("\n") for w in wrap(part, max_w, PILL_SIZE)] \
+            if s else []
+        self.num_w = 2 * STEP_R + (4 if self.lines else 0) if number is not None else 0.0
+        text_w = max([text_width(x, PILL_SIZE) for x in self.lines] or [0.0])
+        self.w = text_w + self.num_w + (14 if self.lines else 6)
+        self.h = 5 + PILL_LINE * max(1, len(self.lines))
         self.x = at[0] - self.w / 2
         self.y = at[1] - self.h / 2
         self.style = style
+
+    def text_cx(self, x: float) -> float:
+        """The middle of the text, for a pill whose left edge is at ``x``."""
+        return x + self.num_w + (self.w - self.num_w) / 2
+
+    def mark(self, x: float, y: float, ink: str, fill: str = "#ffffff") -> str:
+        """The step number's circle, for a pill drawn at ``x``, ``y`` (empty for none)."""
+        if self.number is None:
+            return ""
+        return step_mark(self.number, x + 3 + STEP_R, y + 2.5 + PILL_LINE / 2, ink, fill)
 
     def svg(self, ox: float, oy: float) -> str:
         x, y = self.x + ox, self.y + oy
@@ -39,9 +56,10 @@ class Pill:
                  'fill="#ffffff" stroke="%s" stroke-width="1"/>'
                  % (self.i, num(x), num(y), num(self.w), num(self.h),
                     num(min(9.0, self.h / 2)), _PILL_STROKE[self.style])]
+        parts.append(self.mark(x, y, _PILL_TEXT[self.style]))
         for k, s in enumerate(self.lines):
-            parts.append(text(x + self.w / 2, y + 2.5 + PILL_LINE * (k + 1) - 3.5, s, PILL_SIZE,
-                              _PILL_TEXT[self.style], anchor="middle"))
+            parts.append(text(self.text_cx(x), y + 2.5 + PILL_LINE * (k + 1) - 3.5, s,
+                              PILL_SIZE, _PILL_TEXT[self.style], anchor="middle"))
         return "".join(parts)
 
 
@@ -166,7 +184,8 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
     """One pill per labeled line, at the first candidate spot that covers no box, no
     other pill and no line end (arrowhead, dot or last stretch); else the spot covering
     least. A line into a missing box whose label only repeats the box's own words gets
-    no pill. ``edge_text(edge)`` is the pill text (``\\n`` starts a new line);
+    no pill. ``edge_text(edge)`` is the pill text (``\\n`` starts a new line), without the
+    step number: the pill draws ``edge.number`` itself;
     ``title_zone(group, group_box)`` is the rectangle the style draws the group's title in."""
     by_id = {n.id: n for n in view.nodes}
     obstacles = [(b.x, b.y, b.w, b.h) for b in L.boxes.values()]
@@ -181,7 +200,7 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
     pills: List[Pill] = []
     for i, e in enumerate(view.edges):
         s = edge_text(e)
-        if not s or i >= len(L.label_at):
+        if (not s and e.number is None) or i >= len(L.label_at):
             continue
         dst = by_id.get(e.dst)
         if (e.number is None and dst is not None and dst.kind == "missing"
@@ -191,9 +210,9 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
         best, best_cost = None, None
         # the label on one line where it fits; on a short line, wrapped narrower
         for max_w in (PILL_MAX_W, 84.0, 56.0):
-            probe = Pill(i, s, (0.0, 0.0), styles[i], max_w)
+            probe = Pill(i, s, (0.0, 0.0), styles[i], max_w, e.number)
             for at in _candidates(route, probe, i, routes) or [L.label_at[i]]:
-                p = Pill(i, s, at, styles[i], max_w)
+                p = Pill(i, s, at, styles[i], max_w, e.number)
                 r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
                 cost = sum(_overlap(r, o) for o in obstacles)
                 if best_cost is None or cost < best_cost:
@@ -203,9 +222,9 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
             if best_cost == 0:
                 break
         if best_cost:  # nowhere free on or beside the line: try further out from it
-            probe = Pill(i, s, (0.0, 0.0), styles[i])
+            probe = Pill(i, s, (0.0, 0.0), styles[i], PILL_MAX_W, e.number)
             for at in _far_candidates(route, probe):
-                p = Pill(i, s, at, styles[i])
+                p = Pill(i, s, at, styles[i], PILL_MAX_W, e.number)
                 r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
                 cost = sum(_overlap(r, o) for o in obstacles)
                 if cost < best_cost:

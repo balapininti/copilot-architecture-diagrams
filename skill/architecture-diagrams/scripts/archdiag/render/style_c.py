@@ -148,8 +148,9 @@ def _pill_svg(p: Pill, ox: float, oy: float) -> str:
     parts = ['<rect x="%s" y="%s" width="%s" height="%s" rx="%s" fill="%s" stroke="%s" '
              'stroke-width="1"/>' % (num(x), num(y), num(p.w), num(p.h),
                                      num(min(10.0, p.h / 2)), fill, stroke)]
+    parts.append(p.mark(x, y, tcol, fill))
     for k, s in enumerate(p.lines):
-        parts.append(text(x + p.w / 2, y + 2.5 + 13.5 * (k + 1) - 3.5, s, 10.5, tcol,
+        parts.append(text(p.text_cx(x), y + 2.5 + 13.5 * (k + 1) - 3.5, s, 10.5, tcol,
                           anchor="middle"))
     return "".join(parts)
 

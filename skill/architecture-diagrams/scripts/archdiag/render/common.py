@@ -112,13 +112,25 @@ def tint(color: str, amount: float) -> str:
     return "#%02x%02x%02x" % (mix(r), mix(g), mix(b))
 
 
-def circled(n: Optional[int]) -> str:
-    """``①``…``⑳`` for 1-20, then ``(21)``; empty for no number."""
-    if n is None:
-        return ""
-    if 1 <= n <= 20:
-        return chr(0x2460 + n - 1)
-    return "(%d)" % n
+def step_text(n: Optional[int]) -> str:
+    """A step number in a text-only copy (draw.io, Mermaid, Excalidraw): ``(1)`` ... ``(21)``,
+    every number the same way; empty for no number. The SVGs draw ``step_mark`` instead."""
+    return "" if n is None else "(%d)" % n
+
+
+STEP_R = 7.5      # a step number's circle
+STEP_SIZE = 9.0   # and its text
+
+
+def step_mark(n: int, cx: float, cy: float, ink: str, fill: str = "#ffffff") -> str:
+    """A step number as drawn on a line label: a small circle outlined in the label's ink,
+    the number inside it (``<g id="step-N">``). Drawn, not a Unicode circled digit, so 21
+    looks like 1 and every font shows it."""
+    return ('<g id="step-%d"><circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" '
+            'stroke-width="1.3"/>%s</g>'
+            % (n, num(cx), num(cy), num(STEP_R), fill, ink,
+               text(cx, cy + STEP_SIZE * 0.36, str(n), STEP_SIZE if n < 100 else 7.5, ink,
+                    anchor="middle", weight="700")))
 
 
 # ------------------------------------------------------------------ lines

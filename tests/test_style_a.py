@@ -63,10 +63,31 @@ def test_every_node_and_label_present():
                 assert e.label.replace(" ", "") in flat, (level, e.label)
 
 
-def test_numbered_edges_show_circled_digits():
+def test_numbered_edges_show_a_drawn_circle_for_every_step():
+    """C4: every step number is a small circle with the number as text (the same for 1 and
+    for 21), never a Unicode circled digit or a "(21)" fallback."""
+    from archdiag.render import style_b, style_c, style_d
     v = fixture_view("flow_tx", "claims/:id")
-    text = svg_text(style_a.render(v)["svg"])
-    assert "① uses" in text and "⑳ SEND MAP" in text and "(21) RETURN TRANSID" in text
+    numbers = sorted(e.number for e in v.edges if e.number is not None)
+    assert numbers and numbers[-1] > 20
+    for mod in (style_a, style_b, style_d):
+        svg = mod.render(v)["svg"]
+        root = ET.fromstring(svg)
+        ns = "{http://www.w3.org/2000/svg}"
+        marks = [el for el in root.iter(ns + "g") if el.get("id", "").startswith("step-")]
+        got = sorted(int(el.get("id")[5:]) for el in marks)
+        assert got == numbers, mod.__name__
+        for el in marks:
+            kids = list(el)
+            assert kids[0].tag == ns + "circle" and kids[1].tag == ns + "text"
+            assert kids[1].text == el.get("id")[5:]
+        text = svg_text(svg)
+        assert not any(chr(c) in text for c in range(0x2460, 0x2474)), mod.__name__
+        assert "(21)" not in text and "RETURN TRANSID" in text
+    # the text-only copies write every number the same way
+    out = style_a.render(v)["drawio"] + style_b.render(v)["md"]
+    assert "(1) uses" in out and "(21) RETURN TRANSID" in out
+    assert not any(chr(c) in out for c in range(0x2460, 0x2474))
 
 
 def test_drawio_parses_and_has_cells():

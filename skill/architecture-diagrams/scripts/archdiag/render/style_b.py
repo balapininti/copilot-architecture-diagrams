@@ -15,9 +15,9 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, circled, esc, legend,
+from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, esc, legend,
                                     legend_width, line_style, notes_block, notes_height, num,
-                                    svg_doc, text, text_width, wrap)
+                                    step_text, svg_doc, text, text_width, wrap)
 from archdiag.render.pills import edge_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 
@@ -220,12 +220,11 @@ def group_title(label: str) -> str:
 
 
 def _edge_text(e: VEdge) -> str:
-    """A sentence, then its ``[tech]`` on a second line (``REST · GET /x`` -> two lines)."""
+    """A sentence, then its ``[tech]`` on a second line (``REST · GET /x`` -> two lines).
+    The pill draws the step number itself."""
     label = e.label
     head, tail = (label.split(" · ", 1) + [""])[:2] if " · " in label else (label, "")
-    num_s = circled(e.number)
-    first = ("%s %s" % (num_s, head)).strip() if num_s else head
-    return "%s\n[%s]" % (first, tail) if tail else first
+    return "%s\n[%s]" % (head, tail) if tail else head
 
 
 def _title_zone(g, gb) -> Optional[Tuple[float, float, float, float]]:
@@ -354,7 +353,7 @@ def _mermaid(view: ViewGraph) -> str:
     for e in view.edges:
         st = line_style(e.status, e.kind)
         styles.append(st)
-        num_s = circled(e.number)
+        num_s = step_text(e.number)
         label = ("%s %s" % (num_s, e.label)).strip() if num_s else e.label
         arrow = _ARROW[st]
         a, b = "n%d" % index[e.src], "n%d" % index[e.dst]
