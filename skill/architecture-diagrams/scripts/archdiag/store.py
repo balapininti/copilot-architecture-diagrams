@@ -15,7 +15,7 @@ from .repos import iter_source_files, with_long_path
 
 # the shape of inventory.json / links.json; bump when a scanner or resolver change means
 # an old cache would give different links
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def cache_is_current(inv: Inventory) -> bool:

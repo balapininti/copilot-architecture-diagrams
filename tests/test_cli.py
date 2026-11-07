@@ -419,14 +419,14 @@ def test_cache_from_another_archdiag_version_is_rescanned(tmp_path, capsys):
     assert d["inventory"]["archdiag_version"] == archdiag.__version__
 
 
-def test_version_is_0_1_2():
+def test_version_is_0_1_3():
     import archdiag
     from archdiag.store import SCHEMA_VERSION
-    assert archdiag.__version__ == "0.1.2"
-    assert SCHEMA_VERSION == 3  # Rulings 38/39 changed config_hosts: old caches are stale
+    assert archdiag.__version__ == "0.1.3"
+    assert SCHEMA_VERSION == 4  # Batches A/B changed scan output: old caches are stale
     from pathlib import Path
     toml = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.1.2"' in toml
+    assert 'version = "0.1.3"' in toml
 
 
 def test_cache_saved_with_schema_2_is_rescanned(tmp_path, capsys):
@@ -447,7 +447,7 @@ def test_cache_saved_with_schema_2_is_rescanned(tmp_path, capsys):
     cap = capsys.readouterr()
     assert "rescanned" in cap.out + cap.err
     d = json.loads(links.read_text(encoding="utf-8"))
-    assert d["inventory"]["schema_version"] == SCHEMA_VERSION == 3
+    assert d["inventory"]["schema_version"] == SCHEMA_VERSION == 4
 
 
 def test_notice_sink_is_explicit_not_module_global(capsys):
