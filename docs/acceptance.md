@@ -70,7 +70,7 @@ What matches the samples:
 - Style B: blue C4 boxes with `[type]` subtitles, cylinders for datasets, red loose-end boxes. Matches the sample's look.
 - Style D: hand-drawn rough boxes, pastel fills per kind, yellow sticky notes for loose ends and notes. Matches the sample's whiteboard look.
 - Style C HTML: repo cards with file rows, dark pill labels on links, side panel "Links between repos" with search box and a list tagged confirmed/partial/loose/shared code. Matches the sample's card style; the click test shows the evidence table.
-- Circled numbers: `flow-claims--id-a.svg` contains ①–⑳ and they render in Chrome (1 to 20). The CLMD100 flow has no numbered requests (steps are labelled STEP010 and so on), so use the `claims/:id` flow for that check.
+- Step numbers: `flow-claims--id-a.svg` draws every step number as a small circle with the number in it (1 to 27, the same for every number; Batch C, C4). The CLMD100 flow has no numbered requests (steps are labelled STEP010 and so on), so use the `claims/:id` flow for that check.
 
 ### Known issues
 
@@ -79,7 +79,7 @@ These are readability gaps, not failures of any check. The controller decides wh
 1. **Edge bundles in the landscape (style A).** In `landscape-a.svg` several orthogonal lines run in parallel and overlap in the middle column (around the claims-online and claims-batch boxes). Labels such as "SQL · CLAIM", "SQL · POLICY", "MQ GET" sit on top of the bundle, so it is hard to follow one line from end to end. The sample's landscape has far fewer crossings.
 2. **Lines cross through boxes.** In the landscape, lines from claims-api and claims-batch cross the claims-online group box and pass close to the claims-batch box. Same for the `claims/:id` flow, where the lines out of CLMO100 form a thick bundle down to CLMU, CLMS.CLAIM and PROD.CLM.MASTER.KSDS.
 3. **Very wide flow diagram.** `flow-claims--id-*.svg` is 3300 to 3774 px wide (the sample is about 1100 px). It scales down in Word and PowerPoint, and the 7 to 8 px text then becomes unreadable on a page; edge pills are small. Workarounds until it is fixed: draw a smaller scope (a single transaction or job, or `application` level); view the SVG or the style C HTML in a browser, where it can be zoomed; or put it on an A3 landscape page in Word or PowerPoint (Layout > Size > A3, Orientation > Landscape).
-4. **Step numbers above 20.** The `claims/:id` flow has 27 numbered steps. ①–⑳ render as circled characters; 21 and above fall back to `(21)`. That is by design, but the Windows checklist confirms it also looks acceptable in Word.
+4. **Step numbers.** The `claims/:id` flow has 27 numbered steps. Since Batch C (C4) each is a drawn circle with the number as text, so 21 looks like 1 and no font needs circled digits; the text-only copies (draw.io, Mermaid, Excalidraw) write `(n)`. The Windows checklist confirms the circles look right in Word.
 5. **Style A flow labels.** In `flow-clmd100-a`, "read (0)" and "write" pills near PROD.CLAIMS.DAILY and REPORT sit close together on crossing diagonals. Readable, but the sample lays them out more cleanly.
 6. **Style C HTML at 1500 px.** The map is wider than the map pane (about 1919 px wide for the whole-estate map), so the right-hand cards are cut off until the page is scrolled. Not checked: whether the pane scrolls or zooms in a real browser at 1920 px.
 7. **Not compared:** `landscape-b` and `repomap-b/d` screenshots were not individually inspected; they were only parsed.
@@ -187,7 +187,7 @@ Reference images are in `docs/acceptance/` (committed): `style-a-flow-clmd100.pn
 | 2 | The same four in VS Code (open the `.svg`, then the preview) | criteria (a) to (d) | |
 | 3 | Word: Insert > Pictures > This Device, each of the four | inserted as a vector picture; criteria (a) to (d) at 100% | |
 | 4 | PowerPoint: Insert > Pictures > This Device, each of the four. Optionally Graphics Format > Convert to Shape | picture renders. Record what Convert to Shape does (works / errors / loses text); it is optional, not a failure | |
-| 5 | `flow-claims--id-a.svg` in Edge, Word and PowerPoint | circled numbers ①–⑳ show as circled digits (not boxes or `?`); 21 and above show as `(21)`. **Record which font Word and PowerPoint used for them** (click the picture, or check by viewing the SVG's `font-family`: Segoe UI, Arial, sans-serif) | |
+| 5 | `flow-claims--id-a.svg` in Edge, Word and PowerPoint | every step number (1 to 27) shows as a small circle with the number centred in it; lines with a numbered marker have their label in the "Line labels" key under the picture | |
 | 6 | `landscape-a.drawio` in draw.io desktop or the VS Code draw.io extension | opens without error; shapes editable; edges stay attached when a box is moved | |
 | 7 | `landscape-b.md` in a GitHub preview. Open the file first: it starts with `# Landscape` then a fence of three backticks plus `mermaid`. GitHub renders that fence | flowchart renders; `<b>` and `<br/>` show as bold and line breaks | |
 | 8 | Same content in an Azure DevOps wiki. **Azure DevOps wikis need `::: mermaid` ... `:::` instead of the backtick fence.** Paste as is first | **Record whether it renders.** If not, record that the fence must be changed for Azure DevOps (a product change; do not edit it by hand in the deliverable) | |
