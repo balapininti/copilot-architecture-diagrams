@@ -465,11 +465,15 @@ _FUNCTION = re.compile(
     r"(?::[^=]*)?=\s*(?:async\s*)?(?:function\b|\([^()]*\)\s*(?::[^=]*)?=>|[\w$]+\s*=>))")
 
 
+_TYPE_WORD_BEFORE = re.compile(r"(?<![\w$])(?:is|extends|keyof)$")
+
+
 def _skip_return_type(masked: str, k: int) -> int:
     """Offset of the ``{`` (or ``;``) after a parameter list ending at ``k``, past any return
     type annotation: ``<>``, ``()``, ``[]`` are balanced, and a ``{`` where a type is
     expected (after ``:``, ``|``, ``&``, ``,``, ``<``, ``(``, ``[`` or ``=>``) is a type
-    literal, not the body (fix round 1)."""
+    literal, not the body (fix round 1). So is a ``{`` after ``is`` (a type predicate), after
+    ``extends``/``keyof`` or after the ``?`` of a conditional type (D8)."""
     n = len(masked)
     depth = 0
     last = ""  # the last significant character outside the brackets being skipped
@@ -483,7 +487,8 @@ def _skip_return_type(masked: str, k: int) -> int:
                 return k
             if ch == "{":
                 arrow = last == ">" and k >= 2 and masked[:k].rstrip()[-2:] == "=>"
-                if not (last in (":", "|", "&", ",", "<", "(", "[") or arrow):
+                word = _TYPE_WORD_BEFORE.search(masked[:k].rstrip())
+                if not (last in (":", "|", "&", ",", "<", "(", "[", "?") or arrow or word):
                     return k
         if ch in "<([{":
             depth += 1

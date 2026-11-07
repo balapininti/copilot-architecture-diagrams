@@ -655,3 +655,25 @@ def test_fix5_eci_request_needs_a_call_type_first(tmp_path):
     got = {r.evidence.line: (r.target_name, r.reason) for r in inv.refs if r.op == "ctg_call"}
     assert got[3] == ("OKA", None) and got[4] == ("OKB", None)
     assert got[5][0] is None and "not a known shape" in got[5][1]
+
+
+def test_d8_type_predicates_and_conditional_types_are_not_the_body(tmp_path):
+    inv = ws(tmp_path, {"src/app/api.ts": (
+        "import { HttpClient } from '@angular/common/http';\n"
+        "export function isClaim(x: any): x is { q: 1 } {\n"
+        "  return inject(HttpClient).get('/api/is');\n"
+        "}\n"
+        "export function cond<A>(a: A): A extends B ? { x: 1 } : C {\n"
+        "  return inject(HttpClient).get('/api/cond');\n"
+        "}\n"
+        "export function cond2<A>(a: A): A extends { k: 1 } ? D : { x: 1 } {\n"
+        "  return inject(HttpClient).get('/api/cond2');\n"
+        "}\n"
+        "export function asserts1(x: any): asserts x is { q: 1 } {\n"
+        "  return inject(HttpClient).get('/api/asserts');\n"
+        "}\n")})
+    got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
+    assert got == {("component:r/isClaim", "GET /api/is"),
+                   ("component:r/cond", "GET /api/cond"),
+                   ("component:r/cond2", "GET /api/cond2"),
+                   ("component:r/asserts1", "GET /api/asserts")}
