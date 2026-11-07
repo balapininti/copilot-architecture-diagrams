@@ -27,7 +27,21 @@ def test_sniff_skips_comment_headers():
 
 def test_sniff_recognises_identification_division_alone():
     assert classify("x/MEMBER", "       ID DIVISION.\n       DATA DIVISION.\n") == "cobol"
-    assert classify("x/MEMBER2", "       IDENTIFICATION DIVISION.\n") == "cobol"
+    # A6: a division header with no other part of a program near it is not COBOL; the
+    # scan still reports it as mainframe-looking source it could not type
+    assert classify("x/MEMBER2", "       IDENTIFICATION DIVISION.\n") is None
+
+
+def test_lone_division_header_is_reported_not_dropped(tmp_path):
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "MEMBER2").write_text("       IDENTIFICATION DIVISION.\n")
+    inv = scan_workspace(tmp_path, Config())
+    assert not inv.nodes
+    assert [n["path"] for n in inv.not_scanned] == ["MEMBER2"]
 
 
 def _workspace(tmp_path):

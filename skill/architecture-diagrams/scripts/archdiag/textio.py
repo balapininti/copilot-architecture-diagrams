@@ -74,6 +74,30 @@ _REXX = re.compile(r"^\s*/\*\s*REXX", re.I)
 _IDDIV = re.compile(r"(?<![\w-])(?:IDENTIFICATION|ID)\s+DIVISION\b", re.I)
 SNIFF_LINES = 200  # code lines (comments and blanks not counted) read to decide a type
 
+# COBOL structure lines that look like code: the keyword starts the line's code area
+# (fixed format: after columns 1-7; free format: near column 1)
+_AREA = r"^(?:.{6} {1,8}| {0,7})"
+_ID_HEADER = re.compile(_AREA + r"(?:IDENTIFICATION|ID)\s+DIVISION\s*\.", re.I)
+_PROGID_LINE = re.compile(_AREA + r"PROGRAM-ID\s*\.?\s*['\"]?[A-Za-z0-9#$@][\w#$@-]*", re.I)
+_DIVISION_LINE = re.compile(_AREA + r"(?:DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b", re.I)
+_LEVEL01_LINE = re.compile(
+    _AREA + r"0?1\s+[A-Za-z][\w-]*\s*(?:\.|\s(?:PIC|PICTURE|VALUE|REDEFINES|OCCURS|USAGE|"
+    r"COMP)\b)", re.I)
+
+
+def _looks_like_cobol(line: str, code: List[str]) -> bool:
+    """A line naming the IDENTIFICATION DIVISION or PROGRAM-ID is COBOL only when it
+    looks like code and the sniffed code also holds another part of a program
+    (PROGRAM-ID, a DATA / PROCEDURE / ENVIRONMENT DIVISION header or an 01-level item),
+    so prose that mentions them is not a program."""
+    if _ID_HEADER.match(line):
+        others = (_PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE)
+    elif _PROGID_LINE.match(line):
+        others = (_ID_HEADER, _DIVISION_LINE, _LEVEL01_LINE)
+    else:
+        return False
+    return any(rx.match(c) for c in code if c is not line for rx in others)
+
 
 def _is_comment(line: str) -> bool:
     """A comment line of COBOL (column 7 ``*`` or ``/``), JCL (``//*``), SQL (``--``),
@@ -121,33 +145,36 @@ def classify(relpath: str, text: str) -> Optional[str]:
         return _EXT[ext]
     if "zosconnect" in parts[:-1]:
         return "zosconnect"
-    seen = 0
+    code: List[str] = []
+    rexx = False  # a /* REXX line ends the sniff: it is REXX unless an earlier line decides
     for line in text.split("\n"):
         if not line.strip():
             continue
         if _REXX.match(line):
-            return "rexx"
+            rexx = True
+            break
         if _is_comment(line):
             continue  # a long comment header must not hide the code below it
-        seen += 1
-        if seen > SNIFF_LINES:
+        code.append(line)
+        if len(code) >= SNIFF_LINES:
             break
-        if _IDDIV.search(line):
-            return "cobol"
+    for line in code:
+        if _IDDIV.search(line) or _PROGID.search(line):
+            if _looks_like_cobol(line, code):
+                return "cobol"
+            continue
         if _JOB.match(line):
             return "jcl"
         if _PROC.match(line):
             return "proc"
-        if _PROGID.search(line):
-            return "cobol"
         if _DFHMSD.search(line):
             return "bms"
         if _CSECT.match(line):
             return "asm"
         if _PLI.search(line):
             return "pli"
-        if _REXX.match(line):
-            return "rexx"
+    if rexx:
+        return "rexx"
     if ext in COPY_EXTS and any(d in COPY_DIRS for d in parts[:-1]) and (
             ext in ("", ".copy", ".cpybk") or _COBOL_TEXT.search(text)):
         return "copybook"  # a .txt / .inc there must also read like COBOL

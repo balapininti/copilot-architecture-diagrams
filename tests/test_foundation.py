@@ -138,3 +138,28 @@ def test_marker_file_makes_a_repo(tmp_path):
 def test_comment_lines_are_not_job_or_proc_cards():
     assert classify("x/README", "//* JOB TO RUN NIGHTLY\n//* MYPROC PROC\n") is None
     assert classify("x/J", "//* header\n//MYJOB JOB (A),'X'\n") == "jcl"
+
+
+# ------------------------------------------------------------------ Batch A fixes (A6)
+
+def test_prose_mentioning_cobol_divisions_is_not_cobol():
+    prose = ("Design notes\n\nEvery program starts with the IDENTIFICATION DIVISION and the\n"
+             "PROGRAM-ID paragraph names it; the DATA DIVISION holds the records.\n")
+    assert classify("docs/notes.txt", prose) is None
+    assert classify("docs/NOTES", prose) is None
+    # a header that looks like code, but nothing else of a program near it
+    assert classify("docs/notes.txt", "IDENTIFICATION DIVISION.\nis the first part.\n") is None
+    assert classify("docs/notes.txt", "  PROGRAM-ID. is where the name goes\n") is None
+
+
+def test_code_shaped_divisions_are_cobol():
+    fixed = ("000100 IDENTIFICATION DIVISION.\n000200 PROGRAM-ID. P1.\n"
+             "000300 PROCEDURE DIVISION.\n000400     GOBACK.\n")
+    assert classify("src/P1.txt", fixed) == "cobol"
+    free = "IDENTIFICATION DIVISION.\nPROGRAM-ID. P2.\nPROCEDURE DIVISION.\n    GOBACK.\n"
+    assert classify("src/P2", free) == "cobol"
+    no_id = ("       ID DIVISION.\n       DATA DIVISION.\n       WORKING-STORAGE SECTION.\n"
+             "       01  WS-A PIC X.\n")
+    assert classify("src/P3", no_id) == "cobol"
+    only_progid = "       PROGRAM-ID. P4.\n       PROCEDURE DIVISION.\n           GOBACK.\n"
+    assert classify("src/P4", only_progid) == "cobol"
