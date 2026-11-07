@@ -857,6 +857,10 @@ def _stem(relpath: str) -> str:
 def scan_cobol(repo: str, relpath: str, text: str,
                ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
     sc = _Scan(repo, relpath, text)
+    if not _PROGRAM_ID.search(sc.src.masked) and not _PROC_DIV.search(sc.src.masked):
+        # COBOL text with no PROGRAM-ID and no PROCEDURE DIVISION is a copybook member,
+        # whatever its extension (copylib/CLMREC.cbl)
+        return scan_copybook(repo, relpath, text, ctx)
     nodes: List[Node] = []
     for pid, a, b, at in sc.programs(_stem(relpath)):
         files = sc.scan_program("program:" + pid, a, b)
@@ -873,5 +877,10 @@ def scan_copybook(repo: str, relpath: str, text: str,
         if ln.strip():
             first, first_text = no, ln.strip()
             break
+    # the copybook's own statements, attributed later to every program that COPYs it
+    sc = _Scan(repo, relpath, text)
+    sc.scan_program("copybook:" + name, 0, len(sc.cm))
+    if sc.refs:
+        ctx.copybook_refs.setdefault(name, []).extend(sc.refs)
     return [Node("copybook:" + name, "copybook", name, repo,
                  [Evidence(repo, relpath, first, first_text)])], []

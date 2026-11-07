@@ -301,3 +301,78 @@ def test_mq_one_open_with_same_name_everywhere_stays_confirmed():
            "           CALL 'MQOPEN' USING HCONN, MQOD, OPTS, HREQ, CC, RC.\n"
            "           CALL 'MQPUT' USING HCONN, HREQ, MQMD, PMO, LEN, BUF, CC, RC.\n")
     assert [(r.op, r.target_name) for r in q] == [("put", "CLM.REQ.Q")]
+
+
+# ------------------------------------------------------------------ copybooks (I3)
+
+def _ws(tmp_path, files):
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / ".archdiag-repo").write_text("")
+    for rel, text in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    return scan_workspace(tmp_path, Config())
+
+
+_P1 = ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. P1.\n       DATA DIVISION.\n"
+       "       WORKING-STORAGE SECTION.\n           COPY CLMREC.\n           COPY PAYREC.\n"
+       "           COPY ADDREC.\n       PROCEDURE DIVISION.\n           GOBACK.\n")
+_REC = "       01 REC.\n          05 A PIC X.\n"
+
+
+def test_copybook_named_cbl_and_copy_files_in_copylib_are_copybooks(tmp_path):
+    i = _ws(tmp_path, {"src/P1.cbl": _P1, "copylib/CLMREC.cbl": _REC,
+                       "copylib/PAYREC.copy": _REC, "copylib/ADDREC.CPY": _REC})
+    kinds = {n.id: n.kind for n in i.nodes.values()}
+    assert "program:CLMREC" not in kinds  # no phantom program
+    for name in ("CLMREC", "PAYREC", "ADDREC"):
+        assert kinds.get("copybook:" + name) == "copybook", name
+    from archdiag.resolve import resolve
+    r = resolve(i, Config())
+    copies = {(e.dst, e.status) for e in r.edges if e.op == "copy"}
+    assert copies == {("copybook:CLMREC", "confirmed"), ("copybook:PAYREC", "confirmed"),
+                      ("copybook:ADDREC", "confirmed")}
+
+
+_PGMA = ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. PGMA.\n"
+         "       PROCEDURE DIVISION.\n           COPY CLMPROC.\n           GOBACK.\n")
+_CLMPROC = ("           CALL 'PAYCALC' USING WS-A.\n"
+            "           EXEC SQL SELECT X INTO :Y FROM CLMS.SHARED WHERE 1=1 END-EXEC.\n"
+            "           EXEC CICS LINK PROGRAM('CLMLNK') END-EXEC.\n")
+
+
+def test_procedure_copybook_contents_are_attributed_to_the_program(tmp_path):
+    i = _ws(tmp_path, {"src/PGMA.cbl": _PGMA, "copylib/CLMPROC": _CLMPROC})
+    assert i.nodes["copybook:CLMPROC"].kind == "copybook"
+    got = {(r.op, r.target_name): r for r in i.refs if r.src == "program:PGMA"}
+    assert set(got) >= {("copy", "CLMPROC"), ("call", "PAYCALC"), ("select", "CLMS.SHARED"),
+                        ("link", "CLMLNK")}
+    call = got[("call", "PAYCALC")]
+    assert (call.evidence.path, call.evidence.line) == ("copylib/CLMPROC", 1)
+    assert call.attrs["via_copybook"] == "CLMPROC"
+    # the copybook itself is not a source of links
+    assert not [r for r in i.refs if r.src.startswith("copybook:")]
+    # the resolved edge carries the copybook line and the COPY statement
+    from archdiag.resolve import resolve
+    r = resolve(i, Config())
+    e, = [e for e in r.edges if e.src == "program:PGMA" and e.op == "call"]
+    assert [(v.path, v.line) for v in e.evidence[:2]] == [("copylib/CLMPROC", 1),
+                                                          ("src/PGMA.cbl", 4)]
+
+
+def test_copy_resolves_against_an_unclassified_file_stem(tmp_path):
+    prog = _PGMA.replace("CLMPROC", "ERRTXT")
+    i = _ws(tmp_path, {"src/PGMA.cbl": prog, "misc/ERRTXT.txt": _REC,
+                       "misc/ERRTXT.json": "{}\n"})
+    assert i.nodes["copybook:ERRTXT"].evidence[0].path == "misc/ERRTXT.txt"
+    assert len(i.nodes["copybook:ERRTXT"].evidence) == 1  # the .json is not a copybook
+
+
+def test_contents_of_a_copybook_defined_twice_are_partial(tmp_path):
+    i = _ws(tmp_path, {"src/PGMA.cbl": _PGMA, "copylib/CLMPROC": _CLMPROC,
+                       "copy/stage/CLMPROC.cpy": _CLMPROC})
+    call = [r for r in i.refs if r.src == "program:PGMA" and r.op == "call"]
+    assert call and all(r.reason and "CLMPROC" in r.reason and "2 places" in r.reason
+                        for r in call)

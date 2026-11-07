@@ -130,7 +130,16 @@ def classify(relpath: str, text: str) -> Optional[str]:
             return "pli"
         if _REXX.match(line):
             return "rexx"
+    if ext in COPY_EXTS and any(d in COPY_DIRS for d in parts[:-1]):
+        return "copybook"
     return None
+
+
+# copybook libraries exported from PDSes: folder names, and the extensions (or none) a
+# member file in them may carry
+COPY_DIRS = frozenset(["copy", "copys", "copybook", "copybooks", "copylib", "copylibs", "cpy",
+                       "cpylib", "cpylibs"])
+COPY_EXTS = frozenset(["", ".copy", ".inc", ".txt", ".mem", ".cpybk"])
 
 
 _SEQ = re.compile(r"\s*[A-Za-z0-9]+\s*")

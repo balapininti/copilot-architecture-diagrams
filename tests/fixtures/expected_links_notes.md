@@ -196,3 +196,13 @@ is now partial** (was confirmed). Its base URL `https://zcee.internal:9443` come
 claims-api's own application.yml:6; claims-online (the z/OS Connect API's repo) names no
 such host in its config, so the match is on the path only. Relative URLs (ClaimService's
 `/api` base) and `localhost` keep the old behaviour.
+
+### I3: copybooks named `.cbl`, with no extension, and holding procedure code (`claims-batch/cobol/CLMB500.cbl`, `shared-copybooks/copylib/ADDRREC.cbl`, `shared-copybooks/copylib/CLMPROC`)
+
+| Edge | Status | Why |
+|---|---|---|
+| CLMB500 copy copybook:CLMREC | confirmed | CLMB500.cbl:8; one CLMREC (shared-copybooks/CLMREC.cpy) |
+| CLMB500 copy copybook:ADDRREC | confirmed | CLMB500.cbl:9; copylib/ADDRREC.cbl has no PROGRAM-ID and no PROCEDURE DIVISION, so it is a copybook, not a program (the old scanner made a phantom program:ADDRREC and this COPY loose) |
+| CLMB500 copy copybook:CLMPROC | confirmed | CLMB500.cbl:12; copylib/CLMPROC has no extension and sits in a copybook folder (`copylib`) |
+| CLMB500 call program:CLMB210 | confirmed | CLMPROC:2 `CALL 'CLMB210'`: the statement is in the copybook, so it belongs to every program that COPYs it (evidence: the copybook line and CLMB500.cbl:12); one PROGRAM-ID CLMB210 |
+| CLMB500 select table:CLMS.CLAIM | confirmed | CLMPROC:3 `FROM CLMS.CLAIM`, qualified, exact DDL match (CLAIM.sql:1) |

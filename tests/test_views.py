@@ -225,7 +225,8 @@ def test_landscape_shared_code():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
     cb, = edges(v, "app:shared-copybooks", "app:claims-batch")
-    assert cb.kind == "shared_code" and cb.label == "COPY ×2"
+    # ×5: CLMB200, CLMB300 and the I3 trap CLMB500 (CLMREC, ADDRREC.cbl, CLMPROC)
+    assert cb.kind == "shared_code" and cb.label == "COPY ×5"
     co, = edges(v, "app:shared-copybooks", "app:claims-online")
     assert co.label == "COPY ×1"
 

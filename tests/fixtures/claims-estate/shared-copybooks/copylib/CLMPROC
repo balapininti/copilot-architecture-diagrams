@@ -1,0 +1,4 @@
+      * CLMPROC: shared procedure-division code (PDS member, no extension)
+           CALL 'CLMB210' USING CLM-RECORD.
+           EXEC SQL SELECT CLM_ID INTO :CLM-ID FROM CLMS.CLAIM
+                WHERE CLM_ID = :CLM-ID END-EXEC.

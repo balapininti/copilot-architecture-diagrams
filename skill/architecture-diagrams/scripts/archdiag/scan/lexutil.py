@@ -366,3 +366,8 @@ def parse_ts_object(text: str, open_idx: int, prefix: str = "") -> Dict[str, str
             out[key] = val if re.fullmatch(r"-?\d+(?:\.\d+)?|true|false", val) else NONLIT
             i = j
     return out
+
+
+def evidence_dict(ev: Evidence) -> Dict[str, object]:
+    """An Evidence as a plain dict (for Ref attrs, which are stored as JSON)."""
+    return {"repo": ev.repo, "path": ev.path, "line": ev.line, "text": ev.text}

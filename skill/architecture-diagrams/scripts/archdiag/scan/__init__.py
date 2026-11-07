@@ -47,6 +47,9 @@ class ScanContext:
         default_factory=dict)
     # z/OS Connect OpenAPI 3: (repo, project prefix) -> first servers[].url of openapi.yaml/json
     zc_servers: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    # COBOL copybooks (pass 2): NAME -> the Refs their own text makes (CALL, SQL, CICS, MQ,
+    # nested COPY), with src "copybook:NAME"; attributed to every program that COPYs them
+    copybook_refs: Dict[str, List[Ref]] = field(default_factory=dict)
 
 
 # file type -> scanner(repo, relpath, text, ctx) -> (nodes, refs); registered by later tasks
@@ -197,6 +200,99 @@ def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
     return out
 
 
+def _merge_nodes(nodes: Dict[str, Node], new_nodes: List[Node]) -> None:
+    for n in new_nodes:
+        have = nodes.get(n.id)
+        if have is None:
+            nodes[n.id] = n
+            continue
+        for ev in n.evidence:  # same id defined again: keep every definition site
+            if ev not in have.evidence:
+                have.evidence.append(ev)
+
+
+def _note_unclassified(unclassified: Dict[str, List[Tuple[str, str, Path]]], repo: str,
+                       rel: str, path: Path) -> None:
+    """Remember a file of no type that could be a copybook member (COPY X finds it by stem)."""
+    from ..textio import COPY_EXTS
+    base = rel.rsplit("/", 1)[-1]
+    dot = base.rfind(".")
+    ext = base[dot:].lower() if dot > 0 else ""
+    if ext in COPY_EXTS:
+        unclassified.setdefault((base[:dot] if dot > 0 else base).upper(), []).append(
+            (repo, rel, path))
+
+
+def _copy_names(refs: List[Ref]) -> Set[str]:
+    return {r.target_name.strip().upper() for r in refs
+            if r.op == "copy" and r.target_kind == "copybook" and r.target_name}
+
+
+def _copybooks_by_stem(refs: List[Ref], nodes: Dict[str, Node],
+                       unclassified: Dict[str, List[Tuple[str, str, Path]]], ctx: ScanContext,
+                       skipped: List[Dict[str, str]]) -> None:
+    """COPY X with no copybook X found: a file of no type whose stem is X is the member
+    (PDS exports often have no extension, or .txt / .inc)."""
+    from . import cobol
+    done: Set[str] = set()
+    while True:
+        wanted = set(_copy_names(refs))
+        for lst in ctx.copybook_refs.values():
+            wanted |= _copy_names(lst)
+        wanted = {w for w in wanted - done if "copybook:" + w not in nodes and w in unclassified}
+        if not wanted:
+            return
+        for name in sorted(wanted):
+            done.add(name)
+            for repo, rel, path in unclassified[name]:
+                try:
+                    text = read_source(path)
+                    new_nodes, _ = cobol.scan_copybook(repo, rel, text, ctx)
+                except Exception as e:  # one odd file must not stop the scan
+                    skipped.append({"repo": repo, "path": rel,
+                                    "reason": "could not be analyzed (%s: %s)"
+                                    % (type(e).__name__, e)})
+                    continue
+                _merge_nodes(nodes, new_nodes)
+
+
+def _copybook_refs(refs: List[Ref], nodes: Dict[str, Node], ctx: ScanContext) -> List[Ref]:
+    """The CALL / SQL / CICS / MQ / COPY statements inside copybooks, as Refs of each
+    program that COPYs them (directly or through other copybooks). Evidence is the
+    copybook line; attrs["copy_evidence"] is the program's COPY statement. A copybook
+    defined in several places makes them partial."""
+    from .lexutil import evidence_dict
+    out: List[Ref] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    def walk(src: str, name: str, copy_ev: Evidence, depth: int, chain: Tuple[str, ...]) -> None:
+        node = nodes.get("copybook:" + name)
+        inner = ctx.copybook_refs.get(name)
+        if node is None or not inner or depth > 8 or name in chain or (src, name) in seen:
+            return
+        seen.add((src, name))
+        amb = None
+        if len(node.evidence) > 1:
+            amb = "via copybook %s, defined in %d places: %s" % (
+                name, len(node.evidence),
+                ", ".join("%s/%s" % (e.repo, e.path) for e in node.evidence))
+        for r in inner:
+            reason = "; ".join(x for x in (r.reason, amb) if x) or None
+            attrs = dict(r.attrs)
+            attrs["via_copybook"] = name
+            attrs["copy_evidence"] = evidence_dict(copy_ev)
+            out.append(Ref(src, r.op, r.target_kind, r.target_name, r.evidence, reason,
+                           list(r.candidates), attrs))
+            if r.op == "copy" and r.target_name:
+                walk(src, r.target_name.strip().upper(), copy_ev, depth + 1, chain + (name,))
+
+    for r in list(refs):
+        if r.op == "copy" and r.target_kind == "copybook" and r.target_name \
+                and not r.src.startswith("copybook:"):
+            walk(r.src, r.target_name.strip().upper(), r.evidence, 0, ())
+    return out
+
+
 def scan_workspace(workspace: Path, config: Config) -> Inventory:
     workspace = Path(workspace)
     repos = discover_repos(workspace)
@@ -207,6 +303,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     skipped: List[Dict[str, str]] = []
     # pass 1: read everything, classify, and collect procs / include members
     files: List[Tuple[str, str, str, str]] = []
+    unclassified: Dict[str, List[Tuple[str, str, Path]]] = {}  # STEM -> files of no type
     for repo in repos:
         root = workspace / repo.path
         too_big: List[Tuple[Path, str]] = []
@@ -239,6 +336,8 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     continue
                 if ftype is not None:
                     files.append((repo.name, mrel, text, ftype))
+                elif mrel == rel:
+                    _note_unclassified(unclassified, repo.name, rel, path)
         for path, reason in too_big:
             skipped.append({"repo": repo.name, "path": path.relative_to(root).as_posix(),
                             "reason": reason})
@@ -255,15 +354,10 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             skipped.append({"repo": repo_name, "path": rel,
                             "reason": "could not be analyzed (%s: %s)" % (type(e).__name__, e)})
             continue
-        for n in new_nodes:
-            have = nodes.get(n.id)
-            if have is None:
-                nodes[n.id] = n
-                continue
-            for ev in n.evidence:  # same id defined again: keep every definition site
-                if ev not in have.evidence:
-                    have.evidence.append(ev)
+        _merge_nodes(nodes, new_nodes)
         refs.extend(new_refs)
+    _copybooks_by_stem(refs, nodes, unclassified, ctx, skipped)
+    refs.extend(_copybook_refs(refs, nodes, ctx))
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
