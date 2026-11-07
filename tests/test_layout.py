@@ -175,3 +175,28 @@ def test_writes_debug_svg(tmp_path):
         if name == "landscape":
             (tmp_path / "landscape.svg").write_text(svg, encoding="utf-8")
             ET.parse(str(tmp_path / "landscape.svg"))
+
+
+def test_context_keeps_a_loose_end_next_to_its_outside_box():
+    from archdiag.layout import layout_for as lf
+    v = app_with_neighbors()
+    v.nodes.append(VNode("missing:writer:CLAIM", "no writer found", kind="missing",
+                         status="loose"))
+    v.edges.append(VEdge("table:CLAIM", "missing:writer:CLAIM", "no writer found",
+                         status="loose"))
+    L = lf(v, lambda n: (150, 80))
+    assert no_box_overlaps(L.boxes, margin=20)
+    _routes_on_borders(v, L)
+    g = L.groups["app:claims-online"]
+    for n in v.nodes:
+        if n.group:
+            assert contains(g, L.boxes[n.id])
+        else:  # outside boxes stand in a column left or right of the application
+            b = L.boxes[n.id]
+            assert b.x + b.w < g.x or b.x > g.x + g.w, n.id
+    col = sorted((b.y, k) for k, b in L.boxes.items() if L.boxes[k].x > g.x + g.w)
+    names = [k for _, k in col]
+    # nothing stands between the table and its loose end but other boxes hanging off it
+    between = names[names.index("table:CLAIM") + 1:names.index("missing:writer:CLAIM")]
+    hangers = {e.src for e in v.edges if e.dst == "table:CLAIM"}
+    assert set(between) <= hangers, between

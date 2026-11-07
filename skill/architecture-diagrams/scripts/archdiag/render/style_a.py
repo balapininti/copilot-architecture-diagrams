@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICONS, LOOSE_COLOR, PARTIAL_COLOR,
-                                    REPO_COLORS, arrowhead, esc, legend, legend_width,
+from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LOOSE_COLOR,
+                                    PARTIAL_COLOR, REPO_COLORS, arrowhead, esc, legend, legend_width,
                                     line_attrs, line_color, line_style, loose_dot, notes_block,
                                     notes_height, num, path_d, svg_doc, text, text_width, tint,
                                     wrap)
@@ -167,6 +167,7 @@ def _overlap(a: Tuple[float, float, float, float], b: Tuple[float, float, float,
 
 
 _PILL_SPOTS = (0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78, 0.15, 0.85)
+PARALLEL_NEAR = 40.0  # no pill beside a line where another line runs this close
 END_CLEAR = 14.0   # the last stretch of every line, and its arrowhead or dot, stays uncovered
 MARKER_R = 8.0
 
@@ -188,10 +189,29 @@ def end_zones(route: List[Tuple[float, float]]) -> List[Tuple[float, float, floa
     return zones
 
 
-def _candidates(route: List[Tuple[float, float]], probe: "_Pill"
+def _crowded(at: Tuple[float, float], horizontal: bool, own: int,
+             routes: List[List[Tuple[float, float]]]) -> bool:
+    """Is another line running alongside within PARALLEL_NEAR px of this spot?"""
+    px, py = at
+    for k, r in enumerate(routes):
+        if k == own:
+            continue
+        for (x0, y0), (x1, y1) in zip(r, r[1:]):
+            if horizontal and abs(y0 - y1) < 1e-6 and min(x0, x1) <= px <= max(x0, x1) \
+                    and abs(y0 - py) < PARALLEL_NEAR:
+                return True
+            if not horizontal and abs(x0 - x1) < 1e-6 and min(y0, y1) <= py <= max(y0, y1) \
+                    and abs(x0 - px) < PARALLEL_NEAR:
+                return True
+    return False
+
+
+def _candidates(route: List[Tuple[float, float]], probe: "_Pill", own: int = -1,
+                routes: Optional[List[List[Tuple[float, float]]]] = None
                 ) -> List[Tuple[float, float]]:
     """Pill centers to try: on the last segment (where the line enters its target) when it
-    has room, then along the line from the middle out, then beside the line."""
+    has room, then along the line from the middle out, then beside the line where no
+    other line runs alongside (a pill there could read as the other line's)."""
     out: List[Tuple[float, float]] = []
     if len(route) < 2:
         return out
@@ -205,6 +225,8 @@ def _candidates(route: List[Tuple[float, float]], probe: "_Pill"
     on = [_seg_at(route, t) for t in _PILL_SPOTS]
     out.extend(p for p, _ in on)
     for (px, py), (ux, uy) in on:
+        if routes is not None and _crowded((px, py), abs(ux) >= abs(uy), own, routes):
+            continue
         if abs(ux) >= abs(uy):  # horizontal stretch: above, then below
             off = probe.h / 2 + MARKER_R + 4
             out += [(px, py - off), (px, py + off)]
@@ -214,15 +236,39 @@ def _candidates(route: List[Tuple[float, float]], probe: "_Pill"
     return out
 
 
-def place_pills(view: ViewGraph, L: Layout, styles: List[str]) -> List["_Pill"]:
+def draw_routes(view: ViewGraph, L: Layout) -> List[List[Tuple[float, float]]]:
+    """The lines as drawn: the layout's routes, except that a short straight loose end
+    beside its source (a job's dataset and its "no reader found") starts at the source's
+    picture, so the red stub visibly hangs off it."""
+    by_id = {n.id: n for n in view.nodes}
+    out = []
+    for e, r in zip(view.edges, L.routes):
+        src, dst = by_id[e.src], by_id[e.dst]
+        sb, db = L.boxes.get(e.src), L.boxes.get(e.dst)
+        if (len(r) == 2 and dst.kind == "missing" and _has_icon(src) and sb and db
+                and db.x >= sb.right - 1 and abs(r[0][1] - r[1][1]) < 1e-6):
+            y = min(max(sb.y + TOP_PAD + ICON_H / 2, db.y + 8), db.bottom - 8)
+            r = [(sb.cx + ICON_W / 2 - 2, y), (db.x, y)]
+        out.append(list(r))
+    return out
+
+
+def place_pills(view: ViewGraph, L: Layout, styles: List[str],
+                routes: Optional[List[List[Tuple[float, float]]]] = None) -> List["_Pill"]:
     """One pill per labeled line, at the first candidate spot that covers no box, no
     other pill and no line end (arrowhead, dot or last stretch); else the spot covering
     least. A line into a missing box whose label only repeats the box's own words gets
     no pill."""
     by_id = {n.id: n for n in view.nodes}
+    routes = routes if routes is not None else draw_routes(view, L)
     obstacles = [(b.x, b.y, b.w, b.h) for b in L.boxes.values()]
-    for r in L.routes:
+    for r in routes:
         obstacles.extend(end_zones(r))
+    for g in view.groups:  # group titles
+        gb = L.groups.get(g.id)
+        if gb is not None:
+            obstacles.append((gb.x + 10, gb.y + 2, text_width(group_title(g.id, g.label), 12)
+                              + 10, 22))
     pills: List[_Pill] = []
     for i, e in enumerate(view.edges):
         s = _edge_text(e)
@@ -232,12 +278,12 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str]) -> List["_Pill"]:
         if (e.number is None and dst is not None and dst.kind == "missing"
                 and e.label.strip() == dst.label.strip()):
             continue
-        route = L.routes[i] if i < len(L.routes) else []
+        route = routes[i] if i < len(routes) else []
         best, best_cost = None, None
         # the label on one line where it fits; on a short line, wrapped narrower
         for max_w in (PILL_MAX_W, 84.0, 56.0):
             probe = _Pill(i, s, (0.0, 0.0), styles[i], max_w)
-            for at in _candidates(route, probe) or [L.label_at[i]]:
+            for at in _candidates(route, probe, i, routes) or [L.label_at[i]]:
                 p = _Pill(i, s, at, styles[i], max_w)
                 r = (p.x - 3, p.y - 3, p.w + 6, p.h + 6)
                 cost = sum(_overlap(r, o) for o in obstacles)
@@ -327,7 +373,8 @@ def _lane_svg(view: ViewGraph, L: Layout, ox: float, oy: float) -> str:
 def _svg(view: ViewGraph, L: Layout) -> str:
     colors = _group_colors(view)
     styles = [line_style(e.status, e.kind) for e in view.edges]
-    pills = place_pills(view, L, styles)
+    routes = draw_routes(view, L)
+    pills = place_pills(view, L, styles, routes)
 
     # grow the canvas so every pill fits (Ruling 6), and leave room for the title
     min_x = min([p.x for p in pills] + [0.0])
@@ -362,7 +409,7 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     body.append(_lane_svg(view, L, ox, oy))
     for i, e in enumerate(view.edges):
         if i < len(L.routes):
-            body.append(_edge_svg(i, L.routes[i], styles[i], e.status, e.kind, ox, oy))
+            body.append(_edge_svg(i, routes[i], styles[i], e.status, e.kind, ox, oy))
     dot_ends = {e.dst for e, s in zip(view.edges, styles) if s == "loose"}
     for n in view.nodes:
         b = L.boxes.get(n.id)

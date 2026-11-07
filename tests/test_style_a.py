@@ -170,9 +170,11 @@ def test_no_pill_covers_a_line_end():
     for level, scope in LEVELS:
         v = fixture_view(level, scope)
         L = layout_for(v, style_a.node_size)
-        pills = style_a.place_pills(v, L, [line_style(e.status, e.kind) for e in v.edges])
+        routes = style_a.draw_routes(v, L)
+        pills = style_a.place_pills(v, L, [line_style(e.status, e.kind) for e in v.edges],
+                                    routes)
         rects = [(p.x, p.y, p.w, p.h) for p in pills]
-        for k, r in enumerate(L.routes):
+        for k, r in enumerate(routes):
             (xa, ya), (xb, yb) = r[-2], r[-1]
             d = ((xb - xa) ** 2 + (yb - ya) ** 2) ** 0.5 or 1.0
             ends = [r[0], r[-1]]
@@ -233,3 +235,46 @@ def test_drawio_partial_missing_box_matches_svg():
     styles = {c.get("value", "").split("\n")[0]: c.get("style") for c in root.iter("mxCell")}
     assert "fillColor=#fffbeb" in styles["which program?"]
     assert "fillColor=#fef2f2" in styles["CLMO120"]
+
+
+def _shared_vertical_runs(routes, longest=200.0):
+    """Pairs of lines that run along the same vertical line for more than ``longest``."""
+    verts = []
+    for k, r in enumerate(routes):
+        for (x0, y0), (x1, y1) in zip(r, r[1:]):
+            if abs(x0 - x1) < 1e-6:
+                verts.append((k, x0, min(y0, y1), max(y0, y1)))
+    bad = []
+    for i in range(len(verts)):
+        for j in range(i + 1, len(verts)):
+            a, b = verts[i], verts[j]
+            if a[0] != b[0] and abs(a[1] - b[1]) < 1.0 \
+                    and min(a[3], b[3]) - max(a[2], b[2]) > longest:
+                bad.append((a, b))
+    return bad
+
+
+def test_application_is_a_context_picture():
+    v = fixture_view("application", "claims-online")
+    root = ET.fromstring(style_a.render(v)["svg"])
+    w, h = float(root.get("width")), float(root.get("height"))
+    assert h <= 1.3 * w, (w, h)
+    L = layout_for(v, style_a.node_size)
+    assert not _shared_vertical_runs(L.routes)
+    # outside boxes sit in columns left and right of the application's group
+    g = L.groups["group:claims-online"]
+    for n in v.nodes:
+        if not n.group:
+            b = L.boxes[n.id]
+            assert b.right < g.x or b.x > g.x + g.w, n.id
+
+
+def test_job_loose_stub_hangs_off_its_dataset():
+    v = fixture_view("flow_job", "CLMD100")
+    L = layout_for(v, style_a.node_size)
+    routes = style_a.draw_routes(v, L)
+    for e, r in zip(v.edges, routes):
+        if e.dst.startswith("missing:") and e.status == "loose":
+            src = L.boxes[e.src]
+            # the stub starts at the source's picture, not past the end of its label
+            assert abs(r[0][0] - src.cx) <= 40 and src.y < r[0][1] < src.y + 70, (e.src, r)
