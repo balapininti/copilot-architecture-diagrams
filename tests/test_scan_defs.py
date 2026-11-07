@@ -538,3 +538,38 @@ def test_bridge_note_reaches_the_resolved_edge(tmp_path):
     r = resolve(scan_workspace(tmp_path, Config()), Config())
     trig = [e for e in r.edges if e.src == "queue:CLM.BRQ" and e.op == "triggers"]
     assert trig and all("case" in (e.reason or "") for e in trig)
+
+
+def _seq(lines):
+    return "".join(ln.ljust(72) + "%08d\n" % (10000 * (k + 1)) for k, ln in enumerate(lines))
+
+
+def test_sequence_numbers_cut_even_when_a_token_runs_through_column_72():
+    # A14: TRIGGER ends in column 72, so the old per-line check kept TRIGGER00030000
+    last = "  PROCESS(CLM.PROC) TRIGGER"
+    text = _seq(["DEFINE QLOCAL(CLM.A) +", " " * (72 - len(last)) + last,
+                 "DEFINE QLOCAL(CLM.B)"])
+    by = _mq(text)
+    assert by["queue:CLM.A"].attrs["trigger"] is True
+    assert by["queue:CLM.A"].attrs["process"] == "CLM.PROC"
+    assert set(by) == {"queue:CLM.A", "queue:CLM.B"}
+
+
+def test_word_after_blank_column_72_kept_when_the_file_has_no_sequence_numbers():
+    text = ("DEFINE QLOCAL(CLM.A) PROCESS(CLM.PROC)".ljust(72) + "TRIGGER\n"
+            "DEFINE QLOCAL(CLM.B)\n")
+    assert _mq(text)["queue:CLM.A"].attrs["trigger"] is True
+    from archdiag.textio import drop_sequence_areas
+    long = ["A" * 90, "B" * 85, "C" * 72 + "00010000"]  # one of three looks numbered
+    assert drop_sequence_areas(long) == long
+
+
+def test_csd_sequence_numbers_cut_on_every_line_once_most_lines_have_them():
+    lines = ["DEFINE TRANSACTION(CLX1) GROUP(G)", "       PROGRAM(CLMO100)",
+             "DEFINE FILE(F2) DSNAME(PROD.F2)", "DEFINE TRANSACTION(CLX2)",
+             "       PROGRAM(CLMO200)"]
+    text = _seq(lines)
+    nodes, refs = scan_csd("r", "x.csd", text, ScanContext())
+    got = {(r.src, r.target_name) for r in refs}
+    assert got == {("transaction:CLX1", "CLMO100"), ("cicsfile:F2", "PROD.F2"),
+                   ("transaction:CLX2", "CLMO200")}

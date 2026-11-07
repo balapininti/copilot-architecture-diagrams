@@ -15,7 +15,7 @@ import re
 from typing import List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
-from ..textio import drop_sequence_area
+from ..textio import drop_sequence_areas
 from . import ScanContext
 
 _VERBS = frozenset(
@@ -48,8 +48,7 @@ def _statements(lines: List[str]) -> List[Stmt]:
     """
     stmts: List[Stmt] = []
     glue = " "
-    for no, raw in enumerate(lines, 1):
-        line = drop_sequence_area(raw)
+    for no, line in enumerate(drop_sequence_areas(lines), 1):
         if glue == " " and (line[:1] == "*" or not line.strip()):
             continue
         body = line.rstrip()

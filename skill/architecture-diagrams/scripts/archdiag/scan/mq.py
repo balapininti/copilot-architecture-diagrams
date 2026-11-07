@@ -23,7 +23,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
-from ..textio import drop_sequence_area
+from ..textio import drop_sequence_areas
 from . import ScanContext
 
 _OBJ = {"QLOCAL": "local", "QL": "local", "QALIAS": "alias", "QA": "alias",
@@ -39,11 +39,11 @@ def _commands(text: str) -> List[Tuple[int, str]]:
     """Join continued MQSC lines into commands: (first line number, command text)."""
     out: List[Tuple[int, str]] = []
     buf, first, cont = "", 0, None
-    for no, raw in enumerate(text.split("\n"), 1):
-        # z/OS MQSC input (CSQINP1/2, CSQUTIL): "Only columns 1 through 72 can contain
-        # meaningful information; columns 73 through 80 are ignored."
-        # https://publibfp.boulder.ibm.com/epubs/html/csqzaj06/csqzaj060f.htm
-        line = drop_sequence_area(raw).rstrip()
+    # z/OS MQSC input (CSQINP1/2, CSQUTIL): "Only columns 1 through 72 can contain
+    # meaningful information; columns 73 through 80 are ignored."
+    # https://publibfp.boulder.ibm.com/epubs/html/csqzaj06/csqzaj060f.htm
+    for no, raw in enumerate(drop_sequence_areas(text.split("\n")), 1):
+        line = raw.rstrip()
         if not line.strip() or line.lstrip()[:1] == "*":
             continue  # comment and blank lines are ignored, inside a continuation too
         if cont is None:

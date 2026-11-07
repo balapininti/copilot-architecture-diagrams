@@ -4,7 +4,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
-from ..textio import drop_sequence_area
+from ..textio import drop_sequence_areas
 from . import ScanContext
 
 UTILITIES = frozenset([
@@ -778,8 +778,8 @@ class _Scanner:
         repo, rel, _path = pool[0]
         self.ctx.used_files.add((repo, rel))
         data = []
-        for no, raw in enumerate(texts[0].split("\n"), 1):
-            ln = drop_sequence_area(raw.rstrip())
+        for no, raw in enumerate(drop_sequence_areas(texts[0].split("\n")), 1):
+            ln = raw.rstrip()
             if ln.strip():
                 data.append((no, ln.strip(), ln, _unres_names(ln)))
         return (repo, rel, data), None

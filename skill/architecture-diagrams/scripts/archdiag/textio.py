@@ -192,16 +192,27 @@ _COBOL_TEXT = re.compile(
     r"|\b(?:EXEC\s+(?:SQL|CICS)|PERFORM|MOVE\s+\S+\s+TO|CALL\s+['\"])")
 
 
-_SEQ = re.compile(r"\s*[A-Za-z0-9]+\s*")
+_SEQ_NUMBER = re.compile(r"\s*[A-Za-z0-9]*\d[A-Za-z0-9]*\s*")
+SEQ_SHARE = 0.8  # share of long lines that must hold a sequence number
 
 
-def drop_sequence_area(line: str) -> str:
-    """Cut columns 73-80 when they hold a sequence number (80-byte z/OS records).
+def has_sequence_area(lines: List[str]) -> bool:
+    """True when the file is 80-byte records numbered in columns 73-80: of its non-blank
+    lines at least 73 characters long, at least 80% are at most 80 long and hold one
+    alphanumeric word with a digit in columns 73-80."""
+    long = [ln for ln in lines if len(ln.rstrip()) >= 73]
+    if not long:
+        return False
+    numbered = sum(1 for ln in long
+                   if len(ln.rstrip()) <= 80 and _SEQ_NUMBER.fullmatch(ln.rstrip()[72:]))
+    return numbered >= SEQ_SHARE * len(long)
 
-    Only cut when the line fits an 80-byte record, column 72 is blank or a continuation
-    mark (+ - *), and columns 73-80 hold one alphanumeric word, so a long free-form line
-    from a distributed platform keeps its text.
-    """
-    if 72 < len(line) <= 80 and line[71] in " +-*" and _SEQ.fullmatch(line[72:]):
-        return line[:72]
-    return line
+
+def drop_sequence_areas(lines: List[str]) -> List[str]:
+    """Cut columns 73-80 from every line when the file has a sequence area (see
+    has_sequence_area), so a token running through column 72 loses the number glued to
+    it; otherwise every line is kept whole, so a word after column 72 of a free-form file
+    is never dropped. z/OS MQSC and DFHCSDUP input ignore columns 73-80."""
+    if not has_sequence_area(lines):
+        return list(lines)
+    return [ln[:72] for ln in lines]
