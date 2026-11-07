@@ -206,7 +206,8 @@ _IDENT = re.compile(r"\s*([A-Za-z][\w-]*)")
 _QUAL = re.compile(r"\s+(?:OF|IN)\s+[A-Za-z][\w-]*", _I)
 _SUBSCR = re.compile(r"\s*\([^)]*\)")
 _SORT = re.compile(_NB + r"(?:SORT|MERGE)\s+[A-Za-z][\w-]*", _I)
-_PARA = re.compile(r"(?m)^[ ]*([A-Za-z0-9][\w-]*)[ ]*\.[ ]*$")
+_PARA = re.compile(
+    r"(?m)^[ ]*(?:[A-Za-z0-9][\w-]*[ ]+SECTION(?:[ ]+\d+)?|([A-Za-z0-9][\w-]*))[ ]*\.[ ]*$")
 _IF = re.compile(_NB + r"IF\b", _I)
 _END_IF = re.compile(_NB + r"END-IF\b", _I)
 _EVAL = re.compile(_NB + r"EVALUATE\b", _I)
@@ -517,7 +518,7 @@ class _Scan:
                 vals[OBJ].extend(x for x in v if x not in vals[OBJ])
         obj_written = sorted(w for w in other_writes if w.endswith("OBJECTNAME"))
         pstarts = [m.start() for m in _PARA.finditer(cm, a, b)
-                   if m.group(1).upper() not in _VERBS]
+                   if (m.group(1) or "").upper() not in _VERBS]
 
         def para(off: int) -> int:
             n = 0
@@ -537,7 +538,8 @@ class _Scan:
             """Writes that can reach 'at'; second value tells whether an earlier
             (initial) value is certainly overwritten."""
             prior = [o for o in offs if o < at]
-            if not prior or any(para(o) != para(at) for o in prior):
+            # a write anywhere outside this paragraph/section may run (PERFORM, GO TO)
+            if not prior or any(para(o) != para(at) for o in offs):
                 return list(offs), False
             out: List[int] = []
             for o in reversed(prior):

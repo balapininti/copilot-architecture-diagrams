@@ -170,7 +170,8 @@ def test_mq_if_else_gives_both_candidates():
     q = _q("           IF A\n               MOVE 'Q.A' TO MQOD-OBJECTNAME\n"
            "           ELSE\n               MOVE 'Q.B' TO MQOD-OBJECTNAME\n"
            "           END-IF\n           CALL 'MQPUT' USING HCONN HOBJ.\n")[0]
-    assert q.target_name is None and q.candidates == ["Q.B", "Q.A"] or q.candidates == ["Q.A", "Q.B"]
+    assert q.target_name is None
+    assert sorted(q.candidates) == ["Q.A", "Q.B"]
     assert q.reason.startswith("queue name depends on run-time path: ")
 
 
@@ -244,3 +245,22 @@ def test_value_items_only_from_data_division():
             "           IF A 01 WS-Q VALUE 'FAKE'.\n")
     _, refs = scan(text)
     assert refs[0].candidates == []
+
+
+def test_mq_move_in_performed_paragraph_is_not_trusted():
+    tail = ("       2000-B.\n           MOVE 'Q.B' TO MQOD-OBJECTNAME.\n")
+    plain = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n           PERFORM 2000-B\n"
+               "           CALL 'MQPUT' USING HCONN HOBJ.\n           GOBACK.\n" + tail)[0]
+    wrapped = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n           IF X PERFORM 2000-B END-IF\n"
+                 "           CALL 'MQPUT' USING HCONN HOBJ.\n           GOBACK.\n" + tail)[0]
+    for q in (plain, wrapped):
+        assert q.target_name is None
+        assert q.candidates == ["Q.A", "Q.B"]
+        assert q.reason == "queue name depends on run-time path: Q.A, Q.B"
+
+
+def test_mq_section_header_is_a_boundary():
+    q = _q("           MOVE 'Q.A' TO MQOD-OBJECTNAME\n           PERFORM SEC-B\n"
+           "           CALL 'MQGET' USING HCONN HOBJ.\n           GOBACK.\n"
+           "       SEC-B SECTION.\n           MOVE 'Q.B' TO MQOD-OBJECTNAME.\n")[0]
+    assert q.target_name is None and q.candidates == ["Q.A", "Q.B"]
