@@ -23,7 +23,8 @@ SizeFn = Callable[[VNode], Tuple[float, float]]
 
 MARGIN = 30.0          # blank border around the whole picture
 COL_GAP = 90.0         # layered: added to the widest box to space columns
-ROW_GAP = 50.0         # layered: added to the tallest box to space rows
+ROW_GAP = 50.0         # layered: added to the tallest box in a row to space rows
+DUMMY_ROW_H = 20.0     # layered: height of a row that only lines pass through
 GROUP_PAD = 20.0       # group rectangle padding around its members
 GROUP_TITLE = 24.0     # extra padding on top of a group for its title
 GROUP_ROW_GAP = 80.0   # layered: row gap where one group ends and another begins
@@ -312,18 +313,22 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
 
     # 6. Coordinates.
     maxw = max(w for w, _ in sizes.values())
-    maxh = max(h for _, h in sizes.values())
     nrows = max(row.values()) + 1
     big_gap = _group_gaps(layers, row, group_of, set(ids), nrows)
+    # each row as tall as its tallest box (a row of only passing lines: DUMMY_ROW_H)
+    row_h = [DUMMY_ROW_H] * nrows
+    for i in ids:
+        row_h[row[i]] = max(row_h[row[i]], sizes[i][1])
     row_y = [0.0]
     for r in range(nrows - 1):
-        row_y.append(row_y[-1] + maxh + (GROUP_ROW_GAP if big_gap[r] else ROW_GAP))
+        row_y.append(row_y[-1] + row_h[r] + (GROUP_ROW_GAP if big_gap[r] else ROW_GAP))
     col_x = [lay * (maxw + COL_GAP) for lay in range(nlayers)]
     boxes: Dict[str, Box] = {}
     for i in ids:
         w, h = sizes[i]
-        boxes[i] = Box(col_x[layer[i]] + (maxw - w) / 2, row_y[row[i]] + (maxh - h) / 2, w, h)
-    center_y = {d: row_y[row[d]] + maxh / 2 for d in dummy_layer}
+        boxes[i] = Box(col_x[layer[i]] + (maxw - w) / 2,
+                       row_y[row[i]] + (row_h[row[i]] - h) / 2, w, h)
+    center_y = {d: row_y[row[d]] + row_h[row[d]] / 2 for d in dummy_layer}
     for i in ids:
         center_y[i] = boxes[i].cy
 
@@ -663,20 +668,25 @@ def job_rows(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             xs = [lane_cx[m] for m in nbrs[i] if m in lane_cx]
             if xs:
                 want[i] = sum(xs) / len(xs)
+        # sort key: a box chained off a row neighbor sits right after that neighbor (its
+        # chain root's place, then its depth), so its line crosses no other box
+        key: Dict[str, Tuple[float, int]] = {i: (want[i], 0) for i in want}
         pending = [i for i in members if i not in want]
         while pending:  # chain the rest off row neighbors already placed, else after the lane
             progressed = False
             for i in list(pending):
-                ws = [want[m] + (sizes[m][0] + sizes[i][0]) / 2 + JOB_SPREAD_GAP
+                ws = [(want[m] + (sizes[m][0] + sizes[i][0]) / 2 + JOB_SPREAD_GAP, m)
                       for m in nbrs[i] if m in want]
                 if ws:
-                    want[i] = max(ws)
+                    want[i], m = max(ws)
+                    key[i] = (key[m][0], key[m][1] + 1)
                     pending.remove(i)
                     progressed = True
             if not progressed:
                 i = pending.pop(0)
                 want[i] = max([lane_end] + [v + pitch for v in want.values()])
-        order = sorted(members, key=lambda i: (want[i], members.index(i)))
+                key[i] = (want[i], 0)
+        order = sorted(members, key=lambda i: (key[i], members.index(i)))
         gaps = [(sizes[a][0] + sizes[b][0]) / 2 + JOB_SPREAD_GAP for a, b in zip(order, order[1:])]
         # never spread back over the column left of the lane
         xs = _pack([want[i] for i in order], gaps, lo=lane_x0 + sizes[order[0]][0] / 2)
