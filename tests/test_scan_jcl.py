@@ -109,8 +109,121 @@ def test_proc_override_beats_default(inv):
     assert r.evidence.line == line_of(BATCH / "proc/CLMPRC.proc", "FEED")
 
 
-def test_proc_default_used_when_not_overridden(inv):
-    assert ("read", "dataset", "TEST.PAYMENT.FEED") in refs_of(inv, "claims-batch/proc/CLMPRC.proc#RUN")
+def test_called_proc_has_no_standalone_refs(inv):
+    assert "proc:claims-batch/proc/CLMPRC.proc" in inv.nodes
+    assert not any(r.src.startswith("step:claims-batch/proc/CLMPRC.proc") for r in inv.refs)
+    assert not any(r.target_name == "TEST.PAYMENT.FEED" for r in inv.refs)
+
+
+def test_uncalled_proc_is_flagged_as_defaults(tmp_path):
+    proc = "//P1 PROC ENV=TEST\n//RUN EXEC PGM=X\n//IN DD DSN=&ENV..DS,DISP=SHR\n// PEND\n"
+    i = scan_text(tmp_path, "//J1 JOB (A),'X'\n//S EXEC PGM=Y\n", extra={"P1.proc": proc})
+    r = one_ref(i, "r/P1.proc#RUN", "read")
+    assert r.target_name == "TEST.DS" and r.attrs["proc_default"] is True
+    assert r.reason == "PROC default values; no caller in these repos"
+
+
+def test_fixture_step050_reads_the_extract_dataset(inv):
+    r = [x for x in step_refs(inv, J100 + "#STEP050") if x.op == "read"]
+    assert len(r) == 1 and r[0].target_name == "PROD.CLAIMS.EXTRACT" and r[0].attrs["via"] == "transfer"
+    assert r[0].evidence.line == line_of(BATCH / "jcl/CLMD100.jcl", "SNODE=FINANCE")
+    t = one_ref(inv, J100 + "#STEP050", "transfer")
+    assert t.attrs["remote_dsn"] == "FIN.IN.CLAIMS"
+    assert not any(x.op == "write" and x.target_name == "FIN.IN.CLAIMS" for x in inv.refs)
+
+
+def test_set_is_snapshotted_per_statement(tmp_path):
+    text = ("//J1 JOB (A),'X'\n// SET HLQ=DEV\n//S1 EXEC PGM=P\n//A DD DSN=&HLQ..FILE1,DISP=SHR\n"
+            "// SET HLQ=PROD\n//S2 EXEC PGM=P\n//B DD DSN=&HLQ..FILE2,DISP=SHR\n")
+    i = scan_text(tmp_path, text)
+    assert ("read", "dataset", "DEV.FILE1") in refs_of(i, "r/J1.jcl#S1")
+    assert ("read", "dataset", "PROD.FILE2") in refs_of(i, "r/J1.jcl#S2")
+    assert ("read", "dataset", "PROD.FILE1") not in refs_of(i, "r/J1.jcl#S1")
+
+
+def test_set_between_dds_of_one_step(tmp_path):
+    text = ("//J1 JOB (A),'X'\n// SET H=A\n//S1 EXEC PGM=P\n//D1 DD DSN=&H..X,DISP=SHR\n"
+            "// SET H=B\n//D2 DD DSN=&H..X,DISP=SHR\n")
+    got = refs_of(scan_text(tmp_path, text), "r/J1.jcl#S1")
+    assert ("read", "dataset", "A.X") in got and ("read", "dataset", "B.X") in got
+
+
+def test_ndm_pull_and_local_to_side(tmp_path):
+    text = ("//J1 JOB (A),'X'\n//S EXEC PGM=DMBATCH\n//SYSIN DD *\n"
+            "  COPY FROM (SNODE=REMOTE DSN=R.FILE) -\n     TO (DSN=PROD.LOCAL.IN)\n/*\n")
+    i = scan_text(tmp_path, text)
+    refs = refs_of(i, "r/J1.jcl#S")
+    assert ("transfer", "external", "NDM:REMOTE") in refs
+    assert ("write", "dataset", "PROD.LOCAL.IN") in refs
+    assert one_ref(i, "r/J1.jcl#S", "transfer").attrs["remote_dsn"] == "R.FILE"
+
+
+def test_ftp_put_and_get_datasets(tmp_path):
+    text = ("//J1 JOB (A),'X'\n//F EXEC PGM=FTP\n//INPUT DD *\nhost.example.com\nuser pw\n"
+            "put 'PROD.OUT.FILE' out.txt\nget in.txt 'PROD.IN.FILE'\nput local.txt x\n/*\n")
+    i = scan_text(tmp_path, text)
+    refs = refs_of(i, "r/J1.jcl#F")
+    assert ("transfer", "external", "FTP:host.example.com") in refs
+    assert ("read", "dataset", "PROD.OUT.FILE") in refs and ("write", "dataset", "PROD.IN.FILE") in refs
+    assert not any(r[2] and r[2].lower().startswith("local") for r in refs)
+
+
+def test_dotted_override_merges_keywords_and_keeps_concatenation(tmp_path):
+    proc = ("//P1 PROC\n//RUN EXEC PGM=X\n//IN DD DSN=OLD.DS,DISP=SHR\n// DD DSN=OLD.CONCAT,DISP=SHR\n"
+            "//OUT DD DSN=P.OUT,DISP=(NEW,CATLG)\n// PEND\n")
+    text = ("//J1 JOB (A),'X'\n//S1 EXEC P1\n//RUN.IN DD DSN=NEW.DS\n//RUN.OUT DD DSN=P.OUT2\n")
+    refs = refs_of(scan_text(tmp_path, text, extra={"P1.proc": proc}), "r/J1.jcl#RUN")
+    assert ("read", "dataset", "NEW.DS") in refs and ("read", "dataset", "OLD.DS") not in refs
+    assert ("read", "dataset", "OLD.CONCAT") in refs
+    # DISP comes from the proc DD: no silent switch to write
+    assert ("write", "dataset", "P.OUT2") in refs
+
+
+def test_override_without_disp_keeps_proc_disp(tmp_path):
+    proc = "//P1 PROC\n//RUN EXEC PGM=X\n//IN DD DSN=OLD.DS,DISP=SHR\n// PEND\n"
+    refs = refs_of(scan_text(tmp_path, "//J1 JOB (A),'X'\n//S1 EXEC P1\n//RUN.IN DD DSN=N.DS\n",
+                             extra={"P1.proc": proc}), "r/J1.jcl#RUN")
+    assert ("read", "dataset", "N.DS") in refs
+
+
+def test_unresolved_disp_is_update_with_reason(tmp_path):
+    i = scan_text(tmp_path, "//J1 JOB (A),'X'\n//S EXEC PGM=P\n//A DD DSN=A.B,DISP=&MODE\n")
+    r = one_ref(i, "r/J1.jcl#S", "update")
+    assert r.reason == "symbol &MODE has no value in these repos"
+
+
+def test_no_disp_is_write_with_visible_none(tmp_path):
+    i = scan_text(tmp_path, "//J1 JOB (A),'X'\n//S EXEC PGM=P\n//A DD DSN=A.B\n")
+    r = one_ref(i, "r/J1.jcl#S", "write")
+    assert r.attrs["disp"] is None
+
+
+def test_null_proc_default_does_not_shadow_caller_set(tmp_path):
+    proc = "//P1 PROC ENV=\n//RUN EXEC PGM=X\n//IN DD DSN=&ENV..DS,DISP=SHR\n// PEND\n"
+    text = "//J1 JOB (A),'X'\n// SET ENV=QA\n//S1 EXEC P1\n"
+    assert ("read", "dataset", "QA.DS") in refs_of(scan_text(tmp_path, text, extra={"P1.proc": proc}),
+                                                     "r/J1.jcl#RUN")
+
+
+def test_null_proc_default_unset_is_unresolved(tmp_path):
+    proc = "//P1 PROC ENV=\n//RUN EXEC PGM=X\n//IN DD DSN=&ENV..DS,DISP=SHR\n// PEND\n"
+    i = scan_text(tmp_path, "//J1 JOB (A),'X'\n//S1 EXEC P1\n", extra={"P1.proc": proc})
+    r = one_ref(i, "r/J1.jcl#RUN", "read")
+    assert r.target_name == "&ENV..DS" and r.reason == "symbol &ENV has no value in these repos"
+
+
+def test_jobless_jcl_fragment_is_not_scanned_as_job(tmp_path):
+    i = scan_text(tmp_path, "//J1 JOB (A),'X'\n// INCLUDE MEMBER=FRAG\n",
+                  extra={"FRAG.jcl": "//F1 EXEC PGM=FRAGPGM\n", "LONE.jcl": "//L1 EXEC PGM=LONEPGM\n"})
+    assert not any(n.startswith("job:r/FRAG") or n.startswith("job:r/LONE") for n in i.nodes)
+    assert "step:r/FRAG.jcl#F1" not in i.nodes and "step:r/LONE.jcl#L1" not in i.nodes
+    assert ("runs", "program", "FRAGPGM") in refs_of(i, "r/J1.jcl#F1")
+
+
+def test_names_are_upper_cased_and_plus_zero_gdg(tmp_path):
+    text = "//J1 JOB (A),'X'\n// SET H=prod\n//S EXEC PGM=P\n//A DD DSN=&H..gdg.base(+0),DISP=SHR\n"
+    r = one_ref(scan_text(tmp_path, text), "r/J1.jcl#S", "read")
+    assert r.target_name == "PROD.GDG.BASE" and r.attrs["gdg"] == "0"
 
 
 def test_unresolved_symbol_kept_with_reason(inv):

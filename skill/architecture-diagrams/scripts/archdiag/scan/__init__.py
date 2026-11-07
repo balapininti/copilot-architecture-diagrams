@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Set, Tuple
 
 from ..config import Config
 from ..model import Inventory, Node, Ref
@@ -15,6 +15,7 @@ from ..textio import classify, read_source
 class ScanContext:
     procs: Dict[str, str] = field(default_factory=dict)
     proc_src: Dict[str, Tuple[str, str]] = field(default_factory=dict)  # NAME -> (repo, relpath)
+    proc_calls: Set[str] = field(default_factory=set)  # PROC names some JCL EXECs (pass 1)
     props: Dict[str, Dict[str, str]] = field(default_factory=dict)   # per repo
     ts_env: Dict[str, Dict[str, str]] = field(default_factory=dict)  # per repo
 

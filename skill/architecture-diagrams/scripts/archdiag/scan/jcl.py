@@ -191,6 +191,26 @@ class _Scope:
             s = s.parent
         return None
 
+    def snapshot(self) -> "_Scope":
+        """Flatten the chain into an independent copy (later SETs must not change it)."""
+        chain = []
+        s: Optional[_Scope] = self
+        while s is not None:
+            chain.append(s.own)
+            s = s.parent
+        flat: Dict[str, str] = {}
+        for d in reversed(chain):
+            flat.update(d)
+        return _Scope(flat)
+
+
+def _unres_names(text: str) -> List[str]:
+    names: List[str] = []
+    for m in _SYM.finditer(text):
+        if m.group(1) and m.group(1).upper() not in names:
+            names.append(m.group(1).upper())
+    return names
+
 
 def _resolve(text: str, scope: _Scope) -> Tuple[str, List[str]]:
     """Substitute &NAME. / &NAME.. symbols; leave unknown ones; return names still unresolved."""
@@ -201,11 +221,7 @@ def _resolve(text: str, scope: _Scope) -> Tuple[str, List[str]]:
         return m.group(0) if v is None else v
 
     out = _SYM.sub(rep, text)
-    names: List[str] = []
-    for m in _SYM.finditer(out):
-        if m.group(1) and m.group(1).upper() not in names:
-            names.append(m.group(1).upper())
-    return out, names
+    return out, _unres_names(out)
 
 
 def _reason(names: List[str]) -> Optional[str]:
@@ -231,6 +247,19 @@ def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext) -> None:
     if not text.lstrip().startswith("//"):
         return
     stmts = parse_statements(text)
+    for s in stmts:
+        if s.op == "EXEC":
+            called = None
+            for k, v in parse_params(s.operands):
+                if k is None and called is None:
+                    called = v
+                elif k == "PGM":
+                    called = None
+                    break
+                elif k == "PROC":
+                    called = v
+            if called and "&" not in called:
+                ctx.proc_calls.add(_unquote(called).upper())
     if not stmts or any(s.op == "JOB" for s in stmts):
         return
     names = [_stem(relpath)]
@@ -249,10 +278,8 @@ def _split_proc(stmts: List[Stmt]) -> Tuple[Dict[str, str], List[Stmt]]:
     for i, s in enumerate(stmts):
         if s.op == "PROC":
             for k, v in parse_params(s.operands):
-                if k:
-                    defaults[k] = _unquote(v)
-                else:
-                    defaults.setdefault(v.upper(), "")
+                if k and _unquote(v) != "":
+                    defaults[k] = _unquote(v)  # a null/absent default means "not set"
             start = i + 1
             break
     body: List[Stmt] = []
@@ -268,14 +295,42 @@ def _split_proc(stmts: List[Stmt]) -> Tuple[Dict[str, str], List[Stmt]]:
 # --------------------------------------------------------------------------
 
 class _DD:
-    __slots__ = ("ddname", "stmt", "scope", "repo", "path")
+    """A DD statement with its symbols already resolved (a snapshot at the point it was read)."""
+    __slots__ = ("ddname", "params", "data", "repo", "path", "line", "text")
 
-    def __init__(self, ddname: str, stmt: Stmt, scope: _Scope, repo: str, path: str) -> None:
+    def __init__(self, ddname: str, params: List[Tuple[Optional[str], str, List[str]]],
+                 data: List[Tuple[int, str, str, List[str]]], repo: str, path: str,
+                 line: int, text: str) -> None:
         self.ddname = ddname
-        self.stmt = stmt
-        self.scope = scope
+        self.params = params   # (KEY|None, resolved value, unresolved symbol names)
+        self.data = data       # (line, evidence text, resolved text, unresolved names)
         self.repo = repo
         self.path = path
+        self.line = line
+        self.text = text
+
+
+def _make_dd(ddname: str, stmt: Stmt, scope: _Scope, repo: str, path: str) -> _DD:
+    params = []
+    for k, v in parse_params(stmt.operands):
+        rv, names = _resolve(v, scope)
+        params.append((k, rv, names))
+    data = []
+    for line, text in stmt.data:
+        rv, names = _resolve(text, scope)
+        data.append((line, text.strip(), rv, names))
+    return _DD(ddname, params, data, repo, path, stmt.line, stmt.text)
+
+
+def _merge_override(orig: _DD, new: _DD) -> _DD:
+    """Dotted-DD override: the override's keywords win, everything else is kept from the proc."""
+    over_kw = set(k for k, _v, _n in new.params if k)
+    params = [p for p in orig.params if p[0] is None or p[0] not in over_kw]
+    if any(k is None for k, _v, _n in new.params):
+        params = [p for p in params if p[0] is not None]
+    params = [p for p in new.params if p[0] is None] + params + [p for p in new.params if p[0]]
+    data = new.data if new.data else orig.data
+    return _DD(orig.ddname, params, data, new.repo, new.path, new.line, new.text)
 
 
 class _Step:
@@ -293,6 +348,7 @@ class _Step:
         self.pgm: Optional[str] = None
         self.pgm_reason: Optional[str] = None
         self.parm: Optional[str] = None
+        self.parm_names: List[str] = []
         self.missing_proc: Optional[str] = None
         self.dds: List[_DD] = []
 
@@ -432,7 +488,8 @@ class _Scanner:
             name, unres = _resolve(_unquote(pgm), scope)
             step.pgm = name.upper()
             step.pgm_reason = _reason(unres)
-            step.parm = parm
+            if parm is not None:
+                step.parm, step.parm_names = _resolve(parm, scope)
             self.steps.append(step)
             self.cur_step = step
             self.last_call = {}
@@ -453,7 +510,6 @@ class _Scanner:
                          scope, pname, cond)
             step.pgm = ""
             step.missing_proc = pname
-            step.parm = parm
             self.steps.append(step)
             self.cur_step = step
             self.last_call = {}
@@ -480,7 +536,15 @@ class _Scanner:
             target = self.last_call.get(parts[-2]) or self.cur_step
             if target is None:
                 return
-            target.dds = [d for d in target.dds if d.ddname != ddname]
+            new = _make_dd(ddname, s, scope, src[0], src[1])
+            for i, d in enumerate(target.dds):
+                if d.ddname == ddname:
+                    target.dds[i] = _merge_override(d, new)  # only the first DD; keep concatenations
+                    break
+            else:
+                target.dds.append(new)
+            self.dd_target, self.dd_last = target, ddname
+            return
         elif name:
             target, ddname = self.cur_step, name
             if target is None:
@@ -490,19 +554,18 @@ class _Scanner:
             if target is None:
                 return
         self.dd_target, self.dd_last = target, ddname
-        target.dds.append(_DD(ddname, s, scope, src[0], src[1]))
+        target.dds.append(_make_dd(ddname, s, scope, src[0], src[1]))
 
     # -- emission
     def emit(self) -> Tuple[List[Node], List[Ref]]:
         nodes: List[Node] = []
         refs: List[Ref] = []
-        dd_index: Dict[Tuple[str, str], Tuple[str, bool, str]] = {}
+        dd_index: Dict[Tuple[str, str], Tuple[str, bool, Optional[str]]] = {}
         for st in self.steps:
             self.emit_step(st, nodes, refs, dd_index)
         return nodes, refs
 
-    def emit_step(self, st: _Step, nodes: List[Node], refs: List[Ref],
-                  dd_index: Dict[Tuple[str, str], Tuple[str, bool, str]]) -> None:
+    def emit_step(self, st: _Step, nodes: List[Node], refs: List[Ref], dd_index) -> None:
         stmt = st.stmt
         assert stmt is not None
         ev = Evidence(st.repo, st.path, stmt.line, stmt.text)
@@ -529,12 +592,12 @@ class _Scanner:
             for dd in st.dds:
                 if dd.ddname != "SYSTSIN":
                     continue
-                for line, text in dd.stmt.data:
-                    for m in _RUN_PROGRAM.finditer(text):
-                        name, unres = _resolve(m.group(1).upper(), dd.scope)
-                        kind = "utility" if name.upper() in UTILITIES else "program"
-                        add("runs", kind, name.upper(), Evidence(dd.repo, dd.path, line, text.strip()),
-                            _reason(unres))
+                for line, evtext, rv, _names in dd.data:
+                    for m in _RUN_PROGRAM.finditer(rv):
+                        name = m.group(1).upper()
+                        kind = "utility" if name in UTILITIES else "program"
+                        add("runs", kind, name, Evidence(dd.repo, dd.path, line, evtext),
+                            _reason(_unres_names(name)))
                         found = True
             if not found:
                 add("runs", "utility", pgm, ev, st.pgm_reason)
@@ -545,74 +608,139 @@ class _Scanner:
         elif pgm == "FTP":
             self.emit_ftp(st, ev, add)
 
+    @staticmethod
+    def _join_data(dd: _DD) -> Tuple[str, List[Tuple[int, int, str]]]:
+        """Join in-stream lines (dropping trailing - / + continuation marks), keeping line offsets."""
+        text = ""
+        offs: List[Tuple[int, int, str]] = []
+        for line, evtext, rv, _n in dd.data:
+            offs.append((len(text), line, evtext))
+            piece = rv.rstrip()
+            if piece.endswith("-") or piece.endswith("+"):
+                piece = piece[:-1]
+            text += piece + " "
+        return text, offs
+
+    @staticmethod
+    def _line_at(offs: List[Tuple[int, int, str]], pos: int) -> Tuple[int, str]:
+        best = offs[0]
+        for o in offs:
+            if o[0] <= pos:
+                best = o
+        return best[1], best[2]
+
+    def _dataset_ref(self, add, dd: _DD, op: str, raw: str, ev: Evidence, extra: dict) -> None:
+        name, gdg, member = _split_dsn(raw.upper())
+        a = {"ddname": dd.ddname, "disp": None, "gdg": gdg}
+        if member:
+            a["member"] = member
+        if name.startswith("&&"):
+            a["temp"] = True
+        a.update(extra)
+        add(op, "dataset", name, ev, _reason(_unres_names(name)), a)
+
     def emit_ndm(self, st: _Step, ev: Evidence, add) -> None:
         got = False
         for dd in st.dds:
-            for line, text in dd.stmt.data:
-                for m in _SNODE.finditer(text):
-                    name, unres = _resolve(m.group(1), dd.scope)
-                    add("transfer", "external", "NDM:" + (name if unres else name.upper()),
-                        Evidence(dd.repo, dd.path, line, text.strip()), _reason(unres))
-                    got = True
+            if not dd.data:
+                continue
+            text, offs = self._join_data(dd)
+            spans = []
+            for m in _COPY.finditer(text):
+                spans.append(m.span())
+                for gi, role in ((1, "read"), (2, "write")):
+                    clause = m.group(gi)
+                    line, evtext = self._line_at(offs, m.start(gi))
+                    cev = Evidence(dd.repo, dd.path, line, evtext)
+                    sn = _SNODE.search(clause)
+                    dsn = _DSN.search(clause)
+                    if sn:
+                        name = sn.group(1)
+                        a = {"via": "transfer", "direction": "send" if gi == 2 else "receive"}
+                        if dsn:
+                            a["remote_dsn"] = _trim_paren(dsn.group(1))
+                        sline, stext = self._line_at(offs, m.start(gi) + sn.start())
+                        add("transfer", "external", "NDM:" + (name if _unres_names(name) else name.upper()),
+                            Evidence(dd.repo, dd.path, sline, stext), _reason(_unres_names(name)), a)
+                        got = True
+                    elif dsn:
+                        self._dataset_ref(add, dd, role, _trim_paren(dsn.group(1)), cev, {"via": "transfer"})
+            for m in _SNODE.finditer(text):
+                if any(a0 <= m.start() < b0 for a0, b0 in spans):
+                    continue
+                name = m.group(1)
+                line, evtext = self._line_at(offs, m.start())
+                add("transfer", "external", "NDM:" + (name if _unres_names(name) else name.upper()),
+                    Evidence(dd.repo, dd.path, line, evtext), _reason(_unres_names(name)),
+                    {"via": "transfer"})
+                got = True
         if not got:
             add("transfer", "external", None, ev,
                 "Connect:Direct SNODE= was not found in the in-stream input of this step")
 
     def emit_ftp(self, st: _Step, ev: Evidence, add) -> None:
         host, hev, reason = None, ev, None
-        if st.parm:
-            host = st.parm.split()[0] if st.parm.split() else None
-            if host:
-                host, unres = _resolve(host, st.scope)
-                reason = _reason(unres)
+        if st.parm and st.parm.split():
+            host = st.parm.split()[0]
+            reason = _reason(st.parm_names)
+        ftp_dds = [dd for dd in st.dds if dd.ddname in ("INPUT", "SYSIN")]
+        host_line = None
         if not host:
-            for dd in st.dds:
-                if dd.ddname not in ("INPUT", "SYSIN"):
-                    continue
-                for line, text in dd.stmt.data:
-                    toks = text.split()
+            for dd in ftp_dds:
+                for line, evtext, rv, _n in dd.data:
+                    toks = rv.split()
                     if not toks:
                         continue
-                    if toks[0].lower() == "open" and len(toks) > 1:
-                        host = toks[1]
-                    else:
-                        host = toks[0]
-                    host, unres = _resolve(host, dd.scope)
-                    reason = _reason(unres)
-                    hev = Evidence(dd.repo, dd.path, line, text.strip())
+                    host = toks[1] if toks[0].lower() == "open" and len(toks) > 1 else toks[0]
+                    reason = _reason(_unres_names(host))
+                    hev = Evidence(dd.repo, dd.path, line, evtext)
+                    host_line = line
                     break
                 if host:
                     break
         if host:
-            add("transfer", "external", "FTP:" + host, hev, reason)
+            add("transfer", "external", "FTP:" + host, hev, reason, {"via": "transfer"})
         else:
             add("transfer", "external", None, ev, "FTP host was not found in this step")
+        for dd in ftp_dds:
+            for line, evtext, rv, _n in dd.data:
+                toks = rv.split()
+                if not toks or line == host_line:
+                    continue
+                cmd = toks[0].lower()
+                dev = Evidence(dd.repo, dd.path, line, evtext)
+                if cmd in ("put", "mput", "send", "append") and len(toks) > 1 and _is_local_ds(toks[1]):
+                    self._dataset_ref(add, dd, "read", toks[1].strip("'"), dev, {"via": "transfer"})
+                elif cmd in ("get", "mget", "recv") and len(toks) > 2 and _is_local_ds(toks[2]):
+                    self._dataset_ref(add, dd, "write", toks[2].strip("'"), dev, {"via": "transfer"})
 
     def emit_dd(self, st: _Step, dd: _DD, sysout: List[str], add, dd_index) -> None:
-        s = dd.stmt
-        params = parse_params(s.operands)
-        pos = [v.upper() for k, v in params if k is None]
-        kw = {}
-        for k, v in params:
-            if k:
-                kw.setdefault(k, v)
+        pos = [v.upper() for k, v, _n in dd.params if k is None]
+        kw: Dict[str, str] = {}
+        kwn: Dict[str, List[str]] = {}
+        for k, v, n in dd.params:
+            if k and k not in kw:
+                kw[k] = v
+                kwn[k] = n
         if "SYSOUT" in kw:
             sysout.append("%s (SYSOUT=%s)" % (dd.ddname, kw["SYSOUT"]))
             return
         if "DUMMY" in pos or (pos and pos[0] in ("*", "DATA", "DYNAM")):
             return
-        dsn = kw.get("DSN", kw.get("DSNAME"))
-        if dsn is None:
+        dkey = "DSN" if "DSN" in kw else ("DSNAME" if "DSNAME" in kw else None)
+        if dkey is None:
             return
-        ev = Evidence(dd.repo, dd.path, s.line, s.text)
+        ev = Evidence(dd.repo, dd.path, dd.line, dd.text)
         disp_raw = kw.get("DISP")
+        disp_names = kwn.get("DISP", [])
         status = _disp_status(disp_raw) if disp_raw is not None else None
-        dsn = _unquote(dsn)
+        dsn = _unquote(kw[dkey])
         referback = dsn.startswith("*.")
         reason = None
         temp = False
-        gdg = None
+        gdg: Optional[str] = None
         member = None
+        names: List[str] = []
         if referback:
             tail = dsn[2:].upper().split(".")
             hit = dd_index.get((tail[-2], tail[-1])) if len(tail) >= 2 else None
@@ -622,29 +750,28 @@ class _Scanner:
             else:
                 name, temp, gdg = hit
         else:
-            name, unres = _resolve(dsn, dd.scope)
-            reason = _reason(unres)
-            if name.upper() == "NULLFILE":
+            name = dsn.upper()
+            if name == "NULLFILE":
                 return
-            m = _GDG.match(name)
-            if m:
-                name, gdg = m.group(1), m.group(2)
-                if gdg[0].isdigit():
-                    gdg = str(int(gdg))
-            else:
-                m = _MEMBER.match(name)
-                if m:
-                    name, member = m.group(1), m.group(2)
+            names = _unres_names(name)
+            name, gdg, member = _split_dsn(name)
             temp = name.startswith("&&")
+        for n in disp_names:
+            if n not in names:
+                names.append(n)
+        if names:
+            reason = _reason(names)
         if status == "SHR":
             op = "read"
         elif status in ("NEW", "MOD"):
             op = "write"
         elif status == "OLD":
             op = "update"
+        elif disp_names:
+            op = "update"  # DISP could not be worked out: assume the widest access
         else:
             op = "read" if referback else "write"
-        if temp and op == "update":
+        if temp and op == "update" and not disp_names:
             op = "read"
         a = {"ddname": dd.ddname, "disp": disp_raw, "gdg": gdg}
         if temp:
@@ -656,6 +783,42 @@ class _Scanner:
         if name:
             dd_index[(st.name.upper(), dd.ddname)] = (name, temp, gdg)
         add(op, "dataset", name, ev, reason, a)
+
+
+_COPY = re.compile(r"\bCOPY\b\s+FROM\s*\((.*?)\)\s*TO\s*\((.*?)\)", re.I | re.S)
+_DSN = re.compile(r"\bDSN(?:AME)?\s*=\s*([^\s,]+)", re.I)
+_DSN_NAME = re.compile(r"^[A-Z#$@&][A-Z0-9#$@&]{0,7}(?:\.[A-Z#$@&][A-Z0-9#$@&]{0,7})+(?:\([A-Z0-9#$@+\-]*\))?$")
+_FILE_EXTS = frozenset(["TXT", "CSV", "DAT", "XML", "JSON", "ZIP", "PDF", "LOG", "TSV", "GZ"])
+
+
+def _trim_paren(v: str) -> str:
+    v = v.strip("'")
+    while v.endswith(")") and v.count(")") > v.count("("):
+        v = v[:-1]
+    return v
+
+
+def _is_local_ds(tok: str) -> bool:
+    """FTP put/get argument that is a local z/OS dataset: quoted, or upper-case qualified name."""
+    quoted = len(tok) > 2 and tok[0] == "'" and tok[-1] == "'"
+    t = tok.strip("'")
+    if not _DSN_NAME.match(t.upper()):
+        return False
+    if quoted:
+        return True
+    return t == t.upper() and t.rsplit(".", 1)[-1] not in _FILE_EXTS
+
+
+def _split_dsn(name: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """Split a resolved upper-case DSN into (dataset, gdg relative generation, pds member)."""
+    m = _GDG.match(name)
+    if m:
+        n = int(m.group(2))
+        return m.group(1), "0" if n == 0 else "%+d" % n, None
+    m = _MEMBER.match(name)
+    if m:
+        return m.group(1), None, m.group(2)
+    return name, None, None
 
 
 def _balanced(s: str) -> bool:
@@ -682,20 +845,22 @@ def _disp_status(raw: str) -> str:
 def _scan(repo: str, relpath: str, text: str, ctx: ScanContext, proc_file: bool
           ) -> Tuple[List[Node], List[Ref]]:
     stmts = parse_statements(text)
+    card = next((s for s in stmts if s.op == ("PROC" if proc_file else "JOB")), None)
+    if card is None:
+        return [], []  # a fragment / include member: only scanned where it is INCLUDEd or called
     sc = _Scanner(repo, relpath, ctx, proc_file)
-    src = (repo, relpath)
-    sc.run(stmts, src, _Scope({}), None, None, 0)
-    first = stmts[0] if stmts else None
-    job_stmt = next((s for s in stmts if s.op == "JOB"), None)
-    head = job_stmt or first
-    if head is None:
-        return [], []
-    name = (job_stmt.name if job_stmt and job_stmt.name else _stem(relpath))
-    if proc_file and first is not None and first.op == "PROC" and first.name:
-        name = first.name
+    sc.run(stmts, (repo, relpath), _Scope({}), None, None, 0)
+    name = card.name or _stem(relpath)
     node = Node(sc.job_id, "proc" if proc_file else "job", name, repo,
-                [Evidence(repo, relpath, head.line, head.text)], {})
+                [Evidence(repo, relpath, card.line, card.text)], {})
+    if proc_file and (name.upper() in ctx.proc_calls or _stem(relpath) in ctx.proc_calls):
+        return [node], []  # callers' expansions already cover every step of this PROC
     nodes, refs = sc.emit()
+    if proc_file:
+        why = "PROC default values; no caller in these repos"
+        for r in refs:
+            r.attrs["proc_default"] = True
+            r.reason = why if not r.reason else r.reason + "; " + why
     return [node] + nodes, refs
 
 
@@ -704,5 +869,5 @@ def scan_jcl(repo: str, relpath: str, text: str, ctx: ScanContext) -> Tuple[List
 
 
 def scan_proc(repo: str, relpath: str, text: str, ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
-    """A PROC file on its own: steps use the PROC's default symbol values."""
+    """A PROC file nobody calls: steps use the PROC's default symbol values, flagged as defaults."""
     return _scan(repo, relpath, text, ctx, True)
