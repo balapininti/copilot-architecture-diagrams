@@ -337,7 +337,7 @@ def _names(scope: str, items: List[str]) -> List[str]:
     name when ``scope`` is empty."""
     names: List[str] = []
     for it in items:
-        nm = it.rsplit(" (", 1)[0] if it.endswith(")") else it
+        nm = it.split("\t", 1)[0]  # a listing line is NAME<TAB>description (repo/path)
         if nm not in names:
             names.append(nm)
     if not scope:

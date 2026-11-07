@@ -194,15 +194,80 @@ def _path(n) -> str:
 
 
 def list_items(r: Resolved, g: Groups, what: str) -> List[str]:
-    """One line per item of a kind: jobs, transactions, pages, endpoints, applications, repos, programs."""
+    """One line per item of a kind: jobs, transactions, pages, endpoints, applications, repos,
+    programs. Each line is ``NAME<TAB>description (repo/path)`` (B11): the program a
+    transaction runs, a page's component, an endpoint's handler class, the programs a job's
+    steps run; a program has only its path."""
     if what == "applications":
         cnt = _counts(g, r)
-        return ["%s (%s, %d members)" % (a.name, a.kind, cnt.get(a.name, 0)) for a in g.apps]
+        return ["%s\t(%s, %d members)" % (a.name, a.kind, cnt.get(a.name, 0)) for a in g.apps]
     if what == "repos":
-        return [repo.name for repo in r.inventory.repos]
+        return ["%s\t(%s)" % (repo.name, repo.path) for repo in r.inventory.repos]
     kinds = {"jobs": "job", "transactions": "transaction", "pages": "page",
              "endpoints": "endpoint", "programs": "program"}
     if what not in kinds:
         raise ValueError("unknown listing %r; choose from %s" % (what, ", ".join(sorted(list(kinds) + ["applications", "repos"]))))
     nodes = sorted((n for n in r.nodes.values() if n.kind == kinds[what]), key=lambda n: (n.name, n.id))
-    return ["%s (%s)" % (n.name, _path(n)) for n in nodes]
+    by_src: Dict[str, List[Edge]] = {}
+    for e in r.edges:
+        by_src.setdefault(e.src, []).append(e)
+    lines = []
+    for n in nodes:
+        desc = _one_line(_describe(r, n, by_src))
+        lines.append("%s\t%s(%s)" % (_one_line(n.name), desc + " " if desc else "", _path(n)))
+    return lines
+
+
+def _one_line(text: str) -> str:
+    return " ".join(str(text).replace("\t", " ").split())
+
+
+def _end_name(r: Resolved, nid: str) -> str:
+    """A target's name, saying when it is not in these repos or not worked out."""
+    n = r.nodes.get(nid)
+    if n is None:
+        return nid.split(":", 1)[-1]
+    if n.kind == "missing":
+        return "not worked out" if n.name.startswith("?") else \
+            "%s, not in these repos" % n.name
+    return n.name
+
+
+_MAX_DESC = 3  # names shown in one description before "+N more"
+
+
+def _names(items: List[str]) -> str:
+    more = " +%d more" % (len(items) - _MAX_DESC) if len(items) > _MAX_DESC else ""
+    return ", ".join(items[:_MAX_DESC]) + more
+
+
+def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]]) -> str:
+    out = by_src.get(n.id, [])
+    if n.kind == "transaction":
+        progs = [_end_name(r, e.dst) for e in out if e.op == "runs"]
+        return "runs program %s" % _names(progs) if progs else ""
+    if n.kind == "page":
+        uses = [e for e in out if e.op == "uses"]
+        pages = [_end_name(r, e.dst) for e in uses if e.dst.startswith(("page:", "missing:page:"))]
+        if pages:
+            return "redirects to %s" % _names(pages)
+        comps = [_end_name(r, e.dst) for e in uses]
+        return "component %s" % _names(comps) if comps else ""
+    if n.kind == "endpoint":
+        hs = sorted(set([str(n.attrs.get("handler") or "")] +
+                        [str(h) for h in (n.attrs.get("handlers") or [])]) - {""})
+        names = [r.nodes[h].name if h in r.nodes else h.split("/")[-1] for h in hs]
+        return ("handler class%s %s" % ("es" if len(names) > 1 else "", _names(names))
+                if names else "")
+    if n.kind == "job":
+        steps = sorted((s for s in r.nodes.values()
+                        if s.kind == "step" and s.attrs.get("job") == n.id),
+                       key=lambda s: (s.attrs.get("order") or 0, s.id))
+        runs = []
+        for s in steps:
+            if s.attrs.get("pgm"):
+                runs.append(str(s.attrs["pgm"]))
+            elif s.attrs.get("proc"):
+                runs.append("proc %s" % s.attrs["proc"])
+        return "steps run %s" % _names(runs) if runs else ""
+    return ""

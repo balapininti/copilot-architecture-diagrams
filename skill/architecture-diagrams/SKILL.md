@@ -117,7 +117,10 @@ Map the request using `reference/levels-and-styles.md`.
 
 `python "<skill>/scripts/run.py" list --what jobs|transactions|pages|endpoints|applications|repos|programs --workspace "<ws>"`
 
-Each line is `NAME (repo/path)`. Use the exact NAME.
+Each line is `NAME<TAB>description (repo/path)`. Use the exact NAME (everything before the
+tab). The description says what the item is: the program a transaction runs (from the CSD),
+a page's component, an endpoint's handler class, the programs a job's steps run. Programs
+have only their `(repo/path)`.
 
 **Environment copies of a job.** When the same job name exists in several places (for
 example a prod and a test copy), `--scope NAME` draws one of them and the output notes
@@ -127,9 +130,9 @@ example a prod and a test copy), `--scope NAME` draws one of them and the output
 
 **Scope rule.** When the user names a flow in words, for example "the claim details
 transaction", list `transactions`, `pages` and `endpoints`, plus `jobs` for batch, and
-match their words against the names. To match better, you may open the CSD, BMS map or
-Angular route file named in `(repo/path)`. Only read those files. If exactly one name
-clearly fits, use it and say which you picked. Otherwise, **show the candidates and ask**.
+match their words against the names and the descriptions. To match better, you may open
+the CSD, BMS map or Angular route file named in `(repo/path)`. Only read those files. If
+exactly one name clearly fits, use it and say which you picked. Otherwise, **show the candidates and ask**.
 Never guess between several.
 
 ### 5. Draw and report

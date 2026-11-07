@@ -48,12 +48,14 @@ There can be hundreds.
 ## Finding the scope
 
 - Run `list --what <kind>` and pick the exact name from the start of each line. Each line
-  is `NAME (repo/path)`.
+  is `NAME<TAB>description (repo/path)`: the name is everything before the tab. The
+  description is the program a transaction runs (from the CSD), a page's component, an
+  endpoint's handler class or the programs a job's steps run; a program has only its path.
 - A name may appear twice, for example a job kept in both a PROD and a TEST folder. The
   draw uses one and the note `Also exists as: ...` names the others. Mention it.
 - **Scope rule.** A request in words ("the claim details transaction") has to be matched
   to a name. List `transactions`, `pages` and `endpoints`, plus `jobs` for batch, and
-  match the user's words against the names. To match better, you may open the CSD, BMS
+  match the user's words against the names and their descriptions. To match better, you may open the CSD, BMS
   map or route file named in `(repo/path)`. Only read those files. If exactly one name
   clearly fits, use it and say which one you picked. Otherwise, show the candidates and
   ask.

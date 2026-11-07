@@ -82,8 +82,9 @@ def test_summary_size():
 def test_list_jobs():
     r = res()[0]
     jobs = list_items(r, default_groups(r), "jobs")
-    assert "CLMD100 (claims-batch/jcl/CLMD100.jcl)" in jobs
-    assert "CLMD100 (claims-batch/jcl/test/CLMD100.jcl)" in jobs
+    assert any(j.startswith("CLMD100\t") and j.endswith(" (claims-batch/jcl/CLMD100.jcl)")
+               for j in jobs)
+    assert any(j.endswith(" (claims-batch/jcl/test/CLMD100.jcl)") for j in jobs)
     for w in ("transactions", "pages", "endpoints", "applications", "repos", "programs"):
         assert list_items(r, default_groups(r), w)
 
@@ -241,3 +242,28 @@ def test_b8_touch_repos_skips_utility_external_and_not_analyzed_ends():
     touch = _touch_repos(rr)
     assert touch["dataset:D"] == {"r0"}
     assert not _cross(rr, edges[0], touch)
+
+
+def test_b11_list_lines_carry_a_description():
+    r = res()[0]
+    g = default_groups(r)
+
+    def line(what, name):
+        hits = [x for x in list_items(r, g, what) if x.split("\t", 1)[0] == name]
+        assert hits, (what, name, list_items(r, g, what))
+        return hits[0]
+    for what in ("jobs", "transactions", "pages", "endpoints", "programs", "applications",
+                 "repos"):
+        for x in list_items(r, g, what):
+            assert x.count("\t") == 1, x
+            name, rest = x.split("\t")
+            assert name and rest.endswith(")"), x
+    assert line("transactions", "CLMI") == \
+        "CLMI\truns program CLMO100 (claims-online/csd/CLAIMS.csd)"
+    assert line("transactions", "CLMU").startswith("CLMU\truns program CLMO120, not in these repos (")
+    assert line("pages", "claims/:id") == ("claims/:id\tcomponent ClaimDetailsComponent "
+                                           "(claims-portal/src/app/app-routing.module.ts)")
+    assert line("endpoints", "GET /api/claims/{}").startswith(
+        "GET /api/claims/{}\thandler class ClaimController (claims-api/")
+    assert line("jobs", "CLMD100").startswith("CLMD100\tsteps run SORT, CLMB200")
+    assert line("programs", "CLMB200") == "CLMB200\t(claims-batch/cobol/CLMB200.cbl)"
