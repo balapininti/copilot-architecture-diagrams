@@ -71,6 +71,18 @@ _CSECT = re.compile(r"^\S*\s+CSECT\b", re.I)
 _DFHMSD = re.compile(r"\bDFHMSD\b", re.I)
 _PLI = re.compile(r"\bPROCEDURE\s+OPTIONS\s*\(\s*MAIN\b", re.I)
 _REXX = re.compile(r"^\s*/\*\s*REXX", re.I)
+_IDDIV = re.compile(r"(?<![\w-])(?:IDENTIFICATION|ID)\s+DIVISION\b", re.I)
+SNIFF_LINES = 200  # code lines (comments and blanks not counted) read to decide a type
+
+
+def _is_comment(line: str) -> bool:
+    """A comment line of COBOL (column 7 ``*`` or ``/``), JCL (``//*``), SQL (``--``),
+    assembler (column 1 ``*``) or a ``/*`` line."""
+    if len(line) > 6 and line[6] in "*/" and not line[:6].strip(" 0123456789") \
+            or len(line) > 6 and line[6] in "*/" and line[:6].isalnum():
+        return True
+    st = line.lstrip()
+    return line.startswith(("//*", "*")) or st.startswith(("--", "/*", "*>"))
 
 
 _ZC_API = re.compile(r"<\s*(?:\w+:)?zosConnectApi\b")
@@ -113,9 +125,15 @@ def classify(relpath: str, text: str) -> Optional[str]:
     for line in text.split("\n"):
         if not line.strip():
             continue
+        if _REXX.match(line):
+            return "rexx"
+        if _is_comment(line):
+            continue  # a long comment header must not hide the code below it
         seen += 1
-        if seen > 20:
+        if seen > SNIFF_LINES:
             break
+        if _IDDIV.search(line):
+            return "cobol"
         if _JOB.match(line):
             return "jcl"
         if _PROC.match(line):

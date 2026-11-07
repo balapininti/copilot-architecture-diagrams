@@ -51,7 +51,8 @@ def test_sections_in_order():
     names = [h.lstrip("# ") for h in re.findall(r"^#+ .*$", t, re.M)]
     assert names[0].startswith("Links: ")
     assert names[1:] == ["Links on this diagram", "Loose ends", "Partly known",
-                         "Possibly missing repos", "Not analyzed", "Skipped files", "Notes"]
+                         "Possibly missing repos", "Not analyzed", "Skipped files", "Not scanned",
+                         "Notes"]
     assert re.search(r"\d+ confirmed · \d+ partly known · \d+ loose ends", t)
 
 

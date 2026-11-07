@@ -66,6 +66,10 @@ class Inventory:
     # host names (lower case, no port) named as URLs in each repo's config: application*
     # yml/properties, environment*.ts and z/OS Connect OpenAPI servers (Ruling 36)
     config_hosts: Dict[str, List[str]] = field(default_factory=dict)
+    # source the scan left out on purpose but that looks like it matters: {"repo" ("" for
+    # a workspace folder), "path", "reason"}: default-skipped folders holding source,
+    # workspace folders that are not repos, untyped files that look like mainframe code
+    not_scanned: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

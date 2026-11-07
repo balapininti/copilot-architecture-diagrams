@@ -236,6 +236,11 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
     o += ["- `%s`: %s" % ("%s/%s" % (s["repo"], s.get("path")) if s.get("repo") else s.get("path"),
                          s.get("reason", "")) for s in sk] or ["None."]
 
+    o += ["", "## Not scanned", ""]
+    ns = r.inventory.not_scanned
+    o += ["- `%s`: %s" % ("%s/%s" % (s["repo"], s.get("path")) if s.get("repo") else s.get("path"),
+                         s.get("reason", "")) for s in ns] or ["None."]
+
     o += ["", "## Notes", ""]
     o += ["- %s" % " ".join(str(n).split()) for n in view.notes]
     if seq:

@@ -137,6 +137,15 @@ def build_summary(r: Resolved, g: Groups, cfg: Config) -> str:
                     "missing" % bad)
     for s in inv.skipped[:5]:
         tail.append("  - %s/%s (%s)" % (s.get("repo", ""), s.get("path", ""), s.get("reason", "")))
+    tail += ["", "## Not scanned"]
+    ns = inv.not_scanned
+    tail.append("- " + ("%d place(s) that look like source were not scanned; links to them "
+                        "will be missing" % len(ns) if ns else "none"))
+    for s in ns[:5]:
+        where = "%s/%s" % (s["repo"], s.get("path", "")) if s.get("repo") else s.get("path", "")
+        tail.append("  - %s: %s" % (where, s.get("reason", "")))
+    if len(ns) > 5:
+        tail.append("  - ... %d more (see any links report)" % (len(ns) - 5))
 
     # variable head sections fill what is left
     rows = []

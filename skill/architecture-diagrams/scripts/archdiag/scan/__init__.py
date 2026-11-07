@@ -200,6 +200,70 @@ def _config_hosts(ctx: ScanContext) -> Dict[str, List[str]]:
     return out
 
 
+# extensions of source the scanners read (by extension only: a cheap check)
+_MAINFRAME_EXTS = frozenset([".cbl", ".cob", ".cobol", ".cpy", ".copy", ".jcl", ".proc", ".prc",
+                             ".cntl", ".jcllib", ".csd", ".bms", ".ddl", ".mqsc", ".asm",
+                             ".mac", ".pli", ".pl1", ".ezt", ".rexx", ".rex", ".clist"])
+_SOURCE_EXTS = _MAINFRAME_EXTS | frozenset([".sql", ".java", ".ts"])
+_MAINFRAME_TEXT = re.compile(
+    r"^//\S|^.{6}[*/ ] *(?:\d\d +[A-Z][\w-]* +PIC\b|EXEC +(?:SQL|CICS)\b|"
+    r"(?:IDENTIFICATION|PROCEDURE|DATA|ENVIRONMENT) +DIVISION\b|COPY +\w)", re.I | re.M)
+
+
+def _ext(rel: str) -> str:
+    base = rel.rsplit("/", 1)[-1]
+    dot = base.rfind(".")
+    return base[dot:].lower() if dot > 0 else ""
+
+
+def _looks_mainframe(rel: str, text: str) -> bool:
+    """An untyped file with a mainframe source extension, or mainframe-looking lines."""
+    return _ext(rel) in _MAINFRAME_EXTS or bool(_MAINFRAME_TEXT.search(text[:20000]))
+
+
+def _source_under(folder: Path, exts: frozenset = _MAINFRAME_EXTS, limit: int = 1000
+                  ) -> List[Path]:
+    """Files under ``folder`` whose extension is source (by name only, never read)."""
+    import os
+    out: List[Path] = []
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(str(folder)):
+        dirnames[:] = sorted(d for d in dirnames if d.lower() not in (".git", "node_modules"))
+        for name in sorted(filenames):
+            seen += 1
+            if _ext(name) in exts:
+                out.append(Path(dirpath) / name)
+        if seen > limit * 20:
+            break
+    return out
+
+
+def _non_repo_folders(workspace: Path, repos, config: Config) -> List[Dict[str, str]]:
+    """Folders beside the repos that are not repos (no .git, no .archdiag-repo) yet hold
+    source, such as an unpacked zip export: never scanned, so say so."""
+    from ..repos import SKIP_DIRS
+    if any(r.path == "." for r in repos):
+        return []
+    names = {r.path for r in repos}
+    skip = set(d.lower() for d in SKIP_DIRS) | set(str(d).lower() for d in config.exclude_dirs)
+    out: List[Dict[str, str]] = []
+    try:
+        children = sorted(workspace.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return out
+    for child in children:
+        if not child.is_dir() or child.name in names or child.name.startswith(".") \
+                or child.name.lower() in skip:
+            continue
+        found = _source_under(child, _SOURCE_EXTS)
+        if found:
+            out.append({"repo": "", "path": child.name,
+                        "reason": "folder is not a repo (no .git), so it was not scanned, but "
+                                  "it holds %d source file(s), e.g. %s" % (len(found), ", ".join(
+                                      p.relative_to(workspace).as_posix() for p in found[:3]))})
+    return out
+
+
 def _merge_nodes(nodes: Dict[str, Node], new_nodes: List[Node]) -> None:
     for n in new_nodes:
         have = nodes.get(n.id)
@@ -304,10 +368,13 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     # pass 1: read everything, classify, and collect procs / include members
     files: List[Tuple[str, str, str, str]] = []
     unclassified: Dict[str, List[Tuple[str, str, Path]]] = {}  # STEM -> files of no type
+    not_scanned: List[Dict[str, str]] = _non_repo_folders(workspace, repos, config)
+    odd: List[Tuple[str, str]] = []  # untyped files that look like mainframe source
     for repo in repos:
         root = workspace / repo.path
         too_big: List[Tuple[Path, str]] = []
-        for path in iter_source_files(root, config.exclude_dirs, too_big):
+        pruned: List[Path] = []
+        for path in iter_source_files(root, config.exclude_dirs, too_big, pruned):
             rel = path.relative_to(root).as_posix()
             reader = ARCHIVE_READERS.get(path.suffix.lower())
             if reader is not None:
@@ -338,9 +405,19 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     files.append((repo.name, mrel, text, ftype))
                 elif mrel == rel:
                     _note_unclassified(unclassified, repo.name, rel, path)
+                    if _looks_mainframe(rel, text):
+                        odd.append((repo.name, rel))
         for path, reason in too_big:
             skipped.append({"repo": repo.name, "path": path.relative_to(root).as_posix(),
                             "reason": reason})
+        for d in pruned:
+            found = _source_under(d)
+            if found:
+                not_scanned.append({
+                    "repo": repo.name, "path": d.relative_to(root).as_posix(),
+                    "reason": "folder skipped by default (build output) but holds %d source "
+                              "file(s), e.g. %s" % (len(found), ", ".join(
+                                  p.relative_to(root).as_posix() for p in found[:3]))})
     # pass 2: scan with the whole estate's procs known
     for repo_name, rel, text, ftype in files:
         if ftype in NOT_ANALYZED:
@@ -358,11 +435,17 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
         refs.extend(new_refs)
     _copybooks_by_stem(refs, nodes, unclassified, ctx, skipped)
     refs.extend(_copybook_refs(refs, nodes, ctx))
+    used = {(ev.repo, ev.path) for n in nodes.values() for ev in n.evidence}
+    for repo_name, rel in odd:
+        if (repo_name, rel) not in used:
+            not_scanned.append({"repo": repo_name, "path": rel,
+                                "reason": "looks like mainframe source but its type could not "
+                                          "be recognised, so it was not analyzed"})
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
-                     _config_hosts(ctx))
+                     _config_hosts(ctx), not_scanned)
 
 
 _register_builtin_scanners()

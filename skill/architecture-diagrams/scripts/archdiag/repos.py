@@ -74,11 +74,20 @@ def discover_repos(workspace: Path) -> List[Repo]:
     return repos
 
 
+# default-skipped folders that may still hold real source (a build/ copy of a program):
+# the scan says so instead of staying silent (final review I4)
+CHECKED_SKIP_DIRS = frozenset(["target", "build", "bin", "obj", "dist"])
+
+
 def iter_source_files(root: Path, exclude_dirs: Iterable[str] = (),
-                      skipped: Optional[List[Tuple[Path, str]]] = None) -> Iterator[Path]:
+                      skipped: Optional[List[Tuple[Path, str]]] = None,
+                      pruned: Optional[List[Path]] = None) -> Iterator[Path]:
     """Source files under root. Files too large or not stat-able are left out, and, when
-    ``skipped`` is given, appended to it as (path, reason)."""
+    ``skipped`` is given, appended to it as (path, reason). Folders left out only because
+    they are in CHECKED_SKIP_DIRS (not by the user's exclude_dirs) are appended to
+    ``pruned`` when given."""
     skip = set(d.lower() for d in SKIP_DIRS) | set(str(d).lower() for d in exclude_dirs)
+    user_skip = set(str(d).lower() for d in exclude_dirs)
 
     def walk_error(e: OSError) -> None:
         if skipped is not None:
@@ -89,6 +98,11 @@ def iter_source_files(root: Path, exclude_dirs: Iterable[str] = (),
     walk_root = extended_path(str(root)) if os.name == "nt" else str(root)
     for dirpath, dirnames, filenames in os.walk(walk_root, onerror=walk_error):
         suffix = walk_suffix(dirpath, walk_root) if walk_root != str(root) else None
+        if pruned is not None:
+            here = (Path(root) / suffix) if suffix is not None else Path(dirpath)
+            for d in sorted(dirnames):
+                if d.lower() in CHECKED_SKIP_DIRS and d.lower() not in user_skip:
+                    pruned.append(here / d)
         dirnames[:] = sorted(d for d in dirnames if d.lower() not in skip)
         for name in sorted(filenames):
             if os.path.splitext(name)[1].lower() in SKIP_EXTS:
