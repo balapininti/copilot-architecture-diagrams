@@ -483,3 +483,50 @@ def test_jcllib_order_with_include_from_another_repo_is_partial(tmp_path):
     assert r.target_name == "INCPGM"
     assert "JCLLIB ORDER not mapped to repos; INCLUDE member INCMEM taken from aaa/jcl/INCMEM" \
         in r.reason
+
+
+_IDC_JOB = ("//J1      JOB (A),'X'\n//S1      EXEC PGM=IDCAMS\n"
+            "//SYSIN   DD DSN=CTL.CNTLLIB(IDCDEF),DISP=SHR\n")
+_IDC_CARDS = ("  DELETE CLM.KSDS CLUSTER PURGE\n"
+              "  DEFINE CLUSTER (NAME(CLM.KSDS) INDEXED -\n"
+              "         KEYS(10 0))\n"
+              "  REPRO INDATASET(CLM.FLAT) OUTDATASET(CLM.KSDS)\n")
+
+
+def test_idcams_sysin_member_in_the_repo_is_read(tmp_path):
+    # A3: the control statements live in a file named after the member
+    i = scan_repos(tmp_path, {"r": {"jcl/J1.jcl": _IDC_JOB, "cntl/IDCDEF": _IDC_CARDS}})
+    refs = step_refs(i, "r/jcl/J1.jcl#S1")
+    got = {(r.op, r.target_name) for r in refs}
+    assert {("delete", "CLM.KSDS"), ("write", "CLM.KSDS"), ("read", "CLM.FLAT")} <= got
+    flat = [r for r in refs if r.target_name == "CLM.FLAT"][0]
+    assert (flat.evidence.repo, flat.evidence.path, flat.evidence.line) == ("r", "cntl/IDCDEF", 4)
+    assert "INDATASET" in flat.evidence.text and flat.reason is None
+    assert not any(r.target_name is None and r.op != "runs" for r in refs)
+    assert not any(n["path"] == "cntl/IDCDEF" for n in i.not_scanned)
+
+
+def test_idcams_sysin_member_found_once_in_another_repo_is_read(tmp_path):
+    i = scan_repos(tmp_path, {"r": {"jcl/J1.jcl": _IDC_JOB},
+                              "s": {"cntl/IDCDEF.cntl": _IDC_CARDS}})
+    flat = [r for r in step_refs(i, "r/jcl/J1.jcl#S1") if r.target_name == "CLM.FLAT"][0]
+    assert (flat.evidence.repo, flat.evidence.path) == ("s", "cntl/IDCDEF.cntl")
+
+
+def test_idcams_sysin_dataset_not_in_the_repos_is_a_partial_note(tmp_path):
+    i = scan_repos(tmp_path, {"r": {"jcl/J1.jcl": _IDC_JOB}})
+    notes = [r for r in step_refs(i, "r/jcl/J1.jcl#S1") if r.target_name is None]
+    assert len(notes) == 1
+    assert notes[0].reason == "IDCAMS control statements in CTL.CNTLLIB(IDCDEF) not in these repos"
+    assert notes[0].evidence.line == 3
+
+
+def test_idcams_sysin_member_in_two_other_repos_is_a_partial_note(tmp_path):
+    i = scan_repos(tmp_path, {"r": {"jcl/J1.jcl": _IDC_JOB},
+                              "s": {"cntl/IDCDEF": _IDC_CARDS},
+                              "t": {"cntl/IDCDEF": "  DELETE OTHER.KSDS\n"}})
+    refs = step_refs(i, "r/jcl/J1.jcl#S1")
+    notes = [r for r in refs if r.target_name is None]
+    assert len(notes) == 1 and "found in 2 places" in notes[0].reason
+    assert "s/cntl/IDCDEF" in notes[0].reason and "t/cntl/IDCDEF" in notes[0].reason
+    assert not any(r.target_name in ("CLM.FLAT", "OTHER.KSDS") for r in refs)

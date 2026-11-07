@@ -54,6 +54,11 @@ class ScanContext:
     # COBOL copybooks (pass 2): NAME -> the Refs their own text makes (CALL, SQL, CICS, MQ,
     # nested COPY), with src "copybook:NAME"; attributed to every program that COPYs them
     copybook_refs: Dict[str, List[Ref]] = field(default_factory=dict)
+    # files of no type that may be PDS members a job names as data (IDCAMS SYSIN
+    # DSN=LIB(MEMBER)): MEMBER -> [(repo, relpath, path)], read on demand (pass 1)
+    members: Dict[str, List[Tuple[str, str, Path]]] = field(default_factory=dict)
+    # (repo, relpath) of member files a scanner read: they are analyzed, not "odd"
+    used_files: Set[Tuple[str, str]] = field(default_factory=set)
 
 
 # file type -> scanner(repo, relpath, text, ctx) -> (nodes, refs); registered by later tasks
@@ -333,6 +338,20 @@ def _note_unclassified(unclassified: Dict[str, List[Tuple[str, str, Path]]], rep
             (repo, rel, path))
 
 
+# extensions a PDS member file of control statements may carry
+MEMBER_EXTS = frozenset(["", ".cntl", ".ctl", ".card", ".cards", ".sysin", ".parm", ".txt",
+                         ".inc", ".mem", ".idcams"])
+
+
+def _note_member(ctx: ScanContext, repo: str, rel: str, path: Path) -> None:
+    base = rel.rsplit("/", 1)[-1]
+    dot = base.rfind(".")
+    ext = base[dot:].lower() if dot > 0 else ""
+    if ext in MEMBER_EXTS:
+        ctx.members.setdefault((base[:dot] if dot > 0 else base).upper(), []).append(
+            (repo, rel, path))
+
+
 def _copy_names(refs: List[Ref]) -> Set[str]:
     return {r.target_name.strip().upper() for r in refs
             if r.op == "copy" and r.target_kind == "copybook" and r.target_name}
@@ -451,6 +470,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     files.append((repo.name, mrel, text, ftype))
                 elif mrel == rel:
                     _note_unclassified(unclassified, repo.name, rel, path)
+                    _note_member(ctx, repo.name, rel, path)
                     if _looks_mainframe(rel, text):
                         odd.append((repo.name, rel))
         for path, reason in too_big:
@@ -482,6 +502,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     _copybooks_by_stem(refs, nodes, unclassified, ctx, skipped)
     refs.extend(_copybook_refs(refs, nodes, ctx))
     used = {(ev.repo, ev.path) for n in nodes.values() for ev in n.evidence}
+    used |= ctx.used_files
     for repo_name, rel in odd:
         if (repo_name, rel) not in used:
             not_scanned.append({"repo": repo_name, "path": rel,

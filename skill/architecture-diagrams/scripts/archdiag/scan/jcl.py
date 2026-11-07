@@ -4,6 +4,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
+from ..textio import drop_sequence_area
 from . import ScanContext
 
 UTILITIES = frozenset([
@@ -703,11 +704,12 @@ class _Scanner:
             self.emit_ftp(st, ev, add)
 
     @staticmethod
-    def _join_data(dd: _DD) -> Tuple[str, List[Tuple[int, int, str]]]:
-        """Join in-stream lines (dropping trailing - / + continuation marks), keeping line offsets."""
+    def _join_data(dd) -> Tuple[str, List[Tuple[int, int, str]]]:
+        """Join in-stream lines (dropping trailing - / + continuation marks), keeping line
+        offsets. ``dd`` is a _DD or its data lines."""
         text = ""
         offs: List[Tuple[int, int, str]] = []
-        for line, evtext, rv, _n in dd.data:
+        for line, evtext, rv, _n in (dd.data if isinstance(dd, _DD) else dd):
             offs.append((len(text), line, evtext))
             piece = rv.rstrip()
             if piece.endswith("-") or piece.endswith("+"):
@@ -733,47 +735,106 @@ class _Scanner:
         a.update(extra)
         add(op, "dataset", name, ev, _reason(_unres_names(name)), a)
 
+    def control_member(self, member: str
+                       ) -> Tuple[Optional[Tuple[str, str, List[Tuple[int, str, str, List[str]]]]],
+                                  Optional[str]]:
+        """The file holding PDS member ``member`` (control statements): one in the job's own
+        repo, else the only one in the estate. Returns ((repo, path, data lines), None), or
+        (None, why) when several different copies leave it open, or (None, None)."""
+        from ..textio import read_source
+        pool = self.ctx.members.get(member.upper(), [])
+        own = [m for m in pool if m[0] == self.repo]
+        pool = sorted(own or pool, key=lambda m: (m[0], m[1]))
+        if not pool:
+            return None, None
+        texts = []
+        for repo, rel, path in pool:
+            try:
+                texts.append(read_source(path))
+            except (OSError, ValueError):
+                texts.append(None)
+        if len(set(_norm_text(t) if t is not None else None for t in texts)) > 1:
+            return None, "member %s found in %d places: %s" % (
+                member, len(pool), ", ".join("%s/%s" % (m[0], m[1]) for m in pool))
+        if texts[0] is None:
+            return None, None
+        repo, rel, _path = pool[0]
+        self.ctx.used_files.add((repo, rel))
+        data = []
+        for no, raw in enumerate(texts[0].split("\n"), 1):
+            ln = drop_sequence_area(raw.rstrip())
+            if ln.strip():
+                data.append((no, ln.strip(), ln, _unres_names(ln)))
+        return (repo, rel, data), None
+
     def emit_idcams(self, st: _Step, add) -> None:
         """IDCAMS control statements in SYSIN: REPRO / PRINT INDATASET (read) and
         OUTDATASET (write), DEFINE ... NAME (write: it creates the dataset), DELETE
-        (delete), and INFILE / OUTFILE ddnames, which set how the step's DDs are used."""
+        (delete), and INFILE / OUTFILE ddnames, which set how the step's DDs are used.
+        SYSIN may name a dataset instead (DSN=LIB(MEMBER)): a file named MEMBER in the
+        job's repo (or only one in the estate) is read as the statements; otherwise a
+        partial note says where they are."""
         for dd in st.dds:
-            if dd.ddname != "SYSIN" or not dd.data:
+            if dd.ddname != "SYSIN":
                 continue
-            text, offs = self._join_data(dd)
-            text = _IDC_COMMENT.sub(lambda m: " " * len(m.group(0)), text)
-            cmds = list(_IDC_CMD.finditer(text))
-            for k, m in enumerate(cmds):
-                cmd = m.group(1).upper()
-                end = cmds[k + 1].start() if k + 1 < len(cmds) else len(text)
-                seg_at, seg = m.end(), text[m.end():end]
+            if dd.data:
+                self.idcams_statements(st, dd, dd.data, dd.repo, dd.path, add)
+                continue
+            dsn = next((v for k, v, _n in dd.params if k in ("DSN", "DSNAME")), None)
+            if not dsn:
+                continue
+            full = _unquote(dsn).upper()
+            if full.startswith("*.") or full == "NULLFILE":
+                continue
+            _name, _gdg, member = _split_dsn(full)
+            found, why = self.control_member(member) if member else (None, None)
+            if found is None:
+                reason = "IDCAMS control statements in %s not in these repos" % full
+                if why:
+                    reason = "IDCAMS control statements in %s: %s" % (full, why)
+                add("update", "dataset", None, Evidence(dd.repo, dd.path, dd.line, dd.text),
+                    reason, {"ddname": dd.ddname, "via": "idcams", "sysin": full})
+                continue
+            mrepo, mrel, data = found
+            self.idcams_statements(st, dd, data, mrepo, mrel, add)
 
-                def ref(op: str, raw: str, pos: int) -> None:
-                    line, evtext = self._line_at(offs, seg_at + pos)
-                    self._dataset_ref(add, dd, op, raw.strip("'"),
-                                      Evidence(dd.repo, dd.path, line, evtext), {"via": "idcams"})
-                if cmd in ("REPRO", "PRINT"):
-                    for o in _IDC_OPT.finditer(seg):
-                        kw, val = o.group(1).upper(), o.group(2).strip()
-                        if kw in ("INDATASET", "IDS"):
-                            ref("read", val, o.start())
-                        elif kw in ("OUTDATASET", "ODS"):
-                            ref("write", val, o.start())
-                        elif kw in ("INFILE", "IFILE"):
-                            st.dd_modes[val.split()[0].upper()] = "read"
-                        elif kw in ("OUTFILE", "OFILE"):
-                            st.dd_modes[val.split()[0].upper()] = "write"
-                elif cmd == "DEFINE":
-                    n = _IDC_NAME.search(seg)
-                    if n:
-                        ref("write", n.group(1), n.start())
-                elif cmd == "DELETE":
-                    d = _IDC_DELETE.match(seg)
-                    if d:
-                        names = d.group(1) or d.group(2)
-                        for nm in re.finditer(r"'?([A-Za-z0-9#$@&][A-Za-z0-9#$@&.()+-]*)'?",
-                                              names):
-                            ref("delete", nm.group(1), d.start())
+    def idcams_statements(self, st: _Step, dd: _DD,
+                          data: List[Tuple[int, str, str, List[str]]], repo: str, path: str,
+                          add) -> None:
+        text, offs = self._join_data(data)
+        text = _IDC_COMMENT.sub(lambda m: " " * len(m.group(0)), text)
+        cmds = list(_IDC_CMD.finditer(text))
+        for k, m in enumerate(cmds):
+            cmd = m.group(1).upper()
+            end = cmds[k + 1].start() if k + 1 < len(cmds) else len(text)
+            seg_at, seg = m.end(), text[m.end():end]
+
+            def ref(op: str, raw: str, pos: int) -> None:
+                line, evtext = self._line_at(offs, seg_at + pos)
+                self._dataset_ref(add, dd, op, raw.strip("'"),
+                                  Evidence(repo, path, line, evtext), {"via": "idcams"})
+            if cmd in ("REPRO", "PRINT"):
+                for o in _IDC_OPT.finditer(seg):
+                    kw, val = o.group(1).upper(), o.group(2).strip()
+                    if kw in ("INDATASET", "IDS"):
+                        ref("read", val, o.start())
+                    elif kw in ("OUTDATASET", "ODS"):
+                        ref("write", val, o.start())
+                    elif kw in ("INFILE", "IFILE"):
+                        st.dd_modes[val.split()[0].upper()] = "read"
+                    elif kw in ("OUTFILE", "OFILE"):
+                        st.dd_modes[val.split()[0].upper()] = "write"
+            elif cmd == "DEFINE":
+                n = _IDC_NAME.search(seg)
+                if n:
+                    ref("write", n.group(1), n.start())
+            elif cmd == "DELETE":
+                d = _IDC_DELETE.match(seg)
+                if d:
+                    names = d.group(1) or d.group(2)
+                    for nm in re.finditer(r"'?([A-Za-z0-9#$@&][A-Za-z0-9#$@&.()+-]*)'?",
+                                          names):
+                        ref("delete", nm.group(1), d.start())
 
     def emit_ndm(self, st: _Step, ev: Evidence, add) -> None:
         got = False
