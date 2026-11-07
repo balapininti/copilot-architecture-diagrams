@@ -1,88 +1,88 @@
 # Acceptance: Windows, offline, Copilot
 
-Task 19 of the architecture-diagrams skill. The build machine is macOS with Python 3.14 only:
+Task 19 of the architecture-diagrams skill. The build machine is macOS (Python 3.14 in `.venv`, plus the system Python 3.9.6), with
 no Windows, PowerShell, Copilot, VS Code agent mode, Office or draw.io. So this file has two
 parts. **Run here (results)** holds checks that were actually run, with real output.
 **To run on Windows (checklist)** holds everything else, with a blank result column. Nothing in
 the second part has been run, and none of it is marked as passed.
 
-Date of the run here: 2026-11-07. Commit under test: branch `build/v1`, HEAD `f69d1de` (the first version of this file), archdiag 0.1.0. `.venv` runs Python 3.14.4 (`.venv/bin/python --version`), so the pytest run here is **not** a 3.9 run.
+Date of the run here: 2026-11-07. Release under acceptance: archdiag **0.1.3** (`archdiag/__init__.py`, `pyproject.toml`; cache schema 4). Commit under test: branch `fix/outstanding`, HEAD `ab5a151` (all fix batches A to E applied; this file is committed on top of it and changes no code). Every check in the table below was re-run on that commit; earlier results (0.1.0 at `f69d1de`) are replaced.
 
-Release under acceptance: archdiag **0.1.2** (`archdiag/__init__.py`, `pyproject.toml`; cache schema 3), the REST host-tie fix (Rulings 38 and 39) on top of the final fix wave on `build/v1`; the product code of 0.1.1 was as of commit `4a60c00`. The table below was recorded at `f69d1de`. For 0.1.1 only checks 1 and 2a were re-run here (not yet re-run for 0.1.2): 1 gave **PASS** (full suite green, see `.superpowers/sdd/2026-11-06-architecture-diagram-skill/final-fix-report.md`), 2a parsed all 43 files as Python 3.9. Run the rest of this file, and the Windows checklist, on the 0.1.2 HEAD.
+Two Pythons were used. `.venv/bin/python` is Python 3.14.4 and runs the pytest suite. `/usr/bin/python3` is the macOS system **Python 3.9.6** (the lowest supported version), run with `-I` (isolated: no user site-packages, no environment variables, no current folder on the path); it has no pytest and none could be installed offline (pytest 9 no longer supports 3.9; a pytest 8.3 or older wheel is needed once), so **the full pytest suite was not run on 3.9 here**. That is now Windows step W1.4a.
 
 ## Run here (results)
 
 Working copy: the fixture was copied to
-`/private/tmp/claude-501/-Users-balakrishnapininti-workspace-mainframe-modernization-analyst/d6db0ae9-eb9a-402e-a301-bfac84499e51/scratchpad/acceptance/ws` (a copy of `tests/fixtures/claims-estate`); the fixture itself was never written to.
-`python3` below is the system Python 3.14.4 (`/Library/Frameworks/Python.framework/Versions/3.14/bin/python3`), not the venv.
+`/private/tmp/claude-501/-Users-balakrishnapininti-workspace-mainframe-modernization-analyst/d6db0ae9-eb9a-402e-a301-bfac84499e51/scratchpad/acc_e/ws` (a copy of `tests/fixtures/claims-estate`); the fixture itself was never written to.
 
 | # | Check | Command | Result |
 |---|---|---|---|
-| 1 | Full test suite | `.venv/bin/python -m pytest -q` | **PASS**: 424 passed in 8.34s |
-| 2a | Syntax valid as Python 3.9 (syntax only: `feature_version` does not check runtime APIs missing from 3.9; W1 is the real 3.9 check) | `python3 -I -c "ast.parse(src, f, feature_version=(3,9))"` over all `.py` under `skill/architecture-diagrams/scripts` | **PASS**: 43 files parsed |
-| 2b | No 3.10+ constructs | grep for `f"{x=}"`, `match`/`case`, `A \| B` annotations, `removeprefix/removesuffix`, `zip(strict=)`, `dataclass(slots/kw_only)`, `TypeAlias`, `ParamSpec` | **PASS**: no hits. All 43 files have `from __future__ import annotations` |
-| 2c | Stdlib only (import names only, compared with 3.14's `sys.stdlib_module_names`, so a module added after 3.9 would not be caught; W1 is the real check) | **PASS**: only non-stdlib name is `archdiag`, the skill's own package |
-| 3 | CLI end to end, system python3, no third-party packages | see list below | **PASS**: every command exit 0 |
-| 3b | No network references | grep all outputs for `http://` / `https://` | **PASS** for diagrams (see below) |
-| 4 | Every output parses | xml.etree for `.svg`/`.drawio`; json for `.excalidraw`/`.json`; `.md` non-empty; HTML scanned for `src=`/`href=` (non-fragment, non-data), `@import`, `url(http...)` | **PASS**: 58 files checked, 0 failures |
-| 5 | Screenshots vs samples | headless Chrome, see "Visual check" | **PASS with known issues** |
-| 6 | HTML interaction | headless Chrome `--virtual-time-budget=3000 --dump-dom` | **PASS** |
+| 1 | Full test suite (Python 3.14.4) | `.venv/bin/python -m pytest -q` | **PASS**: 607 passed in 19.97s. Includes the headless-Chrome HTML test (E9), which ran (Chrome is installed here) |
+| 1b | Full test suite on Python 3.9 | needs pytest on 3.9 | **NOT RUN**: no pytest for the system 3.9.6 offline. Windows W1 runs it |
+| 2a | Syntax valid as Python 3.9 | `/usr/bin/python3 -I`: `ast.parse(src, f, feature_version=(3, 9))` over every `.py` under `skill/architecture-diagrams/scripts` | **PASS**: 43 files parsed by Python 3.9.6 itself |
+| 2b | No 3.10+ constructs | grep for `f"{x=}"`, `match`/`case`, `removeprefix/removesuffix`, `zip(strict=)`, `dataclass(slots/kw_only)`, `TypeAlias`, `ParamSpec`; check every file has `from __future__ import annotations` | **PASS**: no hits; all 43 files have the future import |
+| 2c | Imports work on 3.9 and are stdlib only | `/usr/bin/python3 -I`: import `archdiag` and every submodule (`pkgutil.walk_packages`); compare every top-level import name with `tests/stdlib39.py` (the fixed 3.9 list) | **PASS**: 42 modules imported under 3.9.6; the only non-stdlib name is `archdiag` |
+| 3 | CLI end to end on Python 3.9.6, isolated | `/usr/bin/python3 -I skill/architecture-diagrams/scripts/run.py <cmd> --workspace <copy>`, every level with `--style all` (list below) | **PASS**: 17 commands, every exit code 0, nothing on stderr |
+| 3b | No network references | regex `https?://` over every output | **PASS** for diagrams (see below) |
+| 4 | Every output parses | xml.etree for `.svg`/`.drawio`; json for `.excalidraw`/`.json`; `.md` non-empty; HTML scanned for `src=`/`href=` (non-fragment, non-data), `@import`, `url(http...)` | **PASS**: 74 files checked, 0 failures |
+| 5 | Screenshots vs samples | headless Chrome at each SVG's own size, all 28 SVGs of check 3 | **PASS with known issues** (see Visual check) |
+| 6 | HTML interaction | headless Chrome `--virtual-time-budget=3000 --dump-dom` on `repomap-c.html` with a probe script | **PASS** |
 
 ### 3. Commands and results
 
-All run as `python3 skill/architecture-diagrams/scripts/run.py <cmd> ... --workspace <copy>`; every exit code was 0.
+All run as `/usr/bin/python3 -I skill/architecture-diagrams/scripts/run.py <cmd> ... --workspace <copy>` (Python 3.9.6); every exit code was 0 and stderr was empty.
 
-- `scan`: `Scanned 6 repo(s), 79 things found, 79 links (61 confirmed, 8 partly known, 10 loose ends)`; wrote `inventory.json` and `links.json`.
-- `summary`: printed the repo, application and link counts and top loose and partial links; wrote `summary.md`.
-- `list --what jobs|transactions|pages|endpoints|applications|repos|programs`: all seven exit 0. Examples: jobs gave `CLMD100`, `CLMD100` (test copy) and `CLMD300`; pages gave `claims/:id`; applications gave 6.
-- `init-config`: `Wrote .../archdiag.config.json with environment_qualifiers: PROD, TEST` and asked the user to confirm. `init-config` overwrites `archdiag.config.json` without asking. On the copy it overwrote the fixture's own config (`{"environment_qualifiers": ["PROD","TEST"]}`), which was the same content.
-- `draw --style all` for each level. Every run printed nine files (4 SVG, `.drawio`, `.md`, `.html`, `.excalidraw`, `*-links.md`) and a summary:
+- `scan`: `Scanned 6 repo(s), 94 things found, 94 links (68 confirmed, 16 partly known, 10 loose ends)`; wrote `inventory.json` and `links.json`.
+- `summary`: printed the repo, application and link counts and the loose and partly known links (47 lines); wrote `summary.md`.
+- `list --what jobs|transactions|pages|endpoints|applications|repos|programs`: all seven exit 0, one `NAME<TAB>description (repo/path)` line per item. Examples: `CLMD100	steps run SORT, CLMB200, IKJEFT01 +2 more (claims-batch/jcl/CLMD100.jcl)` (and the `test/` copy), `claims/:id	component ClaimDetailsComponent (claims-portal/src/app/app-routing.module.ts)`, `GET /api/claims/{}	handler class ClaimController (...)`; applications gave 6, programs 10.
+- `init-config`: `Wrote .../archdiag.config.json with environment_qualifiers: PROD, TEST`.
+- `draw --style all` for each level. Every run wrote nine files (4 SVG, `.drawio`, `.md`, `.azure.md`, `.html`, `.excalidraw`, plus `*-links.md`) and a summary:
 
 | Command | Summary line printed |
 |---|---|
-| `draw --level landscape` | 17 nodes, 22 links: 14 confirmed, 2 partly known, 6 loose ends |
-| `draw --level application --scope claims-online` | 26 nodes, 21 links: 13 confirmed, 3 partly known, 5 loose ends |
+| `draw --level landscape` | 20 nodes, 30 links: 18 confirmed, 6 partly known, 6 loose ends |
+| `draw --level application --scope claims-online` | 33 nodes, 26 links: 15 confirmed, 6 partly known, 5 loose ends |
 | `draw --level flow --scope CLMD100` | 18 nodes, 20 links: 16 confirmed, 2 partly known, 2 loose ends (also printed `Note: Also exists as: claims-batch/jcl/test/CLMD100.jcl`) |
-| `draw --level flow --scope claims/:id` | 25 nodes, 27 links: 20 confirmed, 3 partly known, 4 loose ends. File names are `flow-claims--id-*` (`/` and `:` become `-`) |
-| `draw --level repomap` | 19 nodes, 27 links: 13 confirmed, 4 partly known, 10 loose ends |
-| `draw --level repomap --scope claims-batch` | 8 nodes, 9 links: 5 confirmed, 1 partly known, 3 loose ends |
+| `draw --level flow --scope claims/:id` | 25 nodes, 27 links: 19 confirmed, 4 partly known, 4 loose ends. File names are `flow-claims--id-*` |
+| `draw --level flow --scope CLMI` | 14 nodes, 15 links: 10 confirmed, 3 partly known, 2 loose ends |
+| `draw --level repomap` | exit 0, nine files |
+| `draw --level repomap --scope claims-batch` | exit 0, nine files |
 
-Total files in the output folder: 58 (including `inventory.json`, `links.json`, `summary.md`, `archdiag.config.json`).
+Total files in the output folder: 74 (including `inventory.json`, `links.json`, `summary.md`, `archdiag.config.json`).
 
 ### 3b. Network references
 
-- In the `.svg`, `.html`, `.drawio` and `.excalidraw` outputs the only URL is the SVG namespace `http://www.w3.org/2000/svg` (30 occurrences). No external script, stylesheet, font or image.
-- `inventory.json`, `links.json` and `*-links.md` contain `https://rates.example.com/v1/rates` and `https://zcee.internal:9443/...`. These are strings copied from the fixture's source code as evidence, not references the tool loads.
-- The HTML embeds the same evidence text inside a JSON block with escaped slashes (`https:\/\/rates.example.com/v1/rates`). It is displayed text only.
+- In the `.svg`, `.html`, `.drawio` and `.excalidraw` outputs the only URL is the SVG namespace `http://www.w3.org/2000/svg` (35 occurrences). No external script, stylesheet, font or image.
+- `inventory.json`, `links.json`, `landscape-links.md` and `repomap-links.md` contain `https://rates.example.com/...`, `https://partner.example.com/...` and `https://zcee.internal:9443/...`. These are strings copied from the fixture's source code as evidence, not references the tool loads.
+- The HTML pages embed the same evidence text inside a JSON block with escaped slashes (`https:\/\/rates.example.com/...`). It is displayed text only.
 
 ### 6. HTML interaction
 
-A copy of `repomap-c.html` had a script appended that dispatches a click on the first `g[data-edge]` and writes `#panel` text to `document.title`. Run with `--virtual-time-budget=3000 --dump-dom`. Title became:
-`PANEL:← all links table CLMS.POLICYconfirmed claims-api → claims-db Repo File Line Code claims-api src/main/java/com/acme/claims/ClaimRepository.java 15 return jdbcTemplate.query(...) claims-db ddl/POLICY.sql 1 CREATE TABLE CLMS.POLICY`,
-and the dumped DOM contains the evidence `<table>` (columns Repo, File, Line, Code). Pass.
+A copy of `repomap-c.html` had a probe script appended that clicks the first `g[data-edge]`, records the `#panel` text, then types `CLMREC.cpy` in the search box. Run with `--virtual-time-budget=3000 --dump-dom`. The panel showed
+`← all links table CLMS.CLMHIST partial claims-api → claims-batch Repo File Line Code claims-api src/main/java/com/acme/claims/ClaimHistoryRepository.java 16 return jdbcTemplate.queryForList("SELECT CLM_ID FROM CLMS.CLMHIST"); claims-batch cobol/CLMB510.cbl 9 EXEC SQL INSERT INTO CLMS.CLMHIST ...`,
+the dumped DOM contains the evidence `<table>` (columns Repo, File, Line, Code), and the search left 4 of 70 clickable groups lit (the lines whose evidence names `CLMREC.cpy`). Pass. The same search and click run in the test suite (`tests/test_style_c.py::test_html_search_and_click_run_in_a_browser`).
 
 ### 5. Visual check (headless Chrome, macOS)
 
-Screenshots were taken at each SVG's own size: `flow-clmd100` styles a, b, d (and c SVG), `landscape-a`, `landscape-c`, `flow-claims--id-a`, and the repomap HTML; compared with `docs/samples/mainframe-samples.html`. Reference PNGs are committed in `docs/acceptance/` (`style-a-flow-clmd100.png`, `style-b-flow-clmd100.png`, `style-c-flow-clmd100-svg.png`, `style-d-flow-clmd100.png`, `style-c-repomap-html.png`, plus `style-a-flow-claims-id.png` and `style-a-landscape.png`). Windows checks compare against them.
+Screenshots were taken of all 28 SVGs of check 3 at their own size, and of `repomap-c.html` at 1500x1000; landscape, application, both flows, CLMI and the repomap were read in all four styles and compared with `docs/samples/mainframe-samples.html`. Reference PNGs are committed in `docs/acceptance/` (`style-a-flow-clmd100.png`, `style-b-flow-clmd100.png`, `style-c-flow-clmd100-svg.png`, `style-d-flow-clmd100.png`, `style-c-repomap-html.png`, `style-a-flow-claims-id.png`, `style-a-landscape.png`; refreshed after Batch E). Windows checks compare against them.
 
 What matches the samples:
-- Style A: same icon set (JCL page, gear utilities, CBL files, DB2/VSAM cylinders, GDG stack, printer, cloud), the same STEP lane, edge labels in pills, red loose-end dots with "no reader/writer found", orange dotted partial lines, legend. Close to the sample.
-- Style B: blue C4 boxes with `[type]` subtitles, cylinders for datasets, red loose-end boxes. Matches the sample's look.
-- Style D: hand-drawn rough boxes, pastel fills per kind, yellow sticky notes for loose ends and notes. Matches the sample's whiteboard look.
-- Style C HTML: repo cards with file rows, dark pill labels on links, side panel "Links between repos" with search box and a list tagged confirmed/partial/loose/shared code. Matches the sample's card style; the click test shows the evidence table.
-- Step numbers: `flow-claims--id-a.svg` draws every step number as a small circle with the number in it (1 to 27, the same for every number; Batch C, C4). The CLMD100 flow has no numbered requests (steps are labelled STEP010 and so on), so use the `claims/:id` flow for that check.
+- Style A: same icon set (JCL page, gear utilities, CBL files, DB2/VSAM cylinders, GDG stack, printer, cloud), the same STEP lane, edge labels in pills, red loose-end dots with "no reader/writer found", orange dotted partial lines, legend.
+- Style B: blue C4 boxes with `[type]` subtitles, cylinders for datasets, red loose-end boxes.
+- Style D: hand-drawn rough boxes, pastel fills per kind, yellow sticky notes for loose ends and notes.
+- Style C HTML: repo cards with file rows, dark pill labels on links, side panel "Links between repos" with search box and a list tagged confirmed/partial/loose/shared code; the click test shows the evidence table.
+- Step numbers: `flow-claims--id-*.svg` draws every step number (1 to 27) as a small circle with the number in it.
+- Line labels: a label sits on its own line; where no spot on the line is clear, the line carries a small numbered marker (circle for a step, square otherwise) and the label is listed under "Line labels (marked on the lines)". After Batch E the `claims/:id` flow keys 2 labels over the four styles (style C only; it keyed 18), CLMD100 and CLMI key none, the landscape keys 1 to 3 per style and the whole-estate repo map 9 to 14 per style.
 
 ### Known issues
 
-These are readability gaps, not failures of any check. The controller decides which to fix.
+These are readability gaps, not failures of any check.
 
-1. **Edge bundles in the landscape (style A).** In `landscape-a.svg` several orthogonal lines run in parallel and overlap in the middle column (around the claims-online and claims-batch boxes). Labels such as "SQL · CLAIM", "SQL · POLICY", "MQ GET" sit on top of the bundle, so it is hard to follow one line from end to end. The sample's landscape has far fewer crossings.
-2. **Lines cross through boxes.** In the landscape, lines from claims-api and claims-batch cross the claims-online group box and pass close to the claims-batch box. Same for the `claims/:id` flow, where the lines out of CLMO100 form a thick bundle down to CLMU, CLMS.CLAIM and PROD.CLM.MASTER.KSDS.
-3. **Very wide flow diagram.** `flow-claims--id-*.svg` is 3300 to 3774 px wide (the sample is about 1100 px). It scales down in Word and PowerPoint, and the 7 to 8 px text then becomes unreadable on a page; edge pills are small. Workarounds until it is fixed: draw a smaller scope (a single transaction or job, or `application` level); view the SVG or the style C HTML in a browser, where it can be zoomed; or put it on an A3 landscape page in Word or PowerPoint (Layout > Size > A3, Orientation > Landscape).
-4. **Step numbers.** The `claims/:id` flow has 27 numbered steps. Since Batch C (C4) each is a drawn circle with the number as text, so 21 looks like 1 and no font needs circled digits; the text-only copies (draw.io, Mermaid, Excalidraw) write `(n)`. The Windows checklist confirms the circles look right in Word.
-5. **Style A flow labels.** In `flow-clmd100-a`, "read (0)" and "write" pills near PROD.CLAIMS.DAILY and REPORT sit close together on crossing diagonals. Readable, but the sample lays them out more cleanly.
-6. **Style C HTML at 1500 px.** The map is wider than the map pane (about 1919 px wide for the whole-estate map), so the right-hand cards are cut off until the page is scrolled. Not checked: whether the pane scrolls or zooms in a real browser at 1920 px.
-7. **Not compared:** `landscape-b` and `repomap-b/d` screenshots were not individually inspected; they were only parsed.
+1. **Busy landscape.** The landscape (all styles) still has long parallel runs between the middle columns; every label sits on its own line or is keyed, but following one line end to end takes effort. The sample's landscape has far fewer links.
+2. **Repo map keys many labels.** The whole-estate repo map has 27+ links between few cards; 9 to 14 per style go to the key. Loose stubs now go straight to their missing box, or round the cards at right angles where a straight line would cross a card (E7).
+3. **Wide pictures.** Wide layered views wrap into bands (Batch C): `flow-claims--id-*.svg` is now 1796 to 1978 px wide (it was 3300 to 3774), the landscape 1941 to 2014 px. At Word page width the text is small; use A3 landscape or the HTML for those.
+4. **Style C HTML at 1500 px.** The whole-estate map (1920 px wide) is wider than the map pane at 1500 px, so the right-hand cards are cut off until the pane is scrolled. Not checked: behaviour in a real browser at 1920 px (W5.11).
+5. Fixed since the last run and checked here: the CLMD100 "write" / "read (0)" pills at a line crossing (E6), lines crossing in the channel between bands (E2), loose-stub curves looping round their own card (E7), close line ends on short application-view boxes (E8).
 
 ## To run on Windows (checklist)
 
@@ -113,9 +113,10 @@ test write its name (`tests\test_x.py::test_y`) and the first 5 lines of its tra
 | Step | Command | Pass when | Result |
 |---|---|---|---|
 | 1 | `py -3.9 --version` | prints `Python 3.9.x` | |
-| 2 | `py -3.9 -m venv .venv39` then `.venv39\Scripts\python -m pip install pytest` (the only install; the only step that needs a network or an internal index) | pytest installs | |
+| 2 | `py -3.9 -m venv .venv39` then `.venv39\Scripts\python -m pip install "pytest<8.4"` (the only install; the only step that needs a network or an internal index) | pytest installs | |
 | 3 | Turn the network off (Wi-Fi off, Ethernet disabled). Confirm: `Test-NetConnection github.com -Port 443` | `TcpTestSucceeded : False` | |
-| 4 | `.venv39\Scripts\python -m pytest -q` from the repo root | `424 passed` (or the current count); no skips or errors that mention the network | |
+| 4 | `.venv39\Scripts\python -m pytest -q` from the repo root | `607 passed` (or the current count; the headless-Chrome HTML test is skipped when Chrome is not installed, which is fine); no skips or errors that mention the network | |
+| 4a | Not run anywhere yet: this is the first full pytest run on Python 3.9 (the macOS check ran 3.9.6 syntax, imports and the CLI only). If pip offers pytest 9 or later, install `pytest<8.4` instead (pytest 9 needs Python 3.10) | pytest installs and step 4 passes on 3.9 | |
 | 5 | Copy the repo to `C:\work dir\repo` (path with a space) and run `.venv39\Scripts\python -m pytest -q -p no:cacheprovider` there | same count passes | |
 | 6 | Turn the network back on; `Test-NetConnection github.com -Port 443` | `TcpTestSucceeded : True` | |
 
@@ -187,13 +188,13 @@ Reference images are in `docs/acceptance/` (committed): `style-a-flow-clmd100.pn
 | 2 | The same four in VS Code (open the `.svg`, then the preview) | criteria (a) to (d) | |
 | 3 | Word: Insert > Pictures > This Device, each of the four | inserted as a vector picture; criteria (a) to (d) at 100% | |
 | 4 | PowerPoint: Insert > Pictures > This Device, each of the four. Optionally Graphics Format > Convert to Shape | picture renders. Record what Convert to Shape does (works / errors / loses text); it is optional, not a failure | |
-| 5 | `flow-claims--id-a.svg` in Edge, Word and PowerPoint | every step number (1 to 27) shows as a small circle with the number centred in it; lines with a numbered marker have their label in the "Line labels" key under the picture | |
+| 5 | `flow-claims--id-a.svg` in Edge, Word and PowerPoint | every step number (1 to 27) shows as a small circle with the number centred in it; every label sits on its own line (style A keys none; `flow-claims--id-c.svg` lists RETURN TRANSID and SELECT under "Line labels") | |
 | 6 | `landscape-a.drawio` in draw.io desktop or the VS Code draw.io extension | opens without error; shapes editable; edges stay attached when a box is moved | |
 | 7 | `landscape-b.md` in a GitHub preview. Open the file first: it starts with `# Landscape` then a fence of three backticks plus `mermaid`. GitHub renders that fence | flowchart renders; `<b>` and `<br/>` show as bold and line breaks | |
 | 8 | Same content in an Azure DevOps wiki. **Azure DevOps wikis need `::: mermaid` ... `:::` instead of the backtick fence.** Paste as is first | **Record whether it renders.** If not, record that the fence must be changed for Azure DevOps (a product change; do not edit it by hand in the deliverable) | |
 | 9 | `landscape-d.excalidraw` at excalidraw.com (File > Open) or the VS Code Excalidraw extension | opens; boxes and arrows present; text editable | |
 | 10 | `repomap-c.html` in Edge with the network **off** | loads fully; clicking a line or a list row shows the evidence table (Repo, File, Line, Code); search filters the list; DevTools Network shows no external requests | |
-| 11 | Same file at 1920x1080 | note whether the map pane scrolls or fits (Known issue 6) | |
+| 11 | Same file at 1920x1080 | note whether the map pane scrolls or fits (Known issue 4) | |
 
 ### W6. Blocked-commands fallback
 
