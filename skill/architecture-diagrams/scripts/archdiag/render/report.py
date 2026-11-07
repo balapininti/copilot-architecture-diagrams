@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Node, Resolved
 from ..layout import layout_notes
 from ..views import ViewGraph
+from ..views.common import STRUCTURAL
+from .common import href
 
 GAP_KINDS = ("reader", "writer", "queue-consumer")
 MISSING_INTRO = ("These names are used but defined in none of the scanned repos — the repo "
@@ -200,6 +202,73 @@ def _missing_section(edges: List[Edge], r: Resolved) -> List[str]:
     return o
 
 
+CLICKABLE = ("The SVG (opened in a browser or VS Code) and the draw.io file are clickable: each "
+             "box opens its file or folder. Mermaid click links are switched off on GitHub and "
+             "Azure DevOps (strict mode), so the Mermaid picture is not clickable there. "
+             "Excalidraw resolves relative links against the app, not the workspace.")
+
+
+def _file_link(view: ViewGraph, path: str) -> str:
+    text = path.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    return "[%s](%s)" % (text, href(view.repo_path or view.scope or "", path))
+
+
+def _gd_head(view: ViewGraph) -> List[str]:
+    """Overview, Groups, Entry points, Job structure and the outside/shared boxes."""
+    o: List[str] = ["## Overview", "", view.overview.strip() or "No overview was written.", ""]
+    o += ["## Groups", ""]
+    groups = [n for n in view.nodes if n.kind == "group" and n.role != "ungrouped"]
+    if not groups:
+        o += ["No groups.", ""]
+    for n in groups:
+        o.append("### %s%s" % (_cell(n.label), " %s" % _cell(n.sublabel) if n.sublabel else ""))
+        o.append("")
+        if n.desc_line >= 0 and n.desc_line < len(n.detail_lines):
+            o += [n.detail_lines[n.desc_line], ""]
+        o += ["- %s" % i for i in n.info]
+        o += ["- %s" % _file_link(view, p) for p in n.members] or ["- No files."]
+        o.append("")
+    o += ["## Entry points", ""]
+    actors = [n for n in view.nodes if n.kind == "actor"]
+    if not actors:
+        o += ["None.", ""]
+    for n in actors:
+        o += ["### %s (%s)" % (_cell(n.label), _cell(n.sublabel)), ""]
+        o += ["- %s" % m for m in n.members] + [""]
+    struct = [e for e in view.edges if e.status == STRUCTURAL]
+    if struct:
+        names = {n.id: n.label for n in view.nodes}
+        o += ["## Job structure", "",
+              "These lines say a job exists; who schedules it is not in these repos. They are "
+              "not links and are not counted above.", ""]
+        o += ["- %s %s %s" % (names.get(e.src, e.src), e.label, names.get(e.dst, e.dst))
+              for e in struct]
+        o.append("")
+    other = [n for n in view.nodes if n.role == "shared" or n.id.startswith("out:")]
+    if other:
+        o += ["## Shared resources and outside this repo", ""]
+        for n in other:
+            o.append("- %s (%s)" % (_cell(n.label), _cell(n.sublabel)) if n.sublabel
+                     else "- %s" % _cell(n.label))
+            o += ["  - %s" % i for i in n.info]
+            o += ["  - %s" % m for m in (n.members if n.id.startswith("out:") else [])]
+        o.append("")
+    return o
+
+
+def _gd_tail(view: ViewGraph) -> List[str]:
+    o: List[str] = ["", "## Clickable boxes", "", CLICKABLE, "", "## Not yet grouped", ""]
+    ung = [n for n in view.nodes if n.role == "ungrouped"]
+    if ung and (ung[0].members or ung[0].info):
+        o += ["- %s" % i for i in ung[0].info]
+        o += ["- %s" % _file_link(view, p) for p in ung[0].members]
+    else:
+        o.append("None.")
+    o += ["", "## Problems in the gitdiagram file", ""]
+    o += ["- %s" % " ".join(p.split()) for p in view.problems] or ["None."]
+    return o
+
+
 def links_report(view: ViewGraph, r: Resolved) -> str:
     edges = _edges(view)
     links = _links(edges, r)
@@ -208,7 +277,11 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
         count[CONFIRMED], count[PARTIAL], count[LOOSE])
     if len(edges) != len(links):
         head += " (%d rows from %d resolver edges incl. copies)" % (len(links), len(edges))
-    o: List[str] = ["# Links: %s" % view.title, "", head, "", "## Links on this diagram", ""]
+    gd = view.level == "gitdiagram"
+    o: List[str] = ["# Links: %s" % view.title, "", head, ""]
+    if gd:
+        o += _gd_head(view)
+    o += ["## Links on this diagram", ""]
     if links:
         o += ["| From | Link | To | Status | Evidence |", "|---|---|---|---|---|"]
         for g in links:
@@ -218,7 +291,7 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
                 e.status, _cell(_evidence_cell(g, r))))
     else:
         o.append("No links are drawn on this diagram.")
-    seq = sum(1 for e in view.edges if e.kind == "sequence")
+    seq = 0 if gd else sum(1 for e in view.edges if e.kind == "sequence")
 
     for title, status, default in (("Loose ends", LOOSE, "no definition found"),
                                    ("Partly known", PARTIAL, "not fully worked out")):
@@ -244,11 +317,13 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
                          s.get("reason", "")) for s in ns] or ["None."]
 
     o += ["", "## Notes", ""]
-    notes = view.notes + layout_notes(view)
+    notes = [n for n in view.notes + layout_notes(view) if not (gd and n in view.problems)]
     o += ["- %s" % " ".join(str(n).split()) for n in notes]
     if seq:
         o.append("- %d job-structure lines (step order, SYSOUT) are drawn but are not links; "
                  "they have no row above" % seq)
     if not notes and not seq:
         o.append("None.")
+    if gd:
+        o += _gd_tail(view)
     return "\n".join(o) + "\n"

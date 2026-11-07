@@ -598,4 +598,5 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     v = ViewGraph("Gitdiagram %s" % repo, "gitdiagram", repo, vnodes, vedges, [], notes)
     v.overview = gd.overview
     v.repo_path = repo_path
+    v.problems = list(gd.problems)
     return v

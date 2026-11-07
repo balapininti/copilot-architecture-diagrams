@@ -84,6 +84,7 @@ class ViewGraph:
     notes: List[str] = field(default_factory=list)
     overview: str = ""  # gitdiagram: the paragraph drawn above the picture
     repo_path: str = ""  # gitdiagram: the repo folder, relative to the workspace (Repo.path)
+    problems: List[str] = field(default_factory=list)  # gitdiagram: problems in the file
 
 
 class ScopeError(ValueError):
