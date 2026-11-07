@@ -46,7 +46,7 @@ def _match(sel: str, node: Node) -> Optional[bool]:
     if head == "repo":
         return node.repo == rest
     if head == "path":
-        return any(fnmatchcase("%s/%s" % (e.repo, e.path) if e.repo else e.path, rest)
+        return node.repo is not None and any(fnmatchcase("%s/%s" % (e.repo, e.path) if e.repo else e.path, rest)
                    or fnmatchcase(e.path, rest) for e in node.evidence)
     if not head or not rest:
         return None
@@ -63,48 +63,81 @@ def _selectors_used(app: App, r: Resolved, problems: List[str]) -> None:
             problems.append("app %r: selector %r matches nothing" % (app.name, sel))
 
 
+def _parse_app(a: object, problems: List[str]) -> Optional[App]:
+    if not isinstance(a, dict) or not isinstance(a.get("name"), str) or not a["name"].strip():
+        problems.append("an app without a text name was ignored")
+        return None
+    name = a["name"]
+    kind = a.get("kind", "application")
+    if kind not in KINDS:
+        problems.append("app %r: unknown kind %r, using application" % (name, kind))
+        kind = "application"
+    mem = a.get("members", [])
+    if mem is None:
+        mem = []
+    if not isinstance(mem, list):
+        problems.append("app %r: members must be a list, ignored" % name)
+        mem = []
+    members = []
+    for m in mem:
+        if isinstance(m, str):
+            members.append(m)
+        else:
+            problems.append("app %r: member %r is not text, ignored" % (name, m))
+    return App(name, kind, members)
+
+
 def load_groups(path: Path, r: Resolved) -> Groups:
-    """Read groups.json. A missing or unreadable file gives the default groups; selectors and
-    link ends that match nothing are listed in ``Groups.problems`` and never raise."""
+    """Read groups.json. A missing or unreadable file gives the default groups; selectors,
+    wrong-typed fields and link ends that match nothing are listed in ``Groups.problems``
+    and never raise."""
     path = Path(path)
     if not path.is_file():
         return default_groups(r)
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
-        if not isinstance(data, dict):
-            raise ValueError("top level must be an object")
     except (OSError, ValueError) as exc:
         g = default_groups(r)
         g.problems.append("groups.json could not be read (%s); using one app per repo" % exc)
         return g
+    if not isinstance(data, dict):
+        g = default_groups(r)
+        g.problems.append("groups.json must be an object with \"apps\"; using one app per repo")
+        return g
     g = Groups([], [], [])
-    for a in data.get("apps", []) if isinstance(data.get("apps", []), list) else []:
-        if not isinstance(a, dict) or not a.get("name"):
-            g.problems.append("an app without a name was ignored")
+    apps = data.get("apps", [])
+    if apps is None:
+        apps = []
+    if not isinstance(apps, list):
+        g.problems.append("\"apps\" must be a list, ignored")
+        apps = []
+    seen = set()
+    for raw in apps:
+        app = _parse_app(raw, g.problems)
+        if app is None:
             continue
-        kind = str(a.get("kind", "application"))
-        if kind not in KINDS:
-            g.problems.append("app %r: unknown kind %r, using application" % (a["name"], kind))
-            kind = "application"
-        mem = a.get("members", [])
-        g.apps.append(App(str(a["name"]), kind, [str(m) for m in mem] if isinstance(mem, list) else []))
-    if isinstance(data, dict) and isinstance(data.get("groups"), list) and not g.apps:
-        for a in data["groups"]:  # also accept a bare list of apps under "groups"
-            if isinstance(a, dict) and a.get("name"):
-                g.apps.append(App(str(a["name"]), str(a.get("kind", "application")),
-                                  [str(m) for m in a.get("members", [])]))
+        if app.name in seen:
+            g.problems.append("duplicate app name %r ignored" % app.name)
+            continue
+        seen.add(app.name)
+        g.apps.append(app)
     for app in g.apps:
         _selectors_used(app, r, g.problems)
     # repos whose members fall back to the default app get that app added
-    have = {a.name for a in g.apps}
+    kinds = {a.name: a.kind for a in default_groups(r).apps}
     for repo in r.inventory.repos:
-        if repo.name not in have and any(
+        if repo.name not in seen and any(
                 n.repo == repo.name and app_of(g, r, n.id) == repo.name for n in r.nodes.values()):
-            d = [a for a in default_groups(r).apps if a.name == repo.name][0]
-            g.apps.append(d)
-            have.add(repo.name)
+            g.apps.append(App(repo.name, kinds[repo.name], []))
+            seen.add(repo.name)
     names = {a.name for a in g.apps}
-    for link in data.get("suggested_links", []) if isinstance(data.get("suggested_links", []), list) else []:
+    links = data.get("suggested_links", [])
+    if links is None:
+        links = []
+    if not isinstance(links, list):
+        g.problems.append("\"suggested_links\" must be a list, ignored")
+        links = []
+    for link in links:
         if not isinstance(link, dict):
             g.problems.append("a suggested link that is not an object was dropped")
             continue
@@ -114,7 +147,9 @@ def load_groups(path: Path, r: Resolved) -> Groups:
             g.problems.append("suggested link %s -> %s dropped: unknown %s"
                               % (ends[0], ends[1], ", ".join(repr(b) for b in bad)))
             continue
-        g.suggested_links.append({"from": ends[0], "to": ends[1], "note": str(link.get("note", ""))})
+        note = link.get("note", "")
+        g.suggested_links.append({"from": ends[0], "to": ends[1],
+                                  "note": "" if note is None else str(note)})
     return g
 
 
@@ -143,5 +178,5 @@ def suggested_edges(groups: Groups, r: Resolved) -> List[Edge]:
     out = []
     for s in groups.suggested_links:
         out.append(Edge(end(s["from"]), "suggested", end(s["to"]), PARTIAL,
-                        "suggested by Copilot: %s" % s["note"], []))
+                        "suggested by Copilot: %s" % s["note"] if s["note"] else "suggested by Copilot", []))
     return out
