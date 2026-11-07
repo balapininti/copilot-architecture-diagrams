@@ -19,7 +19,7 @@ from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLORS, esc, legend,
                                     legend_width, line_style, notes_block, notes_height, num,
                                     svg_doc, text, text_width, tint, wrap)
-from archdiag.render.pills import Pill, edge_svg, place_pills
+from archdiag.render.pills import Pill, edge_svg, key_svg, marker_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 
 TITLE_H = 44.0
@@ -142,9 +142,15 @@ def _stub_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
     return "<g>%s</g>" % "".join(parts)
 
 
+_KEY_INK = {"confirmed": "#0f172a", "shared_code": "#a16207", "partial": "#b45309",
+            "loose": "#b91c1c"}
+
+
 def _pill_svg(p: Pill, ox: float, oy: float) -> str:
     fill, stroke, tcol = _PILL[p.style]
     x, y = p.x + ox, p.y + oy
+    if p.marker:
+        return marker_svg(p, x, y, _KEY_INK[p.style])
     parts = ['<rect x="%s" y="%s" width="%s" height="%s" rx="%s" fill="%s" stroke="%s" '
              'stroke-width="1"/>' % (num(x), num(y), num(p.w), num(p.h),
                                      num(min(10.0, p.h / 2)), fill, stroke)]
@@ -235,8 +241,9 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
     note_w = max(width - 60, 560.0)
     width = max(width, note_w + 60)
 
+    key, key_h = key_svg(pills, 30, content_h + 6, width - 60, _KEY_INK)
     strip = evidence_strip(view, int((width - 60) / (0.55 * STRIP_SIZE)))
-    strip_y = content_h + 6
+    strip_y = content_h + 6 + (key_h + 10 if key_h else 0)
     strip_h = 16 + STRIP_LINE * len(strip) if strip else 0.0
     leg_y = strip_y + strip_h + (12 if strip else 0)
     leg, leg_h = legend(30, leg_y, present)
@@ -266,6 +273,7 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
             labels.append('<g data-edge="%d" data-style="%s">%s</g>'
                           % (i, styles[i], _pill_svg(pill_of[i], ox, oy)))
     body.extend(labels)
+    body.append(key)
     if strip:
         body.append('<rect x="20" y="%s" width="%s" height="%s" rx="8" %s/>'
                     % (num(strip_y), num(width - 40), num(strip_h), STRIP_STYLE))

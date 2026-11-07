@@ -18,7 +18,7 @@ from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, esc, legend,
                                     legend_width, line_style, notes_block, notes_height, num,
                                     step_text, svg_doc, text, text_width, wrap)
-from archdiag.render.pills import edge_svg, place_pills
+from archdiag.render.pills import edge_svg, key_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 
 NAME_SIZE, NAME_LINE = 13.0, 17.0
@@ -245,12 +245,13 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
 
     present: Set[str] = set(styles)
-    leg_y = content_h + 6
-    leg, leg_h = legend(30, leg_y, present)
     title_w = text_width(view.title, 16) + 60
     width = max(content_w, legend_width(present) + 60, title_w, 360.0)
     note_w = max(width - 60, 560.0)
     width = max(width, note_w + 60)
+    key, key_h = key_svg(pills, 30, content_h + 6, width - 60)
+    leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
+    leg, leg_h = legend(30, leg_y, present)
     notes_y = leg_y + leg_h + (14 if leg_h else 0)
     n_h = notes_height(view.notes, note_w)
     height = notes_y + n_h + (16 if n_h else 4)
@@ -273,6 +274,7 @@ def _svg(view: ViewGraph, L: Layout) -> str:
         if b is not None:
             body.append(_node_svg(n, b, ox, oy))
     body.extend(p.svg(ox, oy) for p in pills)
+    body.append(key)
     body.append(leg)
     body.append(notes_block(view.notes, 30, notes_y, note_w))
     return svg_doc(width, height, "".join(body), title=view.title)

@@ -27,7 +27,7 @@ from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     esc, legend, legend_width, line_style,
                                     loose_dot, note_lines, num, path_d, step_text, svg_doc, text,
                                     text_width, wrap)
-from archdiag.render.pills import Pill, place_pills
+from archdiag.render.pills import KEY_LINE, KEY_R, Pill, _key_entries, key_svg, marker_svg, place_pills
 from archdiag.views import VNode, ViewGraph
 
 D_FONT = "Segoe Print, Comic Sans MS, cursive"
@@ -331,6 +331,8 @@ def _edge_svg(R: Rough, i: int, route: Sequence[Tuple[float, float]], style: str
 
 def _pill_svg(p: Pill, ox: float, oy: float) -> str:
     x, y = p.x + ox, p.y + oy
+    if p.marker:
+        return marker_svg(p, x, y, _PILL_INK[p.style], BG)
     parts = ['<rect id="pill-%d" x="%s" y="%s" width="%s" height="%s" rx="5" fill="%s" '
              'fill-opacity="0.92"/>' % (p.i, num(x), num(y), num(p.w), num(p.h), BG)]
     parts.append(p.mark(x, y, _PILL_INK[p.style], BG))
@@ -403,10 +405,12 @@ class _Scene:
         content_w = max([self.L.width] + [p.x + p.w + 14 for p in pills]) + self.ox
         content_h = max([self.L.height] + [p.y + p.h + 14 for p in pills]) + self.oy
         self.present: Set[str] = set(self.styles)
-        self.leg_y = content_h + 6
-        self.leg, leg_h = legend(30, self.leg_y, self.present)
         title_w = text_width(view.title, 18) + 60
         self.width = max(content_w, legend_width(self.present) + 60, title_w, 360.0)
+        self.key_y = content_h + 6
+        self.key, key_h = key_svg(pills, 30, self.key_y, self.width - 60, _PILL_INK)
+        self.leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
+        self.leg, leg_h = legend(30, self.leg_y, self.present)
         notes_y = self.leg_y + leg_h + (14 if leg_h else 0)
         self.stickies, notes_h = _place_stickies(view.notes, 30, notes_y + 4,
                                                   max(self.width - 60, 560.0))
@@ -451,6 +455,7 @@ def _svg(S: _Scene, seed: int) -> str:
         idx = S.gidx.get(n.group or "")
         body.append(_node_svg(R, n, b, idx, grouped, i, ox, oy))
     body.extend(_pill_svg(p, ox, oy) for p in S.pills)
+    body.append(S.key)
     body.append(S.leg)
     body.extend(_sticky_svg(R, s) for s in S.stickies)
     doc = svg_doc(S.width, S.height, "".join(body), BG, view.title)
@@ -579,7 +584,14 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         a["strokeWidth"] = 2
         for nid in (node_el[e.src], node_el[e.dst]):
             X.by_id[nid]["boundElements"].append({"id": aid, "type": "arrow"})
+    for p, s, dx, row in _key_entries(S.pills, S.width - 60):  # the key, as in the SVG
+        X.label("key-%d" % p.key, 30 + dx, S.key_y + 18 + KEY_LINE * row + 3,
+                "(%d) %s" % (p.key, s), 12, _PILL_INK[p.style])
     for p in S.pills:
+        if p.marker:  # just the number on the line; the label is in the key
+            X.label("label-%d" % p.i, p.x + ox - 4, p.y + oy + 1, "(%d)" % p.key, 11,
+                    _PILL_INK[p.style], align="center", w=p.w + 8)
+            continue
         lines = list(p.lines)
         if p.number is not None:  # text only here: the number written as in draw.io
             lines = [(step_text(p.number) + " " + (lines[0] if lines else "")).strip()] \

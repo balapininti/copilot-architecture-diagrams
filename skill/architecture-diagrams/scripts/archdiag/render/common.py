@@ -122,13 +122,14 @@ STEP_R = 7.5      # a step number's circle
 STEP_SIZE = 9.0   # and its text
 
 
-def step_mark(n: int, cx: float, cy: float, ink: str, fill: str = "#ffffff") -> str:
+def step_mark(n: int, cx: float, cy: float, ink: str, fill: str = "#ffffff",
+              gid: Optional[str] = None) -> str:
     """A step number as drawn on a line label: a small circle outlined in the label's ink,
-    the number inside it (``<g id="step-N">``). Drawn, not a Unicode circled digit, so 21
-    looks like 1 and every font shows it."""
-    return ('<g id="step-%d"><circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" '
+    the number inside it (``<g id="step-N">``, or ``gid``). Drawn, not a Unicode circled
+    digit, so 21 looks like 1 and every font shows it."""
+    return ('<g id="%s"><circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" '
             'stroke-width="1.3"/>%s</g>'
-            % (n, num(cx), num(cy), num(STEP_R), fill, ink,
+            % (gid if gid is not None else "step-%d" % n, num(cx), num(cy), num(STEP_R), fill, ink,
                text(cx, cy + STEP_SIZE * 0.36, str(n), STEP_SIZE if n < 100 else 7.5, ink,
                     anchor="middle", weight="700")))
 
