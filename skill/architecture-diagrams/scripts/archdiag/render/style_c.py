@@ -16,9 +16,10 @@ import json
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLORS, esc, legend,
-                                    legend_width, line_style, notes_block, notes_height, num,
-                                    svg_doc, text, text_width, tint, wrap)
+from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLORS, esc,
+                                    group_colors, legend, legend_width, line_style, link_wrap,
+                                    notes_block, notes_height, num, overview_block, svg_doc,
+                                    text, text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, marker_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 
@@ -29,6 +30,7 @@ ROW_GAP = 2.0
 CARD_PAD = 8.0
 MIN_CARD_W = 230.0
 MAX_ROW_CHARS = 44
+GD_ROW_CHARS = 38  # a gitdiagram card's text wraps here (monospace widths vary by font)
 NAME_SIZE, LANG_SIZE, ROW_SIZE = 13.5, 10.5, 12.0
 STRIP_SIZE, STRIP_LINE = 11.0, 18.0
 STRIP_MAX = 6
@@ -40,7 +42,10 @@ _PILL = {  # style -> (fill, stroke, text)
     "shared_code": ("#0f172a", "#0f172a", "#fcd34d"),
     "partial": ("#fffbeb", "#fcd34d", "#b45309"),
     "loose": ("#fef2f2", "#fca5a5", "#b91c1c"),
+    "structural": ("#f8fafc", "#e2e8f0", "#64748b"),
 }
+CARD_KINDS = ("repo", "group", "actor")  # drawn as a card: gitdiagram groups and entry points
+ACTOR_HEAD = "#1e293b"
 
 
 # ------------------------------------------------------------------ card text
@@ -54,13 +59,18 @@ def _shorten(s: str, limit: int = MAX_ROW_CHARS) -> str:
 def _rows(n: VNode) -> List[Tuple[str, bool]]:
     """(text, is evidence file) for each detail row of a repo card."""
     out = []
+    if n.kind != "repo":  # gitdiagram text (files, names, a description): wrapped, not cut
+        for d in n.detail_lines:
+            out.extend((s, False) for s in wrap(d, GD_ROW_CHARS * 0.55 * ROW_SIZE, ROW_SIZE,
+                                                True))
+        return out
     for i, d in enumerate(n.detail_lines):
         out.append((_shorten(d), i < n.highlight and not d.startswith("…")))
     return out
 
 
 def _name(n: VNode) -> str:
-    return "\u2387 " + n.label
+    return "\u2387 " + n.label if n.kind == "repo" else n.label
 
 
 def _missing_lines(n: VNode) -> Tuple[List[str], List[str]]:
@@ -68,10 +78,10 @@ def _missing_lines(n: VNode) -> Tuple[List[str], List[str]]:
 
 
 def node_size(n: VNode) -> Tuple[float, float]:
-    if n.kind == "repo":
+    if n.kind in CARD_KINDS:
         rows = _rows(n)
         w = max([MIN_CARD_W, text_width(_name(n), NAME_SIZE) + text_width(n.sublabel, LANG_SIZE)
-                 + 44] + [text_width(r, ROW_SIZE, True) + 28 for r, _ in rows])
+                 + 44] + [text_width(r, ROW_SIZE, n.kind == "repo") + 28 for r, _ in rows])
         h = HEAD_H + CARD_PAD + len(rows) * (ROW_H + ROW_GAP) + CARD_PAD
         return w, max(h, HEAD_H + 40)
     name, sub = _missing_lines(n)
@@ -86,6 +96,9 @@ def _repo_colors(view: ViewGraph) -> Dict[str, str]:
     for n in view.nodes:
         if n.kind == "repo":
             out[n.id] = REPO_COLORS[len(out) % len(REPO_COLORS)]
+        elif n.kind == "actor":
+            out[n.id] = ACTOR_HEAD
+    out.update(group_colors(view))
     return out
 
 
@@ -114,7 +127,7 @@ def _card_svg(n: VNode, b: Box, color: str, ox: float, oy: float) -> str:
     return "<g>%s</g>" % "".join(parts)
 
 
-def _stub_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
+def _stub_svg(n: VNode, b: Box, ox: float, oy: float, inside: bool = False) -> str:
     x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
     name, sub = _missing_lines(n)
     cx = x + w / 2
@@ -126,6 +139,11 @@ def _stub_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
                 'stroke-width="1.6"%s/>' % (num(x), num(y), num(w), num(h),
                                             "#fffbeb" if partial else "#fef2f2", c, dash))
         fill = "#b45309" if partial else "#b91c1c"
+    elif inside and n.kind not in ("outside", "external", "neighbor", "notanalyzed"):
+        # a gitdiagram resource of this repo two groups share: solid, not the outside look
+        rect = ('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="#ffffff" '
+                'stroke="#64748b" stroke-width="1.4"/>' % (num(x), num(y), num(w), num(h)))
+        fill = "#1e293b"
     else:  # outside these repos
         rect = ('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="#f1f5f9" '
                 'stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3"/>'
@@ -143,7 +161,7 @@ def _stub_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
 
 
 _KEY_INK = {"confirmed": "#0f172a", "shared_code": "#a16207", "partial": "#b45309",
-            "loose": "#b91c1c"}
+            "loose": "#b91c1c", "structural": "#64748b"}
 
 
 def _pill_svg(p: Pill, ox: float, oy: float) -> str:
@@ -231,15 +249,16 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
     min_x = min([p.x for p in pills] + [0.0])
     min_y = min([p.y for p in pills] + [0.0])
     ox = max(0.0, 14 - min_x) if min_x < 14 else 0.0
-    oy = TITLE_H + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
     content_w = max([L.width] + [p.x + p.w + 14 for p in pills]) + ox
-    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
 
     present: Set[str] = set(styles)
     title_w = text_width(view.title, 16) + 60
     width = max(content_w, legend_width(present) + 60, title_w, 360.0)
     note_w = max(width - 60, 560.0)
     width = max(width, note_w + 60)
+    overview, ov_h = overview_block(view.overview, width)
+    oy = TITLE_H + ov_h + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
+    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
 
     key, key_h = key_svg(pills, 30, content_h + 6, width - 60, _KEY_INK)
     strip = evidence_strip(view, int((width - 60) / (0.55 * STRIP_SIZE)))
@@ -252,12 +271,15 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
     height = notes_y + n_h + (16 if n_h else 4)
 
     body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
+    if overview:
+        body.append('<g transform="translate(0,%s)">%s</g>' % (num(TITLE_H), overview))
+    inside = view.level == "gitdiagram"
     for n in view.nodes:
         b = L.boxes.get(n.id)
         if b is None:
             continue
-        body.append(_card_svg(n, b, colors[n.id], ox, oy) if n.kind == "repo"
-                    else _stub_svg(n, b, ox, oy))
+        body.append(link_wrap(view, n, _card_svg(n, b, colors[n.id], ox, oy)
+                              if n.kind in CARD_KINDS else _stub_svg(n, b, ox, oy, inside)))
     labels: List[str] = []
     for i, e in enumerate(view.edges):
         if i >= len(routes):

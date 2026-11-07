@@ -3,6 +3,8 @@
 layout_for() picks one of three methods by view level:
 
 * ``layered``   - left-to-right layers (landscape, application, flow_tx).
+* ``context``   - a centre laid out by ``layered`` between a left and a right column (an
+  application with outside boxes; a gitdiagram: entry points left, outside stubs right).
 * ``job_rows``  - a lane of job steps, the data they read above, what they write below.
 * ``card_grid`` - a grid of repo cards, the most linked in the middle (repomap).
 
@@ -160,6 +162,10 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
         boxes, routes = context(view, sizes)
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
+    elif view.level == "gitdiagram" and _gitdiagram_centre(view):
+        left, right = _gitdiagram_sides(view)
+        boxes, routes = context(view, sizes, left, right)
+        groups = {}
     else:
         boxes, routes = layered(view, sizes)
         right = max([b.right for b in boxes.values()] or [0.0])
@@ -1327,16 +1333,37 @@ def _has_context(view: ViewGraph) -> bool:
     return 0 < grouped < len(view.nodes)
 
 
-def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
+def _gitdiagram_sides(view: ViewGraph) -> Tuple[List[str], List[str]]:
+    """A gitdiagram's columns: entry points (``act:*``) left, outside stubs (``out:*``)
+    right; groups and shared boxes are the centre."""
+    return ([n.id for n in view.nodes if n.id.startswith("act:")],
+            [n.id for n in view.nodes if n.id.startswith("out:")])
+
+
+def _gitdiagram_centre(view: ViewGraph) -> bool:
+    left, right = _gitdiagram_sides(view)
+    return len(left) + len(right) < len(view.nodes)
+
+
+def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
+            left_ids: Optional[List[str]] = None, right_ids: Optional[List[str]] = None
             ) -> Tuple[Dict[str, Box], List[List[Point]]]:
     """One application in its context: its members (grouped boxes) in the middle, laid
     out left to right by ``layered`` in at most CONTEXT_COLS columns; outside boxes in one
     column on the left (lines into the application) and one on the right (lines out,
     and missing or external boxes), each stacked level with the members it meets. Lines
     to and from the columns are routed one by one in their own lanes, leaving and
-    entering members through spread ports on the top or bottom."""
+    entering members through spread ports on the top or bottom.
+
+    ``left_ids`` and ``right_ids``, when given, fix the two columns (the gitdiagram's roles)
+    and every other box is a member."""
     by_id = {n.id: n for n in view.nodes}
-    members = [n for n in view.nodes if n.group]
+    fixed = left_ids is not None or right_ids is not None
+    if fixed:
+        sides = set(left_ids or []) | set(right_ids or [])
+        members = [n for n in view.nodes if n.id not in sides]
+    else:
+        members = [n for n in view.nodes if n.group]
     member_ids = {n.id for n in members}
     inner_edges = [k for k, e in enumerate(view.edges)
                    if e.src in member_ids and e.dst in member_ids]
@@ -1354,10 +1381,10 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             ins[e.src] = ins.get(e.src, 0) + 1
         elif e.src in member_ids and e.dst not in member_ids:
             outs[e.dst] = outs.get(e.dst, 0) + 1
-    left: List[str] = []
-    right: List[str] = []
+    left: List[str] = list(left_ids or [])
+    right: List[str] = list(right_ids or [])
     for n in view.nodes:
-        if n.id in member_ids:
+        if n.id in member_ids or fixed:
             continue
         if n.kind not in ("missing", "external") and ins.get(n.id, 0) > outs.get(n.id, 0):
             left.append(n.id)
@@ -1365,7 +1392,7 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
             right.append(n.id)
     # a box that meets no member and hangs only off left-column boxes (a loose end fed by
     # one) stands in the left column, right next to what it hangs off
-    for _ in range(len(right)):
+    for _ in range(0 if fixed else len(right)):
         moved = False
         for i in list(right):
             nb = {m for e in view.edges for m in (e.src, e.dst)
@@ -1433,8 +1460,24 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     plan: Dict[int, Tuple[Tuple[str, str], Tuple[str, str]]] = {}
     want_x: Dict[Tuple[str, str], List[Tuple[float, int]]] = {}
 
+    def faces(m: str, side: str) -> bool:
+        """Fixed columns only: no member stands between member ``m`` and the column on
+        ``side`` at ``m``'s height, so a line can come straight in through that side."""
+        if not fixed:
+            return False
+        b = boxes[m]
+        for o, ob in mboxes.items():
+            if o == m or ob.bottom <= b.y or ob.y >= b.bottom:
+                continue
+            if (ob.right <= b.x) if side == "left" else (ob.x >= b.right):
+                return False
+        return True
+
     def end_side(me: str, other: str) -> str:
         if me in member_ids:
+            col = side_of.get(other)
+            if col is not None and faces(me, col):
+                return col
             return "top" if boxes[other].cy < boxes[me].cy else "bottom"
         if other in member_ids:
             return "right" if side_of[me] == "left" else "left"

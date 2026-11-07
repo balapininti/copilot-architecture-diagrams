@@ -14,10 +14,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
-                                    PARTIAL_COLOR, REPO_COLORS, esc, legend,
-                                    legend_width, line_attrs, line_style, notes_block,
-                                    notes_height, num, path_d, step_text, svg_doc, text,
-                                    text_width, tint, wrap)
+                                    PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, group_colors,
+                                    group_icon, legend, legend_width, line_attrs, line_style,
+                                    link_wrap, notes_block, notes_height, num, overview_block,
+                                    path_d, step_text, svg_doc, text, text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, place_pills as _place_pills
 from archdiag.views import VNode, ViewGraph
 
@@ -78,18 +78,29 @@ def node_size(n: VNode) -> Tuple[float, float]:
 # ------------------------------------------------------------------ SVG
 
 def _group_colors(view: ViewGraph) -> Dict[str, str]:
-    return {g.id: (g.color or REPO_COLORS[i % len(REPO_COLORS)])
-            for i, g in enumerate(view.groups)}
+    """Group colours by group id, plus each gitdiagram group box's colour by its box id."""
+    out = {g.id: (g.color or REPO_COLORS[i % len(REPO_COLORS)])
+           for i, g in enumerate(view.groups)}
+    out.update(group_colors(view))
+    return out
 
 
 def _icon_kind(n: VNode) -> str:
     if n.id.startswith("sysout:"):
         return "sysout"
+    if n.kind == "group":  # gitdiagram: the group's tech
+        return group_icon(n)
+    if n.kind == "actor":
+        return actor_icon(n)
+    if n.kind == "outside":
+        return "neighbor"
     return n.kind if n.kind in ICONS else "step"
 
 
 def _node_color(n: VNode, colors: Dict[str, str]) -> str:
-    if n.kind in FIXED_COLOR_KINDS:
+    if n.kind == "group":
+        return colors.get(n.id, "")
+    if n.kind in FIXED_COLOR_KINDS or n.kind in ("actor", "outside"):
         return ""
     return colors.get(n.group or "", "")
 
@@ -143,11 +154,15 @@ def _node_svg(n: VNode, b: Box, color: str, ends_in_dot: bool, ox: float, oy: fl
     t = _NodeText(n)
     x, y, cx = b.x + ox, b.y + oy, b.cx + ox
     parts: List[str] = []
+    if n.kind == "group" and color:  # gitdiagram: a card in the group's colour
+        parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="10" fill="%s" stroke="%s" '
+                     'stroke-width="1.5"/>' % (num(x + 1), num(y + 1), num(b.w - 2),
+                                               num(b.h - 2), tint(color, 0.07), color))
     if _has_icon(n):
         parts.append(ICONS[_icon_kind(n)](cx, y + TOP_PAD + ICON_H / 2, color))
         ty = y + TOP_PAD + ICON_H + ICON_GAP
         label_fill, sub_fill = "#0f172a", "#64748b"
-        if n.kind in ("neighbor", "notanalyzed"):
+        if n.kind in ("neighbor", "notanalyzed", "outside"):
             label_fill, sub_fill = "#64748b", "#94a3b8"
     else:
         partial = n.status == "partial"
@@ -199,15 +214,16 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     min_x = min([p.x for p in pills] + [0.0])
     min_y = min([p.y for p in pills] + [0.0])
     ox = max(0.0, 14 - min_x) if min_x < 14 else 0.0
-    oy = TITLE_H + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
     content_w = max([L.width] + [p.x + p.w + 14 for p in pills]) + ox
-    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
 
     present: Set[str] = set(styles)
     title_w = text_width(view.title, 16) + 60
     width = max(content_w, legend_width(present) + 60, title_w, 360.0)
     note_w = max(width - 60, 560.0)
     width = max(width, note_w + 60)
+    overview, ov_h = overview_block(view.overview, width)
+    oy = TITLE_H + ov_h + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
+    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
     key, key_h = key_svg(pills, 30, content_h + 6, width - 60)
     leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
     leg, leg_h = legend(30, leg_y, present)
@@ -216,6 +232,8 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     height = notes_y + n_h + (16 if n_h else 4)
 
     body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
+    if overview:
+        body.append('<g transform="translate(0,%s)">%s</g>' % (num(TITLE_H), overview))
     for g in view.groups:
         gb = L.groups.get(g.id)
         if gb is None:
@@ -234,7 +252,8 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     for n in view.nodes:
         b = L.boxes.get(n.id)
         if b is not None:
-            body.append(_node_svg(n, b, _node_color(n, colors), n.id in dot_ends, ox, oy))
+            body.append(link_wrap(view, n, _node_svg(n, b, _node_color(n, colors),
+                                                     n.id in dot_ends, ox, oy)))
     body.extend(p.svg(ox, oy) for p in pills)
     body.append(key)
     body.append(leg)
@@ -270,6 +289,8 @@ _EDGE_STYLE = {
              "fontColor=#dc2626;",
     "shared_code": ("dashed=1;dashPattern=7 4;strokeColor=#a16207;strokeWidth=1.6;"
                     "endArrow=block;endFill=1;fontColor=#a16207;"),
+    "structural": "strokeColor=#94a3b8;strokeWidth=1.4;endArrow=block;endFill=1;"
+                  "fontColor=#64748b;",
 }
 
 
@@ -284,7 +305,7 @@ def _vertex_style(n: VNode, color: str) -> str:
         c = PARTIAL_COLOR if partial else LOOSE_COLOR
         return shape + "whiteSpace=wrap;html=0;fillColor=%s;strokeColor=%s;fontColor=%s;" % (
             "#fffbeb" if partial else "#fef2f2", c, c)
-    if n.kind in ("neighbor", "notanalyzed"):
+    if n.kind in ("neighbor", "notanalyzed", "outside"):
         return shape + "whiteSpace=wrap;html=0;fillColor=#f8fafc;strokeColor=#94a3b8;" \
                        "fontColor=#64748b;"
     c = color or "#64748b"

@@ -15,9 +15,10 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for, layout_notes
-from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, esc, legend,
-                                    legend_width, line_style, notes_block, notes_height, num,
-                                    step_text, svg_doc, text, text_width, wrap)
+from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, esc, group_colors, legend,
+                                    legend_width, line_style, link_wrap, notes_block,
+                                    notes_height, num, overview_block, step_text, svg_doc, text,
+                                    text_width, wrap)
 from archdiag.render.pills import edge_svg, key_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 
@@ -31,6 +32,8 @@ CYL_RY = 11.0                 # the cylinder's elliptical cap
 PERSON_HEAD = 30.0            # a person's head, above the body
 TITLE_H = 44.0
 MAX_DESC_LINES = 4
+MAX_GD_LINES = 12             # a gitdiagram box: files, description and details
+GD_KINDS = ("group", "actor", "outside")  # gitdiagram boxes (spec 4.2)
 
 BOX = "#1168bd"
 PERSON = "#08427b"
@@ -83,6 +86,9 @@ def _card(n: VNode) -> Tuple[str, str, List[str]]:
     sub = n.sublabel or ""
     if n.kind == "missing":
         return n.label, "", ([sub] if sub else [])
+    if n.kind in GD_KINDS:  # gitdiagram: the sublabel is the [tech] or what the box holds
+        kind_line = sub if sub.startswith("[") else ("[%s]" % sub if sub else "")
+        return n.label, kind_line, list(n.detail_lines)
     if n.kind == "neighbor":
         owner = sub.split(" · ", 1)[1] if " · " in sub else ""
         return (n.label, "[%s · neighbor]" % _FULL.get(k, k), [owner] if owner else [])
@@ -123,7 +129,7 @@ class _Text:
         self.desc: List[str] = []
         for d in desc:
             self.desc.extend(wrap(d, MAX_TEXT_W, DESC_SIZE))
-        self.desc = self.desc[:MAX_DESC_LINES + 1]
+        self.desc = self.desc[:(MAX_GD_LINES if n.kind in GD_KINDS else MAX_DESC_LINES + 1)]
         widths = [text_width(s, NAME_SIZE) + 6 for s in self.name]
         widths += [text_width(s, KIND_SIZE) for s in self.kind]
         widths += [text_width(s, DESC_SIZE) for s in self.desc]
@@ -135,7 +141,7 @@ class _Text:
 def _extra_top(n: VNode) -> float:
     if n.kind in CYLINDERS:
         return 2 * CYL_RY - 4
-    if n.kind == "person":
+    if n.kind in ("person", "actor"):
         return PERSON_HEAD
     return 0.0
 
@@ -155,12 +161,22 @@ def _fill(n: VNode) -> str:
         return EXTERNAL
     if n.kind in ("queue",):
         return QUEUE
-    if n.kind in ("notanalyzed", "neighbor"):
+    if n.kind in ("notanalyzed", "neighbor", "outside"):
         return NOTANALYZED
     return BOX
 
 
-def _node_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
+def _clock_head(cx: float, cy: float, r: float) -> str:
+    """The Scheduler's head: a clock face in the person colour."""
+    return ('<circle cx="%s" cy="%s" r="%s" fill="%s"/><circle cx="%s" cy="%s" r="%s" '
+            'fill="#ffffff"/><path d="M%s,%s V%s L%s,%s" fill="none" stroke="%s" '
+            'stroke-width="2.4" stroke-linecap="round"/>'
+            % (num(cx), num(cy), num(r), PERSON, num(cx), num(cy), num(r - 3.5),
+               num(cx), num(cy - r + 7), num(cy), num(cx + r * 0.45), num(cy + r * 0.3),
+               PERSON))
+
+
+def _node_svg(n: VNode, b: Box, ox: float, oy: float, color: str = "") -> str:
     t = _Text(n)
     x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
     cx = x + w / 2
@@ -184,16 +200,20 @@ def _node_svg(n: VNode, b: Box, ox: float, oy: float) -> str:
         parts.append('<ellipse cx="%s" cy="%s" rx="%s" ry="%s" fill="%s"/>'
                      % (num(cx), num(y + ry), num(w / 2), num(ry), CAP))
         top = y + 2 * ry - 2 + PAD_TOP / 2
-    elif n.kind == "person":
-        parts.append('<circle cx="%s" cy="%s" r="%s" fill="%s"/>'
-                     % (num(cx), num(y + PERSON_HEAD / 2 + 2), num(PERSON_HEAD / 2 + 2), PERSON))
+    elif n.kind in ("person", "actor"):
+        if n.id == "act:scheduler":
+            parts.append(_clock_head(cx, y + PERSON_HEAD / 2 + 2, PERSON_HEAD / 2 + 2))
+        else:
+            parts.append('<circle cx="%s" cy="%s" r="%s" fill="%s"/>'
+                         % (num(cx), num(y + PERSON_HEAD / 2 + 2), num(PERSON_HEAD / 2 + 2),
+                            PERSON))
         parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="16" fill="%s"/>'
                      % (num(x), num(y + PERSON_HEAD), num(w), num(h - PERSON_HEAD), PERSON))
         top = y + PERSON_HEAD + PAD_TOP
     else:
-        fill = _fill(n)
+        fill = color if n.kind == "group" and color else _fill(n)
         stroke = ""
-        if n.kind in ("notanalyzed", "neighbor"):
+        if n.kind in ("notanalyzed", "neighbor", "outside"):
             stroke = ' stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3"'
             name_fill, kind_fill, desc_fill = "#1e293b", "#475569", "#334155"
         parts.append('<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="%s"%s/>'
@@ -240,15 +260,16 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     min_x = min([p.x for p in pills] + [0.0])
     min_y = min([p.y for p in pills] + [0.0])
     ox = max(0.0, 14 - min_x) if min_x < 14 else 0.0
-    oy = TITLE_H + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
     content_w = max([L.width] + [p.x + p.w + 14 for p in pills]) + ox
-    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
 
     present: Set[str] = set(styles)
     title_w = text_width(view.title, 16) + 60
     width = max(content_w, legend_width(present) + 60, title_w, 360.0)
     note_w = max(width - 60, 560.0)
     width = max(width, note_w + 60)
+    overview, ov_h = overview_block(view.overview, width)
+    oy = TITLE_H + ov_h + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
+    content_h = max([L.height] + [p.y + p.h + 14 for p in pills]) + oy
     key, key_h = key_svg(pills, 30, content_h + 6, width - 60)
     leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
     leg, leg_h = legend(30, leg_y, present)
@@ -257,6 +278,9 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     height = notes_y + n_h + (16 if n_h else 4)
 
     body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
+    if overview:
+        body.append('<g transform="translate(0,%s)">%s</g>' % (num(TITLE_H), overview))
+    colors = group_colors(view)
     for g in view.groups:
         gb = L.groups.get(g.id)
         if gb is None:
@@ -272,7 +296,7 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     for n in view.nodes:
         b = L.boxes.get(n.id)
         if b is not None:
-            body.append(_node_svg(n, b, ox, oy))
+            body.append(link_wrap(view, n, _node_svg(n, b, ox, oy, colors.get(n.id, ""))))
     body.extend(p.svg(ox, oy) for p in pills)
     body.append(key)
     body.append(leg)
@@ -287,8 +311,10 @@ _LINE_STYLE = {
     "partial": "stroke:#d97706,stroke-width:2px",
     "loose": "stroke:#dc2626,stroke-width:2px",
     "shared_code": "stroke:#a16207,stroke-width:2px,stroke-dasharray:7 4",
+    "structural": "stroke:#94a3b8,stroke-width:1.4px",
 }
-_ARROW = {"confirmed": "-->", "partial": "-.->", "loose": "--x", "shared_code": "-->"}
+_ARROW = {"confirmed": "-->", "partial": "-.->", "loose": "--x", "shared_code": "-->",
+          "structural": "-->"}
 
 _CLASSES = (
     ("box", "fill:#1168bd,stroke:#0b4884,color:#ffffff"),
@@ -381,6 +407,7 @@ _MD_LEGEND = (
     ("partial", "Dotted amber line (`-.->`): partly known or suggested"),
     ("loose", "Red line ending in a cross (`--x`): loose end, only one side found"),
     ("shared_code", "Dashed brown line: shared code (copybook, package)"),
+    ("structural", "Thin grey line: %s" % STARTS_LEGEND),
 )
 
 

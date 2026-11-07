@@ -24,9 +24,9 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from archdiag.layout import Box, Layout, layout_for
 from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
-                                    esc, legend, legend_width, line_style,
-                                    loose_dot, note_lines, num, path_d, step_text, svg_doc, text,
-                                    text_width, wrap)
+                                    esc, group_colors, legend, legend_width, line_style,
+                                    link_wrap, loose_dot, note_lines, num, overview_block, path_d,
+                                    step_text, svg_doc, text, text_width, tint, wrap)
 from archdiag.render.pills import KEY_LINE, KEY_R, Pill, key_entries, key_svg, marker_svg, place_pills
 from archdiag.views import VNode, ViewGraph
 
@@ -53,10 +53,10 @@ NOTE_W = 210.0
 
 CYLINDERS = ("table", "dataset", "vsam", "gdg", "datastore")
 PIPES = ("queue", "mqprocess")
-GREY_KINDS = ("neighbor", "notanalyzed")
+GREY_KINDS = ("neighbor", "notanalyzed", "outside")
 
 _PILL_INK = {"confirmed": "#343a40", "partial": "#b45309", "loose": "#c92a2a",
-             "shared_code": "#a16207"}
+             "shared_code": "#a16207", "structural": "#64748b"}
 
 
 # ------------------------------------------------------------------ jitter
@@ -174,7 +174,7 @@ class _NodeText:
 def node_size(n: VNode) -> Tuple[float, float]:
     t = _NodeText(n)
     w = max(124.0, t.width * 1.05 + 28)
-    if n.kind == "person":
+    if n.kind in ("person", "actor"):
         return max(100.0, t.width + 20), 62 + t.height + 6
     if n.kind in CYLINDERS:
         return w, max(78.0, t.height + 44)
@@ -213,18 +213,28 @@ def _text_block(t: _NodeText, cx: float, top: float, ink: str, sub_ink: str) -> 
 
 
 def _node_svg(R: Rough, n: VNode, b: Box, idx: Optional[int], grouped: bool, i: int,
-              ox: float, oy: float) -> str:
+              ox: float, oy: float, color: str = "") -> str:
     t = _NodeText(n)
     x, y, w, h = b.x + ox, b.y + oy, b.w, b.h
     cx = x + w / 2
     pastel = PASTELS[(idx if idx is not None else i) % len(PASTELS)]
     ink_sub = PASTEL_INK[(idx if idx is not None else i) % len(PASTEL_INK)]
     fill, op = ("#ffffff", 0.9) if grouped else (pastel, 0.5)
+    if color:  # a gitdiagram group: a pastel of its own colour
+        fill, op, ink_sub = tint(color, 0.3), 0.8, color
     parts: List[str] = []
     top = y + (h - t.height) / 2
     k = n.kind
 
-    if k == "person":
+    if k == "actor" and n.id == "act:scheduler":  # a hand-drawn clock
+        hx, hy = cx, y + 30
+        parts.append(_shape(_d(R.ellipse(hx, hy, 24, 24), True), "#ffffff", 0.9))
+        parts.append(_shape(_d(R.stroke([(hx, hy - 16), (hx, hy), (hx + 11, hy + 7)], False,
+                                        amp=0.8))))
+        parts.append(_text_block(t, cx, y + 60, INK, "#495057"))
+        return "<g>%s</g>" % "".join(parts)
+
+    if k in ("person", "actor"):
         hx, hy = cx, y + 12
         parts.append(_shape(_d(R.ellipse(hx, hy, 10, 10), True)))
         body = [[(hx, hy + 10), (hx, y + 40)], [(hx, y + 22), (hx - 17, y + 34)],
@@ -300,8 +310,10 @@ def _edge_attrs(style: str) -> Tuple[str, float, str]:
     """(stroke color, width, dasharray) of a line type: the same colors and patterns as the
     legend and every other style. Box outlines are ink; lines are never ink."""
     color = LINE_COLORS[style]
-    dash = {"confirmed": "", "partial": "3 4", "loose": "", "shared_code": "7 4"}[style]
-    return color, {"confirmed": STROKE_W, "shared_code": 2.0}.get(style, 2.4), dash
+    dash = {"confirmed": "", "partial": "3 4", "loose": "", "shared_code": "7 4",
+            "structural": ""}[style]
+    return color, {"confirmed": STROKE_W, "shared_code": 2.0,
+                   "structural": 1.6}.get(style, 2.4), dash
 
 
 def _edge_svg(R: Rough, i: int, route: Sequence[Tuple[float, float]], style: str,
@@ -401,12 +413,13 @@ class _Scene:
         min_x = min([p.x for p in pills] + [0.0])
         min_y = min([p.y for p in pills] + [0.0])
         self.ox = max(0.0, 14 - min_x) if min_x < 14 else 0.0
-        self.oy = TITLE_H + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
         content_w = max([self.L.width] + [p.x + p.w + 14 for p in pills]) + self.ox
-        content_h = max([self.L.height] + [p.y + p.h + 14 for p in pills]) + self.oy
         self.present: Set[str] = set(self.styles)
         title_w = text_width(view.title, 18) + 60
         self.width = max(content_w, legend_width(self.present) + 60, title_w, 360.0)
+        self.overview, ov_h = overview_block(view.overview, self.width)
+        self.oy = TITLE_H + ov_h + (max(0.0, 14 - min_y) if min_y < 14 else 0.0)
+        content_h = max([self.L.height] + [p.y + p.h + 14 for p in pills]) + self.oy
         self.key_y = content_h + 6
         self.key, key_h = key_svg(pills, 30, self.key_y, self.width - 60, _PILL_INK)
         self.leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
@@ -418,6 +431,7 @@ class _Scene:
         self.width = max([self.width] + [s.x + s.w + 30 for s in self.stickies])
         self.height = notes_y + (notes_h + 28 if self.notes else 4)
         self.gidx = _group_index(view)
+        self.colors = group_colors(view)
 
     def lane(self) -> Optional[Tuple[float, float, float, float]]:
         lane = [self.L.boxes[n.id] for n in self.view.nodes
@@ -434,6 +448,8 @@ def _svg(S: _Scene, seed: int) -> str:
     R = Rough(seed)
     view, L, ox, oy = S.view, S.L, S.ox, S.oy
     body: List[str] = [text(24, 32, view.title, 18, INK, weight="")]
+    if S.overview:
+        body.append('<g transform="translate(0,%s)">%s</g>' % (num(TITLE_H), S.overview))
     for g in view.groups:
         gb = L.groups.get(g.id)
         if gb is None:
@@ -454,7 +470,8 @@ def _svg(S: _Scene, seed: int) -> str:
             continue
         grouped = n.group in L.groups and n.group is not None
         idx = S.gidx.get(n.group or "")
-        body.append(_node_svg(R, n, b, idx, grouped, i, ox, oy))
+        body.append(link_wrap(view, n, _node_svg(R, n, b, idx, grouped, i, ox, oy,
+                                                 S.colors.get(n.id, ""))))
     body.extend(_pill_svg(p, ox, oy) for p in S.pills)
     body.append(S.key)
     body.append(S.leg)

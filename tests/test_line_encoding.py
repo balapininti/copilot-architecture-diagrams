@@ -19,7 +19,9 @@ def _mixed_view():
     nodes.append(VNode("m", "none", kind="missing", status="loose"))
     edges = [VEdge("a", "b", "ok"), VEdge("a", "c", "maybe", status="partial"),
              VEdge("a", "d", "copy", kind="shared_code"),
-             VEdge("b", "m", "loose", status="loose")]
+             VEdge("b", "m", "loose", status="loose"),
+             # a gitdiagram Scheduler line: thin plain grey, never a certainty colour
+             VEdge("d", "b", "starts", status="structural", kind="sequence")]
     return ViewGraph("T", "application", "x", nodes, edges, [])
 
 
@@ -116,3 +118,15 @@ def test_style_d_heads_match_their_line():
                 assert head.get("stroke-dasharray") is None, (v.title, i)
             seen += 1
         assert seen == len(v.edges)
+
+
+def test_structural_lines_are_thin_plain_grey_everywhere():
+    """A Scheduler "starts" line is #94a3b8, undashed, in every SVG and export, and never
+    drawn in a certainty colour."""
+    v = _mixed_view()
+    k = next(i for i, e in enumerate(v.edges) if e.status == "structural")
+    assert expected_line("structural", "sequence") == ("#94a3b8", "")
+    for mod in (style_a, style_b, style_c, style_d):
+        assert svg_edge_encodings(mod.render(v)["svg"])[k] == ("#94a3b8", ""), mod.__name__
+    assert drawio_edge_encodings(style_a.render(v)["drawio"])[k] == ("#94a3b8", "")
+    assert excalidraw_edge_encodings(style_d.render(v)["excalidraw"])[k] == ("#94a3b8", "")

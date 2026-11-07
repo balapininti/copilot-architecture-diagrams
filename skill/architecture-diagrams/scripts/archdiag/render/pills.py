@@ -17,9 +17,9 @@ PILL_MAX_W = 230.0
 ARROW_LEN = 10.0
 
 _PILL_STROKE = {"confirmed": "#cbd5e1", "partial": "#fcd34d", "loose": "#fca5a5",
-                "shared_code": "#fde68a"}
+                "shared_code": "#fde68a", "structural": "#e2e8f0"}
 _PILL_TEXT = {"confirmed": "#334155", "partial": "#b45309", "loose": "#b91c1c",
-              "shared_code": "#a16207"}
+              "shared_code": "#a16207", "structural": "#64748b"}
 
 
 class Pill:

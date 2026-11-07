@@ -11,11 +11,19 @@ Line types encode certainty and are the same on every diagram:
 * loose       - solid ``#dc2626`` ending in a filled dot r=6
 * shared code - dashed ``#a16207`` (``7 4``), arrowhead (confirmed COPY lines only: a
   partly known or loose COPY is drawn by its certainty, never looking confirmed)
+* structural  - thin plain grey ``#94a3b8``, arrowhead: a gitdiagram Scheduler "starts"
+  line (status ``structural``). It is not a certainty and never takes a certainty colour.
+
+Gitdiagram boxes open their file or folder: ``href`` builds the relative URL and ``link``
+wraps a box in ``<a href>`` (Office ignores it); ``overview_block`` draws the overview
+paragraph above the picture; ``group_colors`` gives each group its colour.
 """
 from __future__ import annotations
 
 import math
+import posixpath
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from urllib.parse import quote
 
 FONT = "Segoe UI, Arial, sans-serif"
 MONO = "Consolas, monospace"
@@ -24,7 +32,9 @@ CONFIRMED_COLOR = "#334155"
 PARTIAL_COLOR = "#d97706"
 LOOSE_COLOR = "#dc2626"
 SHARED_COLOR = "#a16207"
+STRUCTURAL_COLOR = "#94a3b8"
 LOOSE_R = 6
+STARTS_LEGEND = "starts \u2014 the job exists; who schedules it isn't in these repos"
 
 REPO_COLORS = ("#3b82f6", "#16a34a", "#9333ea", "#ca8a04", "#ea580c", "#0891b2", "#db2777",
                "#4f46e5")
@@ -137,7 +147,10 @@ def step_mark(n: int, cx: float, cy: float, ink: str, fill: str = "#ffffff",
 # ------------------------------------------------------------------ lines
 
 def line_style(status: str, kind: str) -> str:
-    """``confirmed``, ``partial``, ``loose`` or ``shared_code``: the line type to draw."""
+    """``confirmed``, ``partial``, ``loose``, ``shared_code`` or ``structural``: the line type
+    to draw."""
+    if status == "structural":
+        return "structural"
     if status == "partial":
         return "partial"
     if status == "loose":
@@ -153,9 +166,10 @@ _LINE_ATTRS = {
     "loose": 'stroke="%s" stroke-width="2" fill="none"' % LOOSE_COLOR,
     "shared_code": ('stroke="%s" stroke-width="1.6" stroke-dasharray="7 4" fill="none"'
                     % SHARED_COLOR),
+    "structural": 'stroke="%s" stroke-width="1.4" fill="none"' % STRUCTURAL_COLOR,
 }
 LINE_COLORS = {"confirmed": CONFIRMED_COLOR, "partial": PARTIAL_COLOR, "loose": LOOSE_COLOR,
-               "shared_code": SHARED_COLOR}
+               "shared_code": SHARED_COLOR, "structural": STRUCTURAL_COLOR}
 
 
 def line_attrs(status: str, kind: str) -> str:
@@ -195,6 +209,7 @@ _LEGEND = (
     ("partial", "partly known / suggested"),
     ("loose", "loose end (only one side found)"),
     ("shared_code", "shared code (copybook, package)"),
+    ("structural", STARTS_LEGEND),
 )
 LEGEND_SIZE = 11.0
 
@@ -263,6 +278,106 @@ def svg_doc(w: float, h: float, body: str, bg: str = "#ffffff",
                                        num(w), num(h), bg, body))
 
 
+# ------------------------------------------------------------------ gitdiagram: links, overview
+
+def _url_path(p: str) -> str:
+    """``p`` with ``/`` separators, no leading ``./`` and no trailing ``/``."""
+    p = str(p).replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.strip("/")
+
+
+def href(view_repo_path: str, link: str) -> str:
+    """The relative URL, from ``architecture-diagrams/``, of ``link`` (repo-relative) in the
+    repo folder ``view_repo_path`` (workspace-relative): ``../<repo path>/<link>``, every
+    part percent-encoded so spaces and ``#`` survive."""
+    parts = [x for x in (_url_path(view_repo_path), _url_path(link)) if x]
+    return "../" + quote(posixpath.join(*parts) if parts else "", safe="/")
+
+
+def link_wrap(view, n, svg: str) -> str:
+    """``svg`` (one box) wrapped in ``<a href>`` when the box has a link; as is otherwise."""
+    if not getattr(n, "link", "") or not svg:
+        return svg
+    return '<a href="%s">%s</a>' % (esc(href(view.repo_path or view.scope or "", n.link)), svg)
+
+
+OVERVIEW_SIZE, OVERVIEW_LINE = 12.5, 18.0
+
+
+def overview_block(text_: str, width: float) -> Tuple[str, float]:
+    """The overview paragraph, wrapped to ``width`` (drawn from x 24 at y 0, on a light
+    band): (svg fragment, height including a gap below). Empty text gives ("", 0)."""
+    s = " ".join(str(text_ or "").split())
+    if not s:
+        return "", 0.0
+    lines = wrap(s, max(200.0, width - 64), OVERVIEW_SIZE)
+    h = 14 + OVERVIEW_LINE * len(lines)
+    parts = ['<rect x="16" y="0" width="%s" height="%s" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>'
+             % (num(max(240.0, width - 32)), num(h)),
+             '<rect x="16" y="0" width="4" height="%s" fill="#64748b"/>' % num(h)]
+    for i, line in enumerate(lines):
+        parts.append(text(30, 7 + OVERVIEW_LINE * (i + 1) - 4.5, line, OVERVIEW_SIZE, "#334155"))
+    return "<g>%s</g>" % "".join(parts), h + 16
+
+
+# group box colours: hues away from the line colours (slate, amber, red, brown, grey) and
+# dark enough to carry white text; "Not yet grouped" is neutral grey
+GROUP_PALETTE = ("#2563eb", "#047857", "#7c3aed", "#0e7490", "#a21caf", "#4338ca", "#0f766e",
+                 "#0369a1")
+UNGROUPED_COLOR = "#64748b"
+
+
+def group_colors(view) -> Dict[str, str]:
+    """{group box id: colour} for the gitdiagram's ``group`` boxes, by sorted group name, so
+    the same groups get the same colours every time."""
+    ids = sorted((n.id for n in view.nodes if n.kind == "group" and n.id != "grp:?"),
+                 key=lambda i: (i.lower(), i))
+    out = {g: GROUP_PALETTE[k % len(GROUP_PALETTE)] for k, g in enumerate(ids)}
+    if any(n.id == "grp:?" for n in view.nodes):
+        out["grp:?"] = UNGROUPED_COLOR
+    return out
+
+
+# a group's [tech] (lowercase) -> the icon it is drawn with
+_TECH_ICON = (
+    ("copybook", "program"), ("cobol", "program"), ("cbl", "program"), ("pl/i", "program"),
+    ("asm", "program"), ("assembler", "program"), ("jcl", "job"), ("proc", "job"),
+    ("java", "class"), ("spring", "class"), ("kotlin", "class"), ("angular", "component"),
+    ("typescript", "component"), ("ts", "component"), ("ddl", "table"), ("db2", "table"),
+    ("sql", "table"), ("mq", "queue"), ("bms", "map"), ("cics", "transaction"),
+    ("csd", "transaction"), ("z/os connect", "endpoint"), ("zos connect", "endpoint"),
+    ("rest", "endpoint"), ("api", "endpoint"), ("vsam", "vsam"),
+)
+_EXT_ICON = {".cbl": "program", ".cob": "program", ".cpy": "program", ".jcl": "job",
+             ".proc": "job", ".prc": "job", ".java": "class", ".ts": "component",
+             ".html": "page", ".ddl": "table", ".sql": "table", ".mqsc": "queue",
+             ".bms": "map", ".csd": "transaction", ".asm": "program"}
+
+
+def group_icon(n) -> str:
+    """The icon kind of a gitdiagram group box: from its ``[tech]``, else from the most
+    common file type among its members, else a folder (``repo``)."""
+    tech = (n.sublabel or "").strip("[] ").lower()
+    for word, kind in _TECH_ICON:
+        if tech == word or tech.startswith(word + " ") or (len(word) > 3 and word in tech):
+            return kind
+    counts: Dict[str, int] = {}
+    for p in getattr(n, "members", []) or []:
+        k = _EXT_ICON.get(posixpath.splitext(p)[1].lower())
+        if k:
+            counts[k] = counts.get(k, 0) + 1
+    if counts:
+        return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return "repo"
+
+
+def actor_icon(n) -> str:
+    """``clock`` for the Scheduler, ``person`` for every other entry-point box."""
+    return "clock" if n.id == "act:scheduler" else "person"
+
+
 # ------------------------------------------------------------------ icons
 #
 # Each icon is centered on (x, y) and fits in about 72 x 56. ``color`` is the group color;
@@ -278,7 +393,7 @@ _DEFAULT = {
     "table": "#1d4ed8", "queue": "#f97316", "transaction": "#16a34a", "map": "#2b8a3e",
     "cicsfile": "#0284c7", "external": "#64748b", "notanalyzed": "#94a3b8", "repo": "#334155",
     "application": "#3b82f6", "datastore": "#ea580c", "neighbor": "#94a3b8",
-    "missing": LOOSE_COLOR, "more": "#64748b", "sysout": "#475569",
+    "missing": LOOSE_COLOR, "more": "#64748b", "sysout": "#475569", "clock": "#475569",
 }
 
 
@@ -509,6 +624,16 @@ def _missing(x: float, y: float, color: str) -> str:
                                                            _c("missing", color))
 
 
+def _clock(x: float, y: float, color: str) -> str:
+    c = _c("clock", color)
+    return _g(x, y,
+              '<circle cx="0" cy="0" r="22" fill="#ffffff" stroke="%s" stroke-width="3"/>'
+              '<path d="M0,-15 V0 L10,7" fill="none" stroke="%s" stroke-width="3" '
+              'stroke-linecap="round"/><circle cx="0" cy="0" r="2.5" fill="%s"/>'
+              '<path d="M0,-22 v4 M22,0 h-4 M0,22 v-4 M-22,0 h4" stroke="%s" '
+              'stroke-width="2"/>' % (c, c, c, c))
+
+
 def _more(x: float, y: float, color: str) -> str:
     c = _c("more", color)
     return _g(x, y,
@@ -536,9 +661,10 @@ ICONS: Dict[str, Callable[[float, float, str], str]] = {
     "queue": _queue, "transaction": _transaction, "map": _map, "cicsfile": _cicsfile,
     "external": _external, "notanalyzed": _notanalyzed, "repo": _repo,
     "application": _application, "datastore": _datastore, "neighbor": _neighbor,
-    "missing": _missing, "more": _more, "sysout": _sysout,
+    "missing": _missing, "more": _more, "sysout": _sysout, "clock": _clock,
 }
 
 # kinds whose color means something (grey = outside or not analyzed, red = loose), so a
 # group color never replaces it
-FIXED_COLOR_KINDS = ("person", "external", "notanalyzed", "neighbor", "missing", "more")
+FIXED_COLOR_KINDS = ("person", "external", "notanalyzed", "neighbor", "missing", "more",
+                     "clock")
