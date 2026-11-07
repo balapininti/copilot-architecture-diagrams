@@ -242,9 +242,12 @@ def _stem(relpath: str) -> str:
     return (base[:dot] if dot > 0 else base).upper()
 
 
-def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext) -> None:
-    """Register PROCs and INCLUDE members (JCL fragments without a JOB card) by name."""
-    if not text.lstrip().startswith("//"):
+def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext,
+                  ftype: Optional[str] = None) -> None:
+    """Register PROCs and INCLUDE members (JCL fragments without a JOB card) by name.
+    Only JCL-like files count: a Java or TypeScript file that starts with a ``//`` comment
+    is never a PROC."""
+    if ftype not in ("jcl", "proc", None) or not text.lstrip().startswith("//"):
         return
     stmts = parse_statements(text)
     for s in stmts:
@@ -259,16 +262,40 @@ def collect_procs(repo: str, relpath: str, text: str, ctx: ScanContext) -> None:
                 elif k == "PROC":
                     called = v
             if called and "&" not in called:
-                ctx.proc_calls.add(_unquote(called).upper())
+                cname = _unquote(called).upper()
+                ctx.proc_calls.add(cname)
+                ctx.proc_callers.setdefault(cname, set()).add(repo)
     if not stmts or any(s.op == "JOB" for s in stmts):
         return
     names = [_stem(relpath)]
-    if stmts[0].op == "PROC" and stmts[0].name:
+    if stmts[0].op == "PROC" and stmts[0].name and stmts[0].name not in names:
         names.append(stmts[0].name)
     for n in names:
-        if n and n not in ctx.procs:
-            ctx.procs[n] = text
-            ctx.proc_src[n] = (repo, relpath)
+        if n:
+            ctx.proc_defs.setdefault(n, []).append((repo, relpath, text))
+
+
+def _norm_text(text: str) -> str:
+    return "\n".join(ln.rstrip() for ln in text.split("\n")).strip()
+
+
+def select_proc(ctx: ScanContext, name: str, repo: str, what: str = "PROC"
+                ) -> Optional[Tuple[Tuple[str, str, str], Optional[str]]]:
+    """The definition of PROC / INCLUDE member ``name`` that JCL in ``repo`` uses, and why
+    it is not certain (or None). The caller's own repo is searched first; when several
+    definitions with different text remain, the first is used and the reason says
+    ``ambiguous: PROC X defined in N places: <paths>``."""
+    defs = ctx.proc_defs.get(name)
+    if not defs:
+        return None
+    own = [d for d in defs if d[0] == repo]
+    pool = sorted(own or defs, key=lambda d: (d[0], d[1]))
+    texts = set(_norm_text(d[2]) for d in pool)
+    reason = None
+    if len(texts) > 1:
+        reason = "ambiguous: %s %s defined in %d places: %s" % (
+            what, name, len(pool), ", ".join("%s/%s" % (d[0], d[1]) for d in pool))
+    return pool[0], reason
 
 
 def _split_proc(stmts: List[Stmt]) -> Tuple[Dict[str, str], List[Stmt]]:
@@ -296,7 +323,7 @@ def _split_proc(stmts: List[Stmt]) -> Tuple[Dict[str, str], List[Stmt]]:
 
 class _DD:
     """A DD statement with its symbols already resolved (a snapshot at the point it was read)."""
-    __slots__ = ("ddname", "params", "data", "repo", "path", "line", "text")
+    __slots__ = ("ddname", "params", "data", "repo", "path", "line", "text", "amb")
 
     def __init__(self, ddname: str, params: List[Tuple[Optional[str], str, List[str]]],
                  data: List[Tuple[int, str, str, List[str]]], repo: str, path: str,
@@ -308,6 +335,7 @@ class _DD:
         self.path = path
         self.line = line
         self.text = text
+        self.amb: Optional[str] = None  # read inside an ambiguous PROC / INCLUDE expansion
 
 
 def _make_dd(ddname: str, stmt: Stmt, scope: _Scope, repo: str, path: str) -> _DD:
@@ -330,7 +358,9 @@ def _merge_override(orig: _DD, new: _DD) -> _DD:
         params = [p for p in params if p[0] is not None]
     params = [p for p in new.params if p[0] is None] + params + [p for p in new.params if p[0]]
     data = new.data if new.data else orig.data
-    return _DD(orig.ddname, params, data, new.repo, new.path, new.line, new.text)
+    out = _DD(orig.ddname, params, data, new.repo, new.path, new.line, new.text)
+    out.amb = new.amb
+    return out
 
 
 class _Step:
@@ -351,6 +381,7 @@ class _Step:
         self.parm_names: List[str] = []
         self.missing_proc: Optional[str] = None
         self.dds: List[_DD] = []
+        self.amb: Optional[str] = None  # the step comes from an ambiguous PROC / INCLUDE
 
 
 class _Scanner:
@@ -370,6 +401,12 @@ class _Scanner:
         self.dd_last: str = ""
         self.active_procs: List[str] = []
         self.header_done = False
+        # reasons of the ambiguous PROC / INCLUDE expansions being walked (None = certain)
+        self.amb: List[Optional[str]] = []
+
+    def amb_reason(self) -> Optional[str]:
+        parts = [a for a in self.amb if a]
+        return "; ".join(parts) if parts else None
 
     # -- helpers
     def _ev(self, repo: str, path: str, line: int, text: str) -> Evidence:
@@ -444,13 +481,16 @@ class _Scanner:
                 member = _resolve(_unquote(v), scope)[0].upper()
         if not member or depth >= MAX_DEPTH or member in self.active_procs:
             return
-        text = self.ctx.procs.get(member)
-        if text is None:
+        sel = select_proc(self.ctx, member, self.repo, "INCLUDE member")
+        if sel is None:
             return
-        isrc = self.ctx.proc_src.get(member, src)
+        (irepo, irel, text), amb = sel
+        isrc = (irepo, irel)
         _defaults, body = _split_proc(parse_statements(text)) if _has_proc(text) else ({}, parse_statements(text))
         self.active_procs.append(member)
+        self.amb.append(amb)
         self.run(body, isrc, scope, proc, callstep, depth + 1)
+        self.amb.pop()
         self.active_procs.pop()
 
     def exec_stmt(self, s: Stmt, src: Tuple[str, str], scope: _Scope, proc: Optional[str],
@@ -488,6 +528,7 @@ class _Scanner:
             name, unres = _resolve(_unquote(pgm), scope)
             step.pgm = name.upper()
             step.pgm_reason = _reason(unres)
+            step.amb = self.amb_reason()
             if parm is not None:
                 step.parm, step.parm_names = _resolve(parm, scope)
             self.steps.append(step)
@@ -500,16 +541,20 @@ class _Scanner:
         pname = pname.upper()
         found = None
         psrc = src
+        amb = None
+        sel = select_proc(self.ctx, pname, self.repo)
         if pname in self.local_procs:
             found = self.local_procs[pname]
-        elif pname in self.ctx.procs and pname not in self.active_procs and depth < MAX_DEPTH:
-            found = _split_proc(parse_statements(self.ctx.procs[pname]))
-            psrc = self.ctx.proc_src.get(pname, src)
+        elif sel is not None and pname not in self.active_procs and depth < MAX_DEPTH:
+            (prepo, prel, ptext), amb = sel
+            found = _split_proc(parse_statements(ptext))
+            psrc = (prepo, prel)
         if found is None:
             step = _Step(self._step_id(stepname, callstep), stepname, order, s, src[0], src[1],
                          scope, pname, cond)
             step.pgm = ""
             step.missing_proc = pname
+            step.amb = self.amb_reason()
             self.steps.append(step)
             self.cur_step = step
             self.last_call = {}
@@ -519,7 +564,9 @@ class _Scanner:
         own.update(overrides)
         before = len(self.steps)
         self.active_procs.append(pname)
+        self.amb.append(amb)
         self.run(body, psrc, _Scope(own, scope), pname, stepname, depth + 1)
+        self.amb.pop()
         self.active_procs.pop()
         created = self.steps[before:]
         if condv:  # an EXEC-level COND applies to every step of the call
@@ -537,6 +584,7 @@ class _Scanner:
             if target is None:
                 return
             new = _make_dd(ddname, s, scope, src[0], src[1])
+            new.amb = self.amb_reason()
             for i, d in enumerate(target.dds):
                 if d.ddname == ddname:
                     target.dds[i] = _merge_override(d, new)  # only the first DD; keep concatenations
@@ -554,7 +602,9 @@ class _Scanner:
             if target is None:
                 return
         self.dd_target, self.dd_last = target, ddname
-        target.dds.append(_make_dd(ddname, s, scope, src[0], src[1]))
+        dd = _make_dd(ddname, s, scope, src[0], src[1])
+        dd.amb = self.amb_reason()
+        target.dds.append(dd)
 
     # -- emission
     def emit(self) -> Tuple[List[Node], List[Ref]]:
@@ -574,15 +624,24 @@ class _Scanner:
                  "sysout": sysout, "job": self.job_id}
         nodes.append(Node(st.id, "step", st.name, self.repo, [ev], attrs))
 
+        cur_amb: List[Optional[str]] = [st.amb]
+
         def add(op: str, kind: str, name: Optional[str], e: Evidence, reason: Optional[str] = None,
                 a: Optional[dict] = None) -> None:
-            refs.append(Ref(st.id, op, kind, name, e, reason, [], a or {}))
+            parts = [x for x in [reason] + cur_amb if x]
+            seen: List[str] = []
+            for x in parts:
+                if x not in seen:
+                    seen.append(x)
+            refs.append(Ref(st.id, op, kind, name, e, "; ".join(seen) if seen else None, [],
+                            a or {}))
 
         if st.missing_proc:
             add("runs", "program", None, ev, "PROC %s is not in these repos" % st.missing_proc)
         elif st.pgm:
             self.emit_program(st, ev, add)
         for dd in st.dds:
+            cur_amb[1:] = [dd.amb]
             self.emit_dd(st, dd, sysout, add, dd_index)
 
     def emit_program(self, st: _Step, ev: Evidence, add) -> None:
@@ -853,11 +912,23 @@ def _scan(repo: str, relpath: str, text: str, ctx: ScanContext, proc_file: bool
     name = card.name or _stem(relpath)
     node = Node(sc.job_id, "proc" if proc_file else "job", name, repo,
                 [Evidence(repo, relpath, card.line, card.text)], {})
-    if proc_file and (name.upper() in ctx.proc_calls or _stem(relpath) in ctx.proc_calls):
+    called = False
+    other_copy = ""
+    if proc_file:
+        for pn in set([name.upper(), _stem(relpath)]):
+            for caller in sorted(ctx.proc_callers.get(pn, ())):
+                sel = select_proc(ctx, pn, caller)
+                if sel is not None and sel[0][:2] == (repo, relpath):
+                    called = True
+                else:
+                    other_copy = other_copy or ("may use" if sel and sel[1] else "use")
+    if called:
         return [node], []  # callers' expansions already cover every step of this PROC
     nodes, refs = sc.emit()
     if proc_file:
-        why = "PROC default values; no caller in these repos"
+        why = ("PROC default values; callers of %s %s another copy of it"
+               % (name.upper(), other_copy) if other_copy
+               else "PROC default values; no caller in these repos")
         for r in refs:
             r.attrs["proc_default"] = True
             r.reason = why if not r.reason else r.reason + "; " + why

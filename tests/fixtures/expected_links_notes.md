@@ -147,3 +147,20 @@ PARTIAL"), which settles the partial-vs-loose question raised in the first gate 
 - First run: matched all 75 entries exactly (58 confirmed, 8 partial, 9 loose).
 - Fix round 1: +2 entries, the endpoint → handler `runs` edges (Ruling 25, resolver change
   above). Now 77 entries (60 confirmed, 8 partial, 9 loose).
+
+## Final fix wave traps
+
+Added by the final fix wave (final-findings.md). Each trap is a new file; no existing fixture
+file was changed.
+
+### C1: duplicate PROC names (`claims-batch/proc/CLMEXT.proc`, `claims-online/proc/CLMEXT.proc`, `claims-online/jcl/CLMO900.jcl`)
+
+| Edge | Status | Why |
+|---|---|---|
+| CLMO900#EXT runs program:CLMO130 | confirmed | CLMO900.jcl:3 `EXEC CLMEXT`; CLMEXT is defined in claims-batch and in claims-online with different steps. The job's own repo is searched first, so claims-online/proc/CLMEXT.proc:3 `EXEC PGM=CLMO130`; one PROGRAM-ID CLMO130. The old first-wins lookup expanded the claims-batch copy (CLMB210) and drew it solid |
+| CLMO900#EXT read dataset:CLAIMS.DAILY | confirmed | claims-online/proc/CLMEXT.proc:4 `PROD.CLAIMS.DAILY(0)` SHR; PROD dropped, GDG stripped |
+| claims-batch/proc/CLMEXT.proc#EXT runs program:CLMB210 | partial | no caller uses the claims-batch copy (CLMO900 uses its own repo's), so it is scanned with its defaults: "PROC default values; callers of CLMEXT use another copy of it" (Ruling 8) |
+| claims-batch/proc/CLMEXT.proc#EXT read dataset:CLAIMS.EXTRACT | partial | same; a default-scan ref never counts as a reader |
+
+A job in a repo with no copy of a PROC that two repos define differently gets every ref
+partial, "ambiguous: PROC X defined in N places: ..." (unit tests in test_scan_jcl.py).

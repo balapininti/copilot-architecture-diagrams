@@ -192,7 +192,8 @@ def test_landscape_keeps_every_loose_end():
 def test_landscape_folds_each_apps_loose_ends():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    assert len(v.nodes) == 17
+    # 18: the CLMEXT trap (duplicate PROC) makes CLAIMS.DAILY shared by batch and online
+    assert len(v.nodes) == 18
     box = node(v, "missing:app:claims-online")
     assert (box.kind, box.label, box.status) == ("missing", "6 loose ends", LOOSE)
     assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +3"]
@@ -204,7 +205,8 @@ def test_landscape_folds_each_apps_loose_ends():
     assert not want & {n.id for n in v.nodes}
     # partly known links inside one application are counted on its box
     assert "1 partly known link inside" in node(v, "app:claims-online").detail_lines
-    assert "2 partly known links inside" in node(v, "app:claims-batch").detail_lines
+    # 2 + the uncalled claims-batch copy of CLMEXT (scanned with its defaults: partial)
+    assert "4 partly known links inside" in node(v, "app:claims-batch").detail_lines
 
 
 def test_landscape_shared_code():

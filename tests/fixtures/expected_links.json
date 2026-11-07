@@ -83,5 +83,10 @@
   {"src": "component:claims-portal/ClaimDetailsComponent", "op": "uses", "dst": "component:claims-portal/ClaimService", "status": "confirmed"},
   {"src": "component:claims-portal/ClaimService", "op": "http", "dst": "endpoint:GET /api/claims/{}", "status": "confirmed"},
   {"src": "component:claims-portal/ClaimService", "op": "http", "dst": "endpoint:POST /api/claims", "status": "confirmed"},
-  {"src": "component:claims-portal/ClaimService", "op": "http", "dst": "missing:endpoint:DELETE /api/claims/{}", "status": "loose"}
+  {"src": "component:claims-portal/ClaimService", "op": "http", "dst": "missing:endpoint:DELETE /api/claims/{}", "status": "loose"},
+
+  {"src": "step:claims-online/jcl/CLMO900.jcl#EXT", "op": "runs", "dst": "program:CLMO130", "status": "confirmed"},
+  {"src": "step:claims-online/jcl/CLMO900.jcl#EXT", "op": "read", "dst": "dataset:CLAIMS.DAILY", "status": "confirmed"},
+  {"src": "step:claims-batch/proc/CLMEXT.proc#EXT", "op": "runs", "dst": "program:CLMB210", "status": "partial"},
+  {"src": "step:claims-batch/proc/CLMEXT.proc#EXT", "op": "read", "dst": "dataset:CLAIMS.EXTRACT", "status": "partial"}
 ]

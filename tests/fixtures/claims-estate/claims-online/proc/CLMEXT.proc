@@ -1,0 +1,4 @@
+//CLMEXT  PROC
+//* claims-online copy of CLMEXT: same name, different steps
+//EXT     EXEC PGM=CLMO130
+//IN      DD DSN=PROD.CLAIMS.DAILY(0),DISP=SHR

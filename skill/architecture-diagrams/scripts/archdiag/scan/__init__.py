@@ -14,9 +14,11 @@ from ..textio import classify, needs_text, read_source
 
 @dataclass
 class ScanContext:
-    procs: Dict[str, str] = field(default_factory=dict)
-    proc_src: Dict[str, Tuple[str, str]] = field(default_factory=dict)  # NAME -> (repo, relpath)
+    # every PROC / INCLUDE member definition: NAME -> [(repo, relpath, text)] (several when
+    # the same name is defined in more than one place; see jcl.select_proc)
+    proc_defs: Dict[str, List[Tuple[str, str, str]]] = field(default_factory=dict)
     proc_calls: Set[str] = field(default_factory=set)  # PROC names some JCL EXECs (pass 1)
+    proc_callers: Dict[str, Set[str]] = field(default_factory=dict)  # NAME -> caller repos
     props: Dict[str, Dict[str, str]] = field(default_factory=dict)   # per repo
     ts_env: Dict[str, Dict[str, str]] = field(default_factory=dict)  # per repo
     # Java / Angular (pass 1): class names defined per repo, and `static final String`
@@ -86,7 +88,7 @@ def _register_builtin_scanners() -> None:
 def _collect_pass(repo: str, rel: str, text: str, ftype: Optional[str],
                   ctx: ScanContext) -> None:
     from . import jcl, mq, zosconnect
-    jcl.collect_procs(repo, rel, text, ctx)
+    jcl.collect_procs(repo, rel, text, ctx, ftype)
     mq.collect_mq(repo, rel, text, ftype, ctx)
     zosconnect.collect_zosconnect(repo, rel, text, ftype, ctx)
     if ftype == "java":

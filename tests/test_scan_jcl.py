@@ -327,3 +327,79 @@ def test_gdg_and_member_forms(tmp_path):
     assert by["A"].attrs["gdg"] == "-1" and by["A"].target_name == "P.GDG"
     assert by["B"].target_name == "P.LIB" and by["B"].attrs["gdg"] is None
     assert by["C"].op == "write" and "D" not in by
+
+
+# ------------------------------------------------------------------ duplicate PROC names (C1)
+
+def scan_repos(tmp_path, repos):
+    """A workspace of several repos: {repo: {relpath: text}}."""
+    for repo, files in repos.items():
+        root = tmp_path / repo
+        root.mkdir()
+        (root / ".archdiag-repo").write_text("")
+        for rel, text in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+    return scan_workspace(tmp_path, Config())
+
+
+_PROC_A = "//MYPROC  PROC\n//S1      EXEC PGM=AAAPGM\n//IN      DD DSN=AAA.IN,DISP=SHR\n"
+_PROC_B = "//MYPROC  PROC\n//S1      EXEC PGM=BBBPGM\n//IN      DD DSN=BBB.IN,DISP=SHR\n"
+_JOB = "//JOBX    JOB (ACCT),'X'\n//STEP1   EXEC MYPROC\n"
+
+
+def test_duplicate_proc_prefers_the_jobs_own_repo(tmp_path):
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_A},
+                              "bbb": {"proc/MYPROC.proc": _PROC_B, "jcl/JOBB.jcl": _JOB}})
+    refs = step_refs(i, "bbb/jcl/JOBB.jcl#S1")
+    assert {(r.op, r.target_name) for r in refs} == {("runs", "BBBPGM"), ("read", "BBB.IN")}
+    assert all(r.reason is None for r in refs)
+    assert all(r.evidence.repo == "bbb" for r in refs)
+
+
+def test_duplicate_proc_elsewhere_is_ambiguous(tmp_path):
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_A},
+                              "bbb": {"proc/MYPROC.proc": _PROC_B},
+                              "ccc": {"jcl/JOBC.jcl": _JOB}})
+    refs = step_refs(i, "ccc/jcl/JOBC.jcl#S1")
+    assert refs
+    for r in refs:
+        assert r.reason and r.reason.startswith("ambiguous: PROC MYPROC defined in 2 places")
+        assert "aaa/proc/MYPROC.proc" in r.reason and "bbb/proc/MYPROC.proc" in r.reason
+
+
+def test_duplicate_proc_in_own_repo_is_ambiguous(tmp_path):
+    i = scan_repos(tmp_path, {"bbb": {"proc/MYPROC.proc": _PROC_B, "stage/MYPROC.proc": _PROC_A,
+                                      "jcl/JOBB.jcl": _JOB}})
+    refs = step_refs(i, "bbb/jcl/JOBB.jcl#S1")
+    assert refs and all(r.reason and "ambiguous: PROC MYPROC defined in 2 places" in r.reason
+                        for r in refs)
+
+
+def test_identical_proc_copies_are_not_ambiguous(tmp_path):
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_B},
+                              "bbb": {"proc/MYPROC.proc": _PROC_B},
+                              "ccc": {"jcl/JOBC.jcl": _JOB}})
+    refs = step_refs(i, "ccc/jcl/JOBC.jcl#S1")
+    assert {(r.op, r.target_name) for r in refs} == {("runs", "BBBPGM"), ("read", "BBB.IN")}
+    assert all(r.reason is None for r in refs)
+
+
+def test_other_repos_proc_not_chosen_by_a_caller_is_still_scanned(tmp_path):
+    # bbb's job uses bbb's PROC, so aaa's MYPROC has no caller: its steps are not dropped
+    i = scan_repos(tmp_path, {"aaa": {"proc/MYPROC.proc": _PROC_A},
+                              "bbb": {"proc/MYPROC.proc": _PROC_B, "jcl/JOBB.jcl": _JOB}})
+    got = {(r.op, r.target_name) for r in i.refs if r.src.startswith("step:aaa/")}
+    assert ("runs", "AAAPGM") in got and ("read", "AAA.IN") in got
+    assert all(r.attrs.get("proc_default") for r in i.refs if r.src.startswith("step:aaa/"))
+
+
+def test_java_and_ts_files_starting_with_slashes_are_not_procs(tmp_path):
+    java = "// MYPROC helper\npackage x;\nclass MYPROC {}\n"
+    ts = "// INCMEM\nexport const x = 1;\n"
+    job = "//JOBX    JOB (ACCT),'X'\n//STEP1   EXEC MYPROC\n// INCLUDE MEMBER=INCMEM\n"
+    i = scan_repos(tmp_path, {"r": {"src/MYPROC.java": java, "src/INCMEM.ts": ts,
+                                    "jcl/JOBX.jcl": job}})
+    r = one_ref(i, "r/jcl/JOBX.jcl#STEP1", "runs")
+    assert r.target_name is None and "PROC MYPROC is not in these repos" in r.reason

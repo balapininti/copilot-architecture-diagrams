@@ -1,0 +1,4 @@
+//CLMEXT  PROC
+//* claims-batch copy of CLMEXT: extract reader
+//EXT     EXEC PGM=CLMB210
+//IN      DD DSN=PROD.CLAIMS.EXTRACT,DISP=SHR
