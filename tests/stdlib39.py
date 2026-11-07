@@ -3,9 +3,10 @@ so the 'stdlib only' test means the same on every Python).
 
 Built from the macOS system Python 3.9.6 (every module in its stdlib folder, lib-dynload and
 sys.builtin_module_names) joined with the 3.14 ``sys.stdlib_module_names`` ones that also exist
-in 3.9, plus four public 3.9 modules neither source has (taken from the 3.9 module index):
-msilib (Windows only), spwd and ossaudiodev (Linux only; both removed in 3.13) and xxlimited
-(the limited-API example module). Left out because they are newer than 3.9: tomllib (3.11), annotationlib and compression
+in 3.9, plus four 3.9 modules neither source has: msilib (Windows only), spwd and
+ossaudiodev (Unix/Linux only; all three in the 3.9 module index and removed in 3.13), and
+xxlimited (an undocumented example extension for the limited C API that CPython 3.9 builds
+ship; no real code imports it, it is listed so the set matches what 3.9 installs). Left out because they are newer than 3.9: tomllib (3.11), annotationlib and compression
 (3.14), and every private module added after 3.9 (_colorize, _pyrepl, _zstd and the like).
 Kept although later removed: asyncore, asynchat, imp, distutils, smtpd, binhex, formatter,
 cgi, cgitb, telnetlib and the other "dead batteries" removed in 3.10 to 3.13. Windows-only

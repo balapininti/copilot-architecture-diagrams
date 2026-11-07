@@ -248,7 +248,7 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
     leg_y = strip_y + strip_h + (12 if strip else 0)
     leg, leg_h = legend(30, leg_y, present)
     notes_y = leg_y + leg_h + (14 if leg_h else 0)
-    n_h = notes_height(view.notes, note_w)
+    n_h = notes_height(view.notes + L.notes, note_w)
     height = notes_y + n_h + (16 if n_h else 4)
 
     body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
@@ -283,7 +283,7 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
             body.append(text(34, strip_y + 16 + STRIP_LINE * (k + 1) - 5, s, STRIP_SIZE,
                              "#475569", mono=True))
     body.append(leg)
-    body.append(notes_block(view.notes, 30, notes_y, note_w))
+    body.append(notes_block(view.notes + L.notes, 30, notes_y, note_w))
     return svg_doc(width, height, "".join(body), title=view.title)
 
 

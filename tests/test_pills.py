@@ -236,3 +236,25 @@ def test_key_wraps_a_label_wider_than_the_key():
     assert row2 >= row1 + len(lines1)
     svg, h = P.key_svg([long, short], 30, 0, 400.0)
     assert h >= 18 + P.KEY_LINE * (row2 + 1)
+
+
+def _on_route(c, r):
+    for a, b in zip(r, r[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = max(0.0, min(1.0, ((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / (dx * dx + dy * dy or 1)))
+        if ((a[0] + t * dx - c[0]) ** 2 + (a[1] + t * dy - c[1]) ** 2) ** 0.5 < 1.0:
+            return True
+    return False
+
+
+def test_the_clearance_preference_never_moves_a_pill_off_a_free_spot_on_its_line():
+    """E6 follow-up: keeping clear of other lines is weighed only between spots on the
+    line (or only between spots beside it): a pill goes beside its line only when no spot
+    on it is free. In the landscape every pill sits on its own line (the "SQL" pill had
+    moved beside it)."""
+    v = fixture_view("landscape", None)
+    for mod in (style_a, style_b, style_c, style_d):
+        routes, pills = _placed(mod, v)
+        off = [v.edges[p.i].label for p in pills
+               if not p.marker and not _on_route((p.x + p.w / 2, p.y + p.h / 2), routes[p.i])]
+        assert not off, (mod.__name__, off)

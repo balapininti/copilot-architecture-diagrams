@@ -255,6 +255,7 @@ def _top_issues(view, r: Resolved) -> List[str]:
 
 def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     from .render import report, style_a, style_b, style_c, style_d
+    from .layout import layout_notes
     from .views import ScopeError, build_view
     level = args.level
     if level not in CLI_LEVELS:
@@ -300,7 +301,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     links = out_dir / ("%s-links.md" % base)
     _write(links, report.links_report(view, r))
     written.append(links)
-    for note in view.notes:
+    for note in view.notes + layout_notes(view):
         notice("Note: %s" % note)
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:

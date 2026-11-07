@@ -8,7 +8,7 @@ the second part has been run, and none of it is marked as passed.
 
 Date of the run here: 2026-11-07. Release under acceptance: archdiag **0.1.3** (`archdiag/__init__.py`, `pyproject.toml`; cache schema 4). Commit under test: branch `fix/outstanding`, HEAD `ab5a151` (all fix batches A to E applied; this file is committed on top of it and changes no code). Every check in the table below was re-run on that commit; earlier results (0.1.0 at `f69d1de`) are replaced.
 
-Two Pythons were used. `.venv/bin/python` is Python 3.14.4 and runs the pytest suite. `/usr/bin/python3` is the macOS system **Python 3.9.6** (the lowest supported version), run with `-I` (isolated: no user site-packages, no environment variables, no current folder on the path); it has no pytest and none could be installed offline (pytest 9 no longer supports 3.9; a pytest 8.3 or older wheel is needed once), so **the full pytest suite was not run on 3.9 here**. That is now Windows step W1.4a.
+Two Pythons were used. `.venv/bin/python` is Python 3.14.4 and runs the pytest suite. `/usr/bin/python3` is the macOS system **Python 3.9.6** (the lowest supported version), run with `-I` (isolated: no user site-packages, no environment variables, no current folder on the path); it has no pytest and none could be installed offline (pytest 9 no longer supports 3.9; a pytest 8.3 or older wheel is needed once), so **the full pytest suite was not run on 3.9 here**. That is now Windows step W1.4 (see W1.4a).
 
 ## Run here (results)
 
@@ -115,8 +115,8 @@ test write its name (`tests\test_x.py::test_y`) and the first 5 lines of its tra
 | 1 | `py -3.9 --version` | prints `Python 3.9.x` | |
 | 2 | `py -3.9 -m venv .venv39` then `.venv39\Scripts\python -m pip install "pytest<8.4"` (the only install; the only step that needs a network or an internal index) | pytest installs | |
 | 3 | Turn the network off (Wi-Fi off, Ethernet disabled). Confirm: `Test-NetConnection github.com -Port 443` | `TcpTestSucceeded : False` | |
-| 4 | `.venv39\Scripts\python -m pytest -q` from the repo root | `607 passed` (or the current count; the headless-Chrome HTML test is skipped when Chrome is not installed, which is fine); no skips or errors that mention the network | |
-| 4a | Not run anywhere yet: this is the first full pytest run on Python 3.9 (the macOS check ran 3.9.6 syntax, imports and the CLI only). If pip offers pytest 9 or later, install `pytest<8.4` instead (pytest 9 needs Python 3.10) | pytest installs and step 4 passes on 3.9 | |
+| 4 | `.venv39\Scripts\python -m pytest -q -rs` from the repo root | `607 passed`, or `606 passed, 1 skipped` where the one skip is `tests/test_style_c.py::test_html_search_and_click_run_in_a_browser` (it runs only when Chrome is found: on Windows Chrome is not on PATH, so set `$env:ARCHDIAG_CHROME` to the full path of `chrome.exe` to run it; it also skips if Chrome returns no page). Record whether that test ran. No other skips; no errors that mention the network | |
+| 4a | Note, nothing to type: step 4 is the first full pytest run on Python 3.9 anywhere (the macOS check ran only 3.9.6 syntax, imports and the CLI). Record the pytest version step 2 installed (`.venv39\Scripts\python -m pytest --version`) | a pytest 8.x version is shown and step 4 passed | |
 | 5 | Copy the repo to `C:\work dir\repo` (path with a space) and run `.venv39\Scripts\python -m pytest -q -p no:cacheprovider` there | same count passes | |
 | 6 | Turn the network back on; `Test-NetConnection github.com -Port 443` | `TcpTestSucceeded : True` | |
 

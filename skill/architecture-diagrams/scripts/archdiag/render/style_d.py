@@ -412,10 +412,11 @@ class _Scene:
         self.leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
         self.leg, leg_h = legend(30, self.leg_y, self.present)
         notes_y = self.leg_y + leg_h + (14 if leg_h else 0)
-        self.stickies, notes_h = _place_stickies(view.notes, 30, notes_y + 4,
+        self.notes = view.notes + self.L.notes
+        self.stickies, notes_h = _place_stickies(self.notes, 30, notes_y + 4,
                                                   max(self.width - 60, 560.0))
         self.width = max([self.width] + [s.x + s.w + 30 for s in self.stickies])
-        self.height = notes_y + (notes_h + 28 if view.notes else 4)
+        self.height = notes_y + (notes_h + 28 if self.notes else 4)
         self.gidx = _group_index(view)
 
     def lane(self) -> Optional[Tuple[float, float, float, float]]:

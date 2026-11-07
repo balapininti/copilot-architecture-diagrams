@@ -15,7 +15,7 @@ from __future__ import annotations
 import bisect
 import heapq
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from archdiag.views import VNode, ViewGraph
@@ -117,13 +117,23 @@ class Layout:
                                 # empty for flow_job and repomap: job rows and card grids do
                                 # not arrange by group, the views for those levels set none
                                 # (tests/test_layout.py checks); any given are not drawn and
-                                # layout_for says so in view.notes (GROUPS_NOT_DRAWN)
+                                # the layout says so in its notes (GROUPS_NOT_DRAWN)
     routes: List[List[Point]]   # one polyline per view.edges index
     label_at: List[Point]       # one label anchor per edge
+    notes: List[str] = field(default_factory=list)  # what the layout left out (E5);
+                                # renderers draw view.notes + notes. view is never changed
 
 
 GROUPS_NOT_DRAWN = ("Groups are not drawn on a job flow or a repo map: its boxes are laid "
                     "out in rows or a grid, not by group.")
+
+
+def layout_notes(view: ViewGraph) -> List[str]:
+    """Notes on what ``layout_for`` leaves out of this view (E5): groups on a job flow or
+    repo map are said, not silently dropped. The CLI and the links report use it too."""
+    if view.level in ("flow_job", "repomap") and view.groups:
+        return [GROUPS_NOT_DRAWN]
+    return []
 
 
 def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
@@ -140,9 +150,6 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
     for n in view.nodes:
         w, h = node_size(n)
         sizes[n.id] = (float(w), float(h))
-    if view.level in ("flow_job", "repomap") and view.groups \
-            and GROUPS_NOT_DRAWN not in view.notes:
-        view.notes.append(GROUPS_NOT_DRAWN)  # E5: said, not silently dropped
     if view.level == "flow_job":
         boxes, routes = job_rows(view, sizes)
         groups: Dict[str, Box] = {}
@@ -161,7 +168,9 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
             boxes, routes = layered(view, sizes, wrap=True)
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
-    return _finish(boxes, groups, routes)
+    out = _finish(boxes, groups, routes)
+    out.notes = layout_notes(view)
+    return out
 
 
 # ------------------------------------------------------------------ shared helpers
@@ -1502,12 +1511,13 @@ def _labeled_row_crossings(view: ViewGraph, boxes: Dict[str, Box],
              if e.label and len(r) == 2 and e.src != e.dst
              and {rows.get(e.src), rows.get(e.dst)} & {"above", "below"}
              and "lane" in (rows.get(e.src), rows.get(e.dst))]
+
+    def orient(a: Point, b: Point, c: Point) -> float:
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
     for i in range(len(lines)):
         for j in range(i + 1, len(lines)):
             (p1, p2), (p3, p4) = lines[i], lines[j]
-
-            def orient(a: Point, b: Point, c: Point) -> float:
-                return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
             if orient(p3, p4, p1) * orient(p3, p4, p2) < 0 \
                     and orient(p1, p2, p3) * orient(p1, p2, p4) < 0:
                 return True
@@ -1747,12 +1757,12 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
         if e.src == e.dst:
             sides[k], bend[k] = ("right", "top"), 1.0
         elif "missing" in (kinds[e.src], kinds[e.dst]):
-            # a loose stub: straight from the nearest card side to the missing box (E7);
-            # a curve only when every straight line would cross a card
-            sides[k], bend[k], how = _stub_sides(a, b, others)
-            if how != "curve":
-                straight.add(k)
-            if how == "maze":
+            # a loose stub (E7): straight from the nearest facing card side to the missing
+            # box; round the cards at right angles where the straight line would cross one
+            sides[k], round_cards = _stub_sides(a, b, others)
+            bend[k] = 1.0
+            straight.add(k)
+            if round_cards:
                 mazed.add(k)
         else:
             sides[k], bend[k] = _clear_sides(a, b, others)
@@ -1774,7 +1784,8 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
         sa, sb = sides[k]
         p0, p3 = _side_point(a, sa, offset[(k, 0)]), _side_point(b, sb, offset[(k, 1)])
         routes.append([p0, p3] if k in straight else _card_curve(p0, sa, p3, sb, bend[k]))
-    # a stub whose straight line would cross a card goes round the cards at right angles
+    # a stub whose straight line would cross a card goes round the cards at right angles;
+    # only when that search finds no path in its budget is it drawn as a gentle curve
     budget = MAZE_BUDGET
     blocks = list(boxes.values())
     for k in sorted(mazed):
@@ -1792,11 +1803,12 @@ def card_grid(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
     return boxes, routes
 
 
-def _stub_sides(a: Box, b: Box, others: List[Box]) -> Tuple[Tuple[str, str], float, str]:
-    """Sides for a line to or from a missing box (E7): the nearest pair of sides that
-    face each other (each end leaves its card outward, never round the back), joined by
-    a straight line ("straight") when it crosses no card, else by a path round the cards
-    at right angles ("maze", routed once every side is known). (sides, bend, how)."""
+def _stub_sides(a: Box, b: Box, others: List[Box]) -> Tuple[Tuple[str, str], bool]:
+    """Sides for a line to or from a missing box (E7): the pair of sides that face each
+    other (each end leaves its card outward, never round the back) whose straight line
+    crosses the fewest cards, then is shortest. Returns (sides, round_cards): round_cards
+    is True when even that line crosses a card, so the caller routes it round the cards
+    at right angles once every side is known."""
     best = None
     for facing in (True, False):
         for sa, na in _SIDES.items():
@@ -1811,7 +1823,7 @@ def _stub_sides(a: Box, b: Box, others: List[Box]) -> Tuple[Tuple[str, str], flo
                     best = (score, (sa, sb))
         if best is not None:
             break
-    return best[1], 1.0, "straight" if best[0][0] == 0 else "maze"
+    return best[1], best[0][0] > 0
 
 
 def _card_curve(p0: Point, sa: str, p3: Point, sb: str, bend: float) -> List[Point]:

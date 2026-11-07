@@ -532,7 +532,10 @@ def test_channel_lanes_nest_in_a_synthetic_wrap():
 
 def test_groups_on_a_job_flow_or_repomap_are_reported_not_dropped_silently():
     """E5: layout_for draws no groups on a job flow or repo map; when a view gives some,
-    it says so in the view's notes (once, however often the view is laid out)."""
+    the layout says so in its notes (drawn under the picture with the view's), and the
+    caller's view is left as it was."""
+    from archdiag.render import style_a, style_b, style_c, style_d
+    from archdiag.layout import GROUPS_NOT_DRAWN, layout_notes
     for level in ("flow_job", "repomap"):
         v = ViewGraph("t", level, "J",
                       [VNode("job:J", "J", kind="job", group="g1"),
@@ -540,13 +543,16 @@ def test_groups_on_a_job_flow_or_repomap_are_reported_not_dropped_silently():
                       [VEdge("job:J", "step:J#S1", kind="sequence")],
                       [VGroup("g1", "app", "#3b82f6")])
         L = layout_for(v, lambda n: (140, 80))
-        layout_for(v, lambda n: (140, 80))
         assert L.groups == {}
-        notes = [n for n in v.notes if "group" in n.lower()]
-        assert len(notes) == 1 and "not drawn" in notes[0], v.notes
+        assert L.notes == [GROUPS_NOT_DRAWN] == layout_notes(v)
+        assert v.notes == []
+        for mod in (style_a, style_b, style_c, style_d):
+            out = mod.render(v)
+            assert "not drawn" in out["svg"], (level, mod.__name__)
+        assert "not drawn" in style_b.render(v)["md"]
+        assert v.notes == []
     v = ViewGraph("t", "flow_job", "J", [VNode("job:J", "J", kind="job")], [], [])
-    layout_for(v, lambda n: (140, 80))
-    assert v.notes == []
+    assert layout_for(v, lambda n: (140, 80)).notes == [] and v.notes == []
 
 
 def test_repomap_loose_stubs_go_straight_to_the_missing_box():

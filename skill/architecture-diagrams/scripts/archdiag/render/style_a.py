@@ -212,7 +212,7 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     leg_y = content_h + 6 + (key_h + 10 if key_h else 0)
     leg, leg_h = legend(30, leg_y, present)
     notes_y = leg_y + leg_h + (14 if leg_h else 0)
-    n_h = notes_height(view.notes, note_w)
+    n_h = notes_height(view.notes + L.notes, note_w)
     height = notes_y + n_h + (16 if n_h else 4)
 
     body: List[str] = [text(24, 30, view.title, 16, "#0f172a", weight="700")]
@@ -238,7 +238,7 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     body.extend(p.svg(ox, oy) for p in pills)
     body.append(key)
     body.append(leg)
-    body.append(notes_block(view.notes, 30, notes_y, note_w))
+    body.append(notes_block(view.notes + L.notes, 30, notes_y, note_w))
     return svg_doc(width, height, "".join(body), title=view.title)
 
 

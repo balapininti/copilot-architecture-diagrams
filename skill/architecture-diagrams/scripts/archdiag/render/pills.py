@@ -138,10 +138,11 @@ def _crowded(at: Tuple[float, float], horizontal: bool, own: int,
 
 def _candidates(route: List[Tuple[float, float]], probe: "Pill", own: int = -1,
                 routes: Optional[List[List[Tuple[float, float]]]] = None
-                ) -> List[Tuple[float, float]]:
-    """Pill centers to try: on the last segment (where the line enters its target) when it
-    has room, then along the line from the middle out, then beside the line where no
-    other line runs alongside (a pill there could read as the other line's)."""
+                ) -> List[Tuple[Tuple[float, float], bool]]:
+    """Pill centers to try, each with True when it is beside the line rather than on it:
+    on the last segment (where the line enters its target) when it has room, then along
+    the line from the middle out, then beside the line where no other line runs
+    alongside (a pill there could read as the other line's)."""
     out: List[Tuple[float, float]] = []
     if len(route) < 2:
         return out
@@ -154,6 +155,7 @@ def _candidates(route: List[Tuple[float, float]], probe: "Pill", own: int = -1,
         out.append((xa + (xb - xa) * 0.5, ya + (yb - ya) * 0.5))
     on = [seg_at(route, t) for t in _PILL_SPOTS]
     out.extend(p for p, _ in on)
+    n_on = len(out)
     for (px, py), (ux, uy) in on:
         if routes is not None and _crowded((px, py), abs(ux) >= abs(uy), own, routes):
             continue
@@ -163,7 +165,7 @@ def _candidates(route: List[Tuple[float, float]], probe: "Pill", own: int = -1,
         else:  # vertical stretch: right, then left
             off = probe.w / 2 + MARKER_R + 4
             out += [(px + off, py), (px - off, py)]
-    return out
+    return [(p, k >= n_on) for k, p in enumerate(out)]
 
 
 Rect = Tuple[float, float, float, float]
@@ -304,23 +306,37 @@ def place_pills(view: ViewGraph, L: Layout, styles: List[str],
         tries = []
         for max_w in (PILL_MAX_W, 84.0, 56.0):
             probe = Pill(i, s, (0.0, 0.0), styles[i], max_w, e.number)
-            tries += [(max_w, at) for at in (_candidates(route, probe, i, routes)
-                                             or [L.label_at[i]])]
-        best_near = 0.0
-        for max_w, at in tries:
+            tries += [(max_w, at, beside) for at, beside in
+                      (_candidates(route, probe, i, routes) or [(L.label_at[i], False)])]
+        # The first free spot in try order wins, as it always did; except (E6) a free
+        # spot on the line that lies within PILL_CLEAR px of another line (at a
+        # crossing, where it could be read as either line's) gives way to a later free
+        # spot on the line, at the same wrap width, that keeps clear. Being clear never
+        # moves a pill beside its line or makes it wrap narrower.
+        first_free: Optional[Pill] = None
+        free_w = 0.0
+        for max_w, at, beside in tries:
             p = Pill(i, s, at, styles[i], max_w, e.number)
             hits = float(lines.others(_line_rect(p), i))
             if best_cost is not None and hits > best_cost[1]:
                 continue
             cost = score(p)
-            # (E6) then a spot PILL_CLEAR px off every other line: a pill at a crossing
-            # could be read as either line's
-            near = float(lines.others((p.x - PILL_CLEAR, p.y - PILL_CLEAR,
-                                       p.w + 2 * PILL_CLEAR, p.h + 2 * PILL_CLEAR), i))
-            if best_cost is None or (cost[1], cost[0], near) < \
-                    (best_cost[1], best_cost[0], best_near):
-                best, best_cost, best_near = p, cost, near
-            if cost == (0.0, 0.0) and near == 0.0:
+            if cost != (0.0, 0.0):
+                if first_free is None and (best_cost is None
+                                           or (cost[1], cost[0]) < (best_cost[1], best_cost[0])):
+                    best, best_cost = p, cost
+                continue
+            clear = beside or lines.others((p.x - PILL_CLEAR, p.y - PILL_CLEAR,
+                                            p.w + 2 * PILL_CLEAR, p.h + 2 * PILL_CLEAR), i) == 0
+            if first_free is None:
+                first_free, free_w = p, max_w
+                best, best_cost = p, cost
+                if clear:
+                    break
+            elif not beside and max_w == free_w and clear:
+                best = p
+                break
+            elif max_w != free_w:
                 break
         if best_cost != (0.0, 0.0) and len(route) >= 2:
             # nowhere free: a marker on a free stretch of the line, the label in the key

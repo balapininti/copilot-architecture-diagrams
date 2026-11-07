@@ -9,6 +9,7 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Node, Resolved
+from ..layout import layout_notes
 from ..views import ViewGraph
 
 GAP_KINDS = ("reader", "writer", "queue-consumer")
@@ -243,10 +244,11 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
                          s.get("reason", "")) for s in ns] or ["None."]
 
     o += ["", "## Notes", ""]
-    o += ["- %s" % " ".join(str(n).split()) for n in view.notes]
+    notes = view.notes + layout_notes(view)
+    o += ["- %s" % " ".join(str(n).split()) for n in notes]
     if seq:
         o.append("- %d job-structure lines (step order, SYSOUT) are drawn but are not links; "
                  "they have no row above" % seq)
-    if not view.notes and not seq:
+    if not notes and not seq:
         o.append("None.")
     return "\n".join(o) + "\n"
