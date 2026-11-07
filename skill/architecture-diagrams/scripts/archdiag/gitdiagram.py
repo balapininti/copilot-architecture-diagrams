@@ -204,10 +204,11 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
             problems.append("a suggested link that is not an object was dropped")
             continue
         ends = [str(link.get("from", "")), str(link.get("to", ""))]
-        bad = [e for e in ends if e not in names and e not in r.nodes and actor_kind(e) is None]
+        # an end must name a group or an entry point (the view draws nothing else)
+        bad = [e for e in ends if e not in names and actor_kind(e) is None]
         if bad:
-            problems.append("suggested link %s -> %s dropped: unknown %s"
-                            % (ends[0], ends[1], ", ".join(repr(b) for b in bad)))
+            problems.append("suggested link %s -> %s dropped: %s names no group or entry point"
+                            % (ends[0], ends[1], " and ".join(repr(b) for b in bad)))
             continue
         gd.suggested_links.append({"from": ends[0], "to": ends[1],
                                    "label": _text(link.get("label"), "link label", problems),

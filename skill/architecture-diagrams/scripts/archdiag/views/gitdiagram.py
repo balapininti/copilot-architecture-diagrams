@@ -30,7 +30,8 @@ from archdiag.gitdiagram import (ACTOR_NAMES, FALLBACK_NOTE, GitDiagram, actor_k
                                  group_of, repo_files)
 from archdiag.model import CONFIRMED, PARTIAL, Edge, Evidence
 from archdiag.views.common import (_RANK, STRUCTURAL, VEdge, VNode, ViewGraph, _Ctx, _evidence,
-                                   _family, _least_certain, _missing_label, _plural, _short)
+                                   _family, _least_certain, _missing_label, _plural, _short,
+                                   combine_status)
 
 UNGROUPED = "grp:?"
 SCHEDULER = "act:scheduler"
@@ -189,7 +190,8 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
 
     # ---------------------------------------------------------------- resources with no file
     touch: Dict[str, Set[str]] = {}
-    elsewhere: Dict[str, Set[str]] = {}  # resource -> other repos using it
+    # resource -> other repo -> that repo's edges to it (named on the box, never drawn)
+    elsewhere: Dict[str, Dict[str, List[Edge]]] = {}
     for e, s, d, _, _ in mapped:
         for b, nid, other in ((s, e.src, d), (d, e.dst, s)):
             if b != _RES:
@@ -197,7 +199,7 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             if mine(other):
                 touch.setdefault(nid, set()).add(str(other))
             elif other is not None and other.startswith("out:") and other not in _LOOSE_STUBS:
-                elsewhere.setdefault(nid, set()).add(other[4:])
+                elsewhere.setdefault(nid, {}).setdefault(other[4:], []).append(e)
     res_box: Dict[str, str] = {}
     for nid, boxes in touch.items():
         if len(boxes) == 1 and next(iter(boxes)).startswith("grp:"):
@@ -326,6 +328,21 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
 
     used = {x for e in vedges for x in (e.src, e.dst)}
 
+    def other_use(nid: str) -> str:
+        """The other repos using resource ``nid``, each marked when its use is not confirmed
+        (its most certain edge, as a line would be)."""
+        out = []
+        for name in sorted(elsewhere[nid]):
+            st = combine_status(e.status for e in elsewhere[nid][name])
+            out.append(name if st == CONFIRMED else "%s, %s" % (
+                name, "partly known" if st == PARTIAL else "loose"))
+        return "; ".join(out)
+
+    def other_edges(nids: List[str]) -> List[Edge]:
+        """Other repos' edges to these resources, for the links report's evidence."""
+        return [e for nid in nids for name in sorted(elsewhere.get(nid, {}))
+                for e in elsewhere[nid][name]]
+
     def res_detail(gid: str) -> List[str]:
         out: List[str] = []
         by_kind: Dict[str, List[str]] = {}
@@ -333,7 +350,7 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             by_kind.setdefault(nodes[nid].kind, []).append(_short(nodes[nid]))
         for kind in sorted(by_kind):
             out.append("%s: %s" % (_plural(kind), _names_line(by_kind[kind], 3)))
-        also = ["%s (%s)" % (_short(nodes[nid]), ", ".join(sorted(elsewhere[nid])))
+        also = ["%s (%s)" % (_short(nodes[nid]), other_use(nid))
                 for nid in res_lines.get(gid, []) if nid in elsewhere]
         if also:
             out.append("also used by other repos: %s" % _names_line(also, 2))
@@ -364,12 +381,14 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         if g.description:
             lines.append(g.description)
         more, under = inside_detail(gid)
+        under += other_edges(res_lines.get(gid, []))
         groups.append(VNode(gid, g.name, "[%s]" % g.tech if g.tech else "", "group", None, None,
                             lines + more + res_detail(gid), underlying=under,
                             link=_folder_link(paths), members=list(paths)))
     if members.get(UNGROUPED) or UNGROUPED in used or UNGROUPED in inside:
         paths = members.get(UNGROUPED, [])
         more, under = inside_detail(UNGROUPED)
+        under += other_edges(res_lines.get(UNGROUPED, []))
         groups.append(VNode(UNGROUPED, "Not yet grouped", "", "group", None, None,
                             _file_lines(paths, "") + more + res_detail(UNGROUPED),
                             underlying=under, members=list(paths)))
@@ -387,8 +406,8 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             vn.sublabel = "%s · %s" % (vn.sublabel, job[len(repo) + 1:] if
                                        job.startswith(repo + "/") else job)
         if nid in elsewhere:
-            vn.sublabel = "%s · also used by %s" % (vn.sublabel, ", ".join(sorted(elsewhere[nid])))
-        vn.underlying = list(stray.get(nid, []))
+            vn.sublabel = "%s · also used by %s" % (vn.sublabel, other_use(nid))
+        vn.underlying = list(stray.get(nid, [])) + other_edges([nid])
         shared_nodes.append(vn)
 
     stubs: List[VNode] = []

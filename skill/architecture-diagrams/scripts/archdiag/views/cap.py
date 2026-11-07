@@ -21,6 +21,8 @@ def cap(ctx: _Ctx, v: ViewGraph) -> None:
     for e in v.edges:
         deg[e.src] += 1
         deg[e.dst] += 1
+        # a gitdiagram Scheduler line ("structural") is not confirmed, so it keeps its two
+        # ends like a partly known line would: harmless, as the Scheduler is never folded
         if group.get(e.src) != group.get(e.dst) or e.status != CONFIRMED:
             keep.update((e.src, e.dst))
     fixed = {n.id for n in v.nodes if v.level == "flow_job" and n.row in ("lane", None)}
@@ -32,9 +34,13 @@ def cap(ctx: _Ctx, v: ViewGraph) -> None:
     def count() -> int:
         return len(v.nodes) - len(fold) + len(bucket)
 
-    stages = (([n for n in v.nodes if n.id not in keep], True),
-              ([n for n in v.nodes if n.id not in fixed], True),
-              (list(v.nodes), False))
+    # gitdiagram: "Not yet grouped" and the entry points are never folded, so unplaced files
+    # and entry points stay on the picture
+    never = {n.id for n in v.nodes if v.level == "gitdiagram" and
+             (n.id == "grp:?" or n.id.startswith("act:"))}
+    stages = (([n for n in v.nodes if n.id not in keep | never], True),
+              ([n for n in v.nodes if n.id not in fixed | never], True),
+              ([n for n in v.nodes if n.id not in never], False))
     for cands, by_group in stages:
         if count() <= MAX_NODES:
             break

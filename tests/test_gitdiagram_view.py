@@ -329,10 +329,14 @@ def test_loader_keeps_suggested_links_to_entry_actors(tmp_path):
         "groups": [{"name": "Jobs", "files": ["jcl/"]}],
         "suggested_links": [{"from": "Scheduler", "to": "Jobs"},
                             {"from": "cics transactions", "to": "Jobs"},
-                            {"from": "Jobs", "to": "Nowhere"}]}), encoding="utf-8")
+                            {"from": "Jobs", "to": "Nowhere"},
+                            {"from": "program:CLMB200", "to": "Jobs"}]}), encoding="utf-8")
     gd = load_gitdiagram(tmp_path, r, BATCH)
     assert [(x["from"], x["to"]) for x in gd.suggested_links] == [("Scheduler", "Jobs"),
                                                                    ("cics transactions", "Jobs")]
+    # a node id is not a box: one problem, from the loader, in the view's own words
+    bad = [p for p in gd.problems if "program:CLMB200" in p]
+    assert len(bad) == 1 and "names no group or entry point" in bad[0]
     v = view_of(gd, r)
     assert lines(v, "act:scheduler", "grp:Jobs")
     # claims-batch has no CICS transactions: the end names no box, so the notes say so
@@ -402,6 +406,47 @@ def test_default_grouping_when_none_given_and_scope_checked():
     with pytest.raises(ScopeError) as ei:
         build_view(r, default_groups(r), "gitdiagram", "claims-btch")
     assert "claims-batch" in ei.value.suggestions
+
+
+def test_cap_never_folds_not_yet_grouped_or_entry_points():
+    files = [("f%02d/P%04d.cbl" % (i % 60, i), "cobol") for i in range(600)]
+    p = prog("P", "f00/P0000.cbl")
+    tx = Node("transaction:T1", "transaction", "T1", "r1", [_ev("r1", "f01/P0001.cbl")])
+    r = synthetic([p, tx], [Edge(tx.id, "runs", p.id, CONFIRMED, None, [tx.evidence[0]])], files)
+    gd = default_gitdiagram(r, "r1")
+    gd = GitDiagram("r1", "", gd.groups[:-1], [], [], True)  # f59/ is left out
+    v = view_of(gd, r)
+    assert len(v.nodes) <= MAX_NODES
+    ids = {n.id for n in v.nodes}
+    assert "grp:?" in ids and "act:transaction" in ids
+    assert len(node(v, "grp:?").members) == 10
+    assert accounted(v, r, "r1") == {f for f, _ in files}
+
+
+def test_other_repo_use_of_a_resource_is_marked_and_kept():
+    a = prog("A", "a/A.cbl")
+    b = prog("B", "b/B.cbl", repo="r2")
+    c = prog("C", "c/C.cbl", repo="r3")
+    d = Node("dataset:D", "dataset", "D", None, [], {"names": ["D"]})
+    e_a = Edge(a.id, "read", d.id, CONFIRMED, None, [_ev("r1", "a/A.cbl", 3)])
+    e_b = Edge(b.id, "write", d.id, PARTIAL, "symbol", [_ev("r2", "b/B.cbl", 3)])
+    e_c = Edge(c.id, "write", d.id, CONFIRMED, None, [_ev("r3", "c/C.cbl", 3)])
+    r = synthetic([a, b, c, d], [e_a, e_b, e_c], [("a/A.cbl", "cobol")])
+    r.inventory.repos += [Repo("r2", "r2"), Repo("r3", "r3")]
+    gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"])], [], [], True)
+    ga = node(view_of(gd, r), "grp:A")
+    assert "also used by other repos: D (r2, partly known; r3)" in ga.detail_lines
+    assert any(u is e_b for u in ga.underlying) and any(u is e_c for u in ga.underlying)
+    # a shared box says the same in its sublabel and keeps the edges too
+    a2 = prog("A2", "a2/A2.cbl")
+    r = synthetic([a, a2, b, d], [e_a, Edge(a2.id, "read", d.id, CONFIRMED, None,
+                                            [_ev("r1", "a2/A2.cbl", 3)]), e_b],
+                  [("a/A.cbl", "cobol"), ("a2/A2.cbl", "cobol")])
+    r.inventory.repos.append(Repo("r2", "r2"))
+    gd = GitDiagram("r1", "", [GitGroup("A", "", ["a/"]), GitGroup("A2", "", ["a2/"])], [], [], True)
+    box = node(view_of(gd, r), "dataset:D")
+    assert box.sublabel.endswith("also used by r2, partly known")
+    assert any(u is e_b for u in box.underlying)
 
 
 def test_huge_repo_capped_at_40():
