@@ -10,7 +10,7 @@ from ..model import Evidence, Inventory, Node, Ref
 from ..repos import discover_repos, iter_source_files
 from .. import __version__
 from ..store import SCHEMA_VERSION, fingerprint
-from ..textio import classify, needs_text, read_source
+from ..textio import classify, needs_text, read_source, unscanned_reason
 
 
 @dataclass
@@ -515,7 +515,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     files: List[Tuple[str, str, str, str]] = []
     unclassified: Dict[str, List[Tuple[str, str, Path]]] = {}  # STEM -> files of no type
     not_scanned: List[Dict[str, str]] = _non_repo_folders(workspace, repos, config)
-    odd: List[Tuple[str, str]] = []  # untyped files that look like mainframe source
+    odd: List[Tuple[str, str, str]] = []  # untyped files that look like mainframe source
     for repo in repos:
         root = workspace / repo.path
         too_big: List[Tuple[Path, str]] = []
@@ -553,7 +553,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     _note_unclassified(unclassified, repo.name, rel, path)
                     _note_member(ctx, repo.name, rel, path)
                     if _looks_mainframe(rel, text):
-                        odd.append((repo.name, rel))
+                        odd.append((repo.name, rel, unscanned_reason(text)))
         for path, reason in too_big:
             skipped.append({"repo": repo.name, "path": path.relative_to(root).as_posix(),
                             "reason": reason})
@@ -584,11 +584,9 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     refs.extend(_copybook_refs(refs, nodes, ctx))
     used = {(ev.repo, ev.path) for n in nodes.values() for ev in n.evidence}
     used |= ctx.used_files
-    for repo_name, rel in odd:
+    for repo_name, rel, why in odd:
         if (repo_name, rel) not in used:
-            not_scanned.append({"repo": repo_name, "path": rel,
-                                "reason": "looks like mainframe source but its type could not "
-                                          "be recognised, so it was not analyzed"})
+            not_scanned.append({"repo": repo_name, "path": rel, "reason": why})
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,

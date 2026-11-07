@@ -23,6 +23,9 @@ UNSTRING WHEN WRITE EXCEPTION RETURNING USING GIVING
 
 def _is_fixed(lines: List[str]) -> bool:
     """Fixed format unless the text clearly starts inside columns 1-6 (free format)."""
+    from ..textio import six_char_area
+    if six_char_area(lines):
+        return True  # any six characters in columns 1-6 of a strongly COBOL-shaped file (B12)
     fixed = free = blank7 = 0
     for ln in lines:
         if not ln.strip():

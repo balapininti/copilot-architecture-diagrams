@@ -78,28 +78,69 @@ SNIFF_LINES = 200  # code lines (comments and blanks not counted) read to decide
 # (fixed format: after columns 1-7; free format: near column 1)
 # columns 1-6 must be blank, digits or a sequence-number shape (letters and digits with at
 # least one digit, as cobol._is_fixed), never prose such as "Step 1" or "1. The"
-_AREA = r"^(?:(?:[ 0-9]{6}|(?=[A-Za-z0-9]{6})[A-Za-z]*\d[A-Za-z0-9]*) {1,8}| {0,7})"
-_ID_HEADER = re.compile(_AREA + r"(?:IDENTIFICATION|ID)\s+DIVISION\s*\.", re.I)
-_PROGID_LINE = re.compile(_AREA + r"PROGRAM-ID\s*\.?\s*['\"]?[A-Za-z0-9#$@][\w#$@-]*", re.I)
-_DIVISION_LINE = re.compile(_AREA + r"(?:DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b", re.I)
-_LEVEL01_LINE = re.compile(
-    _AREA + r"0?1\s+[A-Za-z][\w-]*\s*(?:\.|\s(?:PIC|PICTURE|VALUE|REDEFINES|OCCURS|USAGE|"
-    r"COMP)\b)", re.I)
+# B12: the alphanumeric branch is exactly six characters
+_SEQ6 = r"(?=[A-Za-z]{0,5}\d)[A-Za-z0-9]{6}"
+_AREA = r"^(?:(?:[ 0-9]{6}|" + _SEQ6 + r") {1,8}| {0,7})"
+# any six non-blank characters (PRGABC, AB-123): only for a file strongly COBOL-shaped
+_AREA_ANY = r"^(?:(?:[ 0-9]{6}|\S{6}) {1,8}| {0,7})"
 
 
-def _looks_like_cobol(at: int, code: List[str]) -> bool:
+def _structure(area: str):
+    return (re.compile(area + r"(?:IDENTIFICATION|ID)\s+DIVISION\s*\.", re.I),
+            re.compile(area + r"PROGRAM-ID\s*\.?\s*['\"]?[A-Za-z0-9#$@][\w#$@-]*", re.I),
+            re.compile(area + r"(?:DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b", re.I),
+            re.compile(area + r"0?1\s+[A-Za-z][\w-]*\s*(?:\.|\s(?:PIC|PICTURE|VALUE|"
+                       r"REDEFINES|OCCURS|USAGE|COMP)\b)", re.I))
+
+
+_ID_HEADER, _PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE = _structure(_AREA)
+_ANY_STRUCTURE = _structure(_AREA_ANY)
+_SIX_AREA_LINE = re.compile(r"^\S{6}[ *\-/dD]")
+_SIX_AREA_CODE = re.compile(r"^\S{6} {1,4}(?:PROGRAM-ID\b|PROCEDURE\s+DIVISION\b)", re.I)
+SIX_AREA_SHARE = 0.8  # share of non-blank lines that must show the 6-character area
+
+
+def six_char_area(lines: List[str]) -> bool:
+    """True when a file is strongly COBOL-shaped with any six non-blank characters in
+    columns 1-6 (B12): at least 80% of its non-blank lines hold six non-blank characters
+    then an indicator (column 7 blank, ``*``, ``-``, ``/``, ``D``), and PROGRAM-ID or
+    PROCEDURE DIVISION starts in column 8 or later after such an area."""
+    full = [ln.expandtabs(8) for ln in lines if ln.strip()]
+    if not full:
+        return False
+    shaped = sum(1 for ln in full if _SIX_AREA_LINE.match(ln))
+    return shaped >= SIX_AREA_SHARE * len(full) and any(_SIX_AREA_CODE.match(ln) for ln in full)
+
+
+def _looks_like_cobol(at: int, code: List[str], structure=None) -> bool:
     """A line naming the IDENTIFICATION DIVISION or PROGRAM-ID is COBOL only when it
     looks like code and the sniffed code also holds another part of a program
     (PROGRAM-ID, a DATA / PROCEDURE / ENVIRONMENT DIVISION header or an 01-level item),
     so prose that mentions them is not a program. ``at`` is the line's index in ``code``."""
+    id_header, progid, division, level01 = structure or (
+        _ID_HEADER, _PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE)
     line = code[at]
-    if _ID_HEADER.match(line):
-        others = (_PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE)
-    elif _PROGID_LINE.match(line):
-        others = (_ID_HEADER, _DIVISION_LINE, _LEVEL01_LINE)
+    if id_header.match(line):
+        others = (progid, division, level01)
+    elif progid.match(line):
+        others = (id_header, division, level01)
     else:
         return False
     return any(rx.match(c) for k, c in enumerate(code) if k != at for rx in others)
+
+
+def unscanned_reason(text: str) -> str:
+    """Why a mainframe-looking file of no type was not analyzed: code-shaped COBOL
+    structure lines, prose that only mentions COBOL divisions, or other mainframe text."""
+    lines = [ln.expandtabs(8) for ln in text[:20000].split("\n")]
+    if any(rx.match(ln) for ln in lines for rx in _ANY_STRUCTURE):
+        return ("looks like COBOL but its type was not recognised (no other part of a "
+                "program, or an unusual sequence area), so it was not analyzed")
+    if _IDDIV.search(text[:20000]) or re.search(
+            r"\b(?:DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b|\bPROGRAM-ID\b", text[:20000], re.I):
+        return "prose mentioning COBOL divisions, not code, so it was not analyzed"
+    return "looks like mainframe source but its type could not be recognised, so it was not " \
+           "analyzed"
 
 
 def _is_comment(line: str) -> bool:
@@ -161,9 +202,10 @@ def classify(relpath: str, text: str) -> Optional[str]:
         code.append(line.expandtabs(8))  # a tab-indented member reads like column 9
         if len(code) >= SNIFF_LINES:
             break
+    wide = _ANY_STRUCTURE if six_char_area(text.split("\n")[:SNIFF_LINES * 2]) else None
     for at, line in enumerate(code):
         if _IDDIV.search(line) or _PROGID.search(line):
-            if _looks_like_cobol(at, code):
+            if _looks_like_cobol(at, code) or (wide and _looks_like_cobol(at, code, wide)):
                 return "cobol"
             continue
         if _JOB.match(line):

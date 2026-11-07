@@ -203,3 +203,54 @@ def test_tab_indented_mainframe_text_is_reported_when_untyped(tmp_path):
     (repo / "MEMBER").write_text("\tPROCEDURE DIVISION.\n\t    CALL 'X'.\n")
     inv = scan_workspace(tmp_path, Config())
     assert [n["path"] for n in inv.not_scanned] == ["MEMBER"]
+
+
+# ------------------------------------------------------------------ B12: any 6-char sequence area
+
+_SEQ6 = ("PRGABC IDENTIFICATION DIVISION.\n"
+         "PRGABC PROGRAM-ID. P6.\n"
+         "PRGABC*A COMMENT LINE\n"
+         "PRGABC PROCEDURE DIVISION.\n"
+         "PRGABC     CALL 'SUB6'.\n"
+         "PRGABC     GOBACK.\n")
+
+
+def test_b12_any_six_char_sequence_area_when_strongly_cobol(tmp_path):
+    assert classify("src/P6", _SEQ6) == "cobol"
+    punct = _SEQ6.replace("PRGABC", "AB-123")
+    assert classify("src/P7", punct) == "cobol"
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    repo = tmp_path / "r"
+    (repo / "src").mkdir(parents=True)
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "src" / "P6").write_text(_SEQ6)
+    inv = scan_workspace(tmp_path, Config())
+    assert "program:P6" in inv.nodes
+    assert any(r.src == "program:P6" and r.target_name == "SUB6" for r in inv.refs)
+
+
+def test_b12_six_char_area_needs_the_whole_file_cobol_shaped():
+    # one line with a 6-char area is not enough; prose lines stay prose
+    mixed = ("PRGABC IDENTIFICATION DIVISION.\nsome prose follows here and more\n"
+             "PRGABC PROGRAM-ID. P8.\nanother line of prose without code\n"
+             "and a third line of prose here\n")
+    assert classify("src/P8", mixed) is None
+    # the alnum-with-digit branch is exactly six characters
+    assert classify("src/P9", "PRG0012 IDENTIFICATION DIVISION.\nPRG0012 PROGRAM-ID. P9.\n") \
+        is None
+
+
+def test_b12_not_scanned_reasons_are_specific(tmp_path):
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    repo = tmp_path / "r"
+    (repo / "docs").mkdir(parents=True)
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "docs" / "notes.txt").write_text(
+        "Step 1 IDENTIFICATION DIVISION. names the program\nStep 2 DATA DIVISION holds it\n")
+    (repo / "MEMBER2").write_text("       IDENTIFICATION DIVISION.\n")
+    inv = scan_workspace(tmp_path, Config())
+    why = {n["path"]: n["reason"] for n in inv.not_scanned}
+    assert why["docs/notes.txt"].startswith("prose mentioning COBOL divisions")
+    assert why["MEMBER2"].startswith("looks like COBOL but its type was not recognised")
