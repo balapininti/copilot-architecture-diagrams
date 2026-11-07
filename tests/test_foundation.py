@@ -254,3 +254,36 @@ def test_b12_not_scanned_reasons_are_specific(tmp_path):
     why = {n["path"]: n["reason"] for n in inv.not_scanned}
     assert why["docs/notes.txt"].startswith("prose mentioning COBOL divisions")
     assert why["MEMBER2"].startswith("looks like COBOL but its type was not recognised")
+
+
+def test_fix2_six_letter_word_prose_is_not_cobol():
+    prose = ("Before PROGRAM-ID. YOU write the header\n"
+             "Within PROCEDURE DIVISION the code goes\n"
+             "Notice that IDENTIFICATION DIVISION. comes first\n"
+             "Always DATA DIVISION after it\n"
+             "Except when nested programs are used\n")
+    assert classify("docs/NOTES", prose) is None
+    steps = ("Step01 IDENTIFICATION DIVISION. names the program\n"
+             "Step02 DATA DIVISION holds records\n"
+             "and some more prose follows here\n")
+    assert classify("docs/STEPS", steps) is None
+    # a real lettered area with code still counts
+    assert classify("src/P5", "PRG001 IDENTIFICATION DIVISION.\nPRG002 PROGRAM-ID. P5.\n") \
+        == "cobol"
+
+
+def test_fix3_prose_starting_with_a_division_name_is_prose(tmp_path):
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    from archdiag.textio import unscanned_reason
+    assert unscanned_reason("Data division holds the records of the program\n") \
+        .startswith("prose mentioning COBOL divisions")
+    assert unscanned_reason("       DATA DIVISION.\n").startswith("looks like COBOL")
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "NOTES").write_text("Before PROGRAM-ID. YOU write the header\n"
+                                "Within PROCEDURE DIVISION the code goes\n"
+                                "Notice that IDENTIFICATION DIVISION. comes\n")
+    inv = scan_workspace(tmp_path, Config())
+    assert "program:YOU" not in inv.nodes

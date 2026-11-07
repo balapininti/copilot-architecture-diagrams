@@ -94,22 +94,56 @@ def _structure(area: str):
 
 
 _ID_HEADER, _PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE = _structure(_AREA)
+# columns 1-6 blank or digits only: no letters, so prose can't pass for a sequence area
+_NUM_STRUCTURE = _structure(r"^(?:[ 0-9]{6} {1,8}| {0,7})")
 _ANY_STRUCTURE = _structure(_AREA_ANY)
-_SIX_AREA_LINE = re.compile(r"^\S{6}[ *\-/dD]")
+_SIX_AREA_LINE = re.compile(r"^(\S{6})[ *\-/]")
 _SIX_AREA_CODE = re.compile(r"^\S{6} {1,4}(?:PROGRAM-ID\b|PROCEDURE\s+DIVISION\b)", re.I)
+_VERB_COL12 = re.compile(r"^\S{6} {5,}(?:MOVE|CALL|PERFORM|DISPLAY|GOBACK|STOP|IF|EXEC|"
+                         r"COMPUTE|ADD|SET|READ|WRITE|OPEN|CLOSE|EVALUATE|ACCEPT)\b", re.I)
 SIX_AREA_SHARE = 0.8  # share of non-blank lines that must show the 6-character area
+
+
+def lettered_area(lines: List[str]) -> bool:
+    """True when columns 1-6 of a file read as a real sequence area that holds letters
+    (PRG001, PRGABC, AB-123), not prose (fix round 1 of B12):
+
+    * at least 80% of non-blank lines hold six non-blank characters then an indicator
+      column (blank, ``*``, ``-``, ``/``);
+    * the area is sequence-like: most of those values are one repeated value, or most
+      hold a digit;
+    * the code is COBOL-shaped: a verb in column 12 or later, or at least half of the
+      non-comment area lines end with a period."""
+    full = [ln.expandtabs(8).rstrip() for ln in lines if ln.strip()]
+    if not full:
+        return False
+    hits = [(m.group(1), ln) for ln in full for m in [_SIX_AREA_LINE.match(ln)] if m]
+    if len(hits) < SIX_AREA_SHARE * len(full):
+        return False
+    values = [v for v, _ in hits]
+    top = max(values.count(v) for v in set(values))
+    digits = sum(1 for v in values if any(c.isdigit() for c in v))
+    if top < SIX_AREA_SHARE * len(values) and digits < SIX_AREA_SHARE * len(values):
+        return False
+    code = [ln for _, ln in hits if ln[6] not in "*/"]
+    if any(_VERB_COL12.match(ln) for ln in code):
+        return True
+    return bool(code) and 2 * sum(1 for ln in code if ln.endswith(".")) >= len(code)
 
 
 def six_char_area(lines: List[str]) -> bool:
     """True when a file is strongly COBOL-shaped with any six non-blank characters in
-    columns 1-6 (B12): at least 80% of its non-blank lines hold six non-blank characters
-    then an indicator (column 7 blank, ``*``, ``-``, ``/``, ``D``), and PROGRAM-ID or
-    PROCEDURE DIVISION starts in column 8 or later after such an area."""
-    full = [ln.expandtabs(8) for ln in lines if ln.strip()]
-    if not full:
-        return False
-    shaped = sum(1 for ln in full if _SIX_AREA_LINE.match(ln))
-    return shaped >= SIX_AREA_SHARE * len(full) and any(_SIX_AREA_CODE.match(ln) for ln in full)
+    columns 1-6 (B12): a lettered sequence area (see lettered_area), and PROGRAM-ID or
+    PROCEDURE DIVISION starting in column 8 or later after such an area."""
+    return lettered_area(lines) and any(
+        _SIX_AREA_CODE.match(ln.expandtabs(8)) for ln in lines if ln.strip())
+
+
+# code-shaped COBOL headers for the not-scanned reason: the header ends the line with a period
+_HEADER_ONLY = re.compile(
+    _AREA_ANY + r"(?:(?:IDENTIFICATION|ID|DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION"
+    r"(?:\s+USING\b[^.]*)?|PROGRAM-ID\s*\.?\s*['\"]?[A-Za-z0-9#$@][\w#$@-]*['\"]?)\s*\.\s*$",
+    re.I)
 
 
 def _looks_like_cobol(at: int, code: List[str], structure=None) -> bool:
@@ -133,7 +167,7 @@ def unscanned_reason(text: str) -> str:
     """Why a mainframe-looking file of no type was not analyzed: code-shaped COBOL
     structure lines, prose that only mentions COBOL divisions, or other mainframe text."""
     lines = [ln.expandtabs(8) for ln in text[:20000].split("\n")]
-    if any(rx.match(ln) for ln in lines for rx in _ANY_STRUCTURE):
+    if any(_HEADER_ONLY.match(ln.rstrip()) for ln in lines):
         return ("looks like COBOL but its type was not recognised (no other part of a "
                 "program, or an unusual sequence area), so it was not analyzed")
     if _IDDIV.search(text[:20000]) or re.search(
@@ -202,10 +236,14 @@ def classify(relpath: str, text: str) -> Optional[str]:
         code.append(line.expandtabs(8))  # a tab-indented member reads like column 9
         if len(code) >= SNIFF_LINES:
             break
-    wide = _ANY_STRUCTURE if six_char_area(text.split("\n")[:SNIFF_LINES * 2]) else None
+    head = text.split("\n")[:SNIFF_LINES * 2]
+    # letters in columns 1-6 count only for a file whose whole area reads as one (B12)
+    lettered = lettered_area(head)
+    base = None if lettered else _NUM_STRUCTURE
+    wide = _ANY_STRUCTURE if lettered and six_char_area(head) else None
     for at, line in enumerate(code):
         if _IDDIV.search(line) or _PROGID.search(line):
-            if _looks_like_cobol(at, code) or (wide and _looks_like_cobol(at, code, wide)):
+            if _looks_like_cobol(at, code, base) or (wide and _looks_like_cobol(at, code, wide)):
                 return "cobol"
             continue
         if _JOB.match(line):

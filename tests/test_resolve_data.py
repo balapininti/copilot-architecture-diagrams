@@ -861,3 +861,16 @@ def test_b7_maybe_same_names_the_qualifier_that_differs_not_the_env_one():
     assert {e.src, e.dst} == {"dataset:A.X.Y", "dataset:B.X.Y"}
     assert e.reason in ("names differ only by first qualifier: A vs B",
                         "names differ only by first qualifier: B vs A")
+
+
+def test_fix4_handler_reason_parts_are_not_repeated():
+    from archdiag.resolve.common import join
+    assert join("a; b", "b", None, "a", "c") == "a; b; c"
+    ep = Node("endpoint:?api/C#get", "endpoint", "?C#get", "api",
+              [_ev(9, "C.java", "api"), _ev(9, "D.java", "api")],
+              {"handler": "class:api/C", "handlers": ["class:api/C", "class:api/D"],
+               "unresolved": "path not worked out"})
+    r = _run([ep, _handler_class(), _handler_class(name="D")], [])
+    for e in edges(src=ep.id, op="runs", r=r):
+        parts = e.reason.split("; ")
+        assert len(parts) == len(set(parts)), e.reason

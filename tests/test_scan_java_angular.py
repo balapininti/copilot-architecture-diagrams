@@ -625,3 +625,33 @@ def test_b5_other_nested_same_named_class_still_ambiguous_outside(tmp_path):
         "x/C.java": "package x;\nclass C {\n  @Autowired Repo r;\n}\n"})
     (u,) = [r for r in inv.refs if r.op == "uses"]
     assert u.target_name is None and "more than one" in u.reason
+
+
+def test_fix1_return_type_with_a_type_literal_is_skipped(tmp_path):
+    inv = ws(tmp_path, {"src/app/api.ts": (
+        "import { HttpClient } from '@angular/common/http';\n"
+        "export function getClaim(id: string): Observable<{ id: string }> {\n"
+        "  return inject(HttpClient).get('/api/claims/' + id);\n"
+        "}\n"
+        "export function getPolicy(id: string): { a: string } {\n"
+        "  return inject(HttpClient).get('/api/policies/' + id);\n"
+        "}\n"
+        "export function getMany(): Promise<Array<{ x: number }>> | { y: () => { z: 1 } } {\n"
+        "  return inject(HttpClient).get('/api/many');\n"
+        "}\n")})
+    got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
+    assert got == {("component:r/getClaim", "GET /api/claims/${id}"),
+                   ("component:r/getPolicy", "GET /api/policies/${id}"),
+                   ("component:r/getMany", "GET /api/many")}
+
+
+def test_fix5_eci_request_needs_a_call_type_first(tmp_path):
+    src = ('class Tmp {\n void f() {\n'
+           '  new ECIRequest(ECIRequest.ECI_SYNC, "S", "U", "P", "OKA", "TX", buf);\n'
+           '  new ECIRequest(ECI_SYNC, "S", "U", "P", "OKB", "TX", buf, 1, 0, 0);\n'
+           '  new ECIRequest(server, "S", "U", "P", "BAD", "TX", buf);\n'
+           ' } }')
+    inv = java_inv(tmp_path, src)
+    got = {r.evidence.line: (r.target_name, r.reason) for r in inv.refs if r.op == "ctg_call"}
+    assert got[3] == ("OKA", None) and got[4] == ("OKB", None)
+    assert got[5][0] is None and "not a known shape" in got[5][1]

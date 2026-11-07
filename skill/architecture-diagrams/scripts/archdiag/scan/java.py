@@ -577,6 +577,8 @@ def param_type(p: str) -> Optional[str]:
 
 
 _ECI_ARITIES = (7, 9, 10)
+# the call type: a number or an ECI_* constant (ECI_SYNC, ECIRequest.ECI_SYNC, ...)
+_ECI_CALL_TYPE = re.compile(r"\d+|(?:[A-Za-z_]\w*\.)*ECI_\w+")
 
 
 def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[Node], List[Ref]]:
@@ -816,7 +818,7 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
         # the CTG constructors that take a program: (callType, server, userid, password,
         # program, transid, commarea|channel [, length, extend mode, LUW token]) - 7, 9 or
         # 10 arguments, the call type a number or constant; any other shape is not trusted
-        if len(args) not in _ECI_ARITIES or re.match(r"\s*[\"']", args[0]):
+        if len(args) not in _ECI_ARITIES or not _ECI_CALL_TYPE.fullmatch(args[0].strip()):
             lits = sorted(set(v.strip().upper() for v in (
                 s.eval(a, m.start())[0] for a in args
                 if re.fullmatch(r'\s*"(?:[^"\\]|\\.)*"\s*', a)) if v and v.strip()))

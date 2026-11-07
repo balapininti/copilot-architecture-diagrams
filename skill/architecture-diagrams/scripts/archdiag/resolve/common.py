@@ -12,8 +12,12 @@ def where(ev: Evidence) -> str:
 
 
 def join(*reasons: Optional[str]) -> Optional[str]:
-    """The non-empty reasons joined with ``"; "``, or None."""
-    parts = [r for r in reasons if r]
+    """The non-empty reasons joined with ``"; "``, each part once, or None."""
+    parts: List[str] = []
+    for r in reasons:
+        for p in (r.split("; ") if r else []):
+            if p and p not in parts:
+                parts.append(p)
     return "; ".join(parts) if parts else None
 
 

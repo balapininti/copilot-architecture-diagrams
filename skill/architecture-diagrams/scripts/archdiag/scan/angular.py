@@ -465,6 +465,38 @@ _FUNCTION = re.compile(
     r"(?::[^=]*)?=\s*(?:async\s*)?(?:function\b|\([^()]*\)\s*(?::[^=]*)?=>|[\w$]+\s*=>))")
 
 
+def _skip_return_type(masked: str, k: int) -> int:
+    """Offset of the ``{`` (or ``;``) after a parameter list ending at ``k``, past any return
+    type annotation: ``<>``, ``()``, ``[]`` are balanced, and a ``{`` where a type is
+    expected (after ``:``, ``|``, ``&``, ``,``, ``<``, ``(``, ``[`` or ``=>``) is a type
+    literal, not the body (fix round 1)."""
+    n = len(masked)
+    depth = 0
+    last = ""  # the last significant character outside the brackets being skipped
+    while k < n:
+        ch = masked[k]
+        if ch.isspace():
+            k += 1
+            continue
+        if depth == 0:
+            if ch == ";":
+                return k
+            if ch == "{":
+                arrow = last == ">" and k >= 2 and masked[:k].rstrip()[-2:] == "=>"
+                if not (last in (":", "|", "&", ",", "<", "(", "[") or arrow):
+                    return k
+        if ch in "<([{":
+            depth += 1
+        elif ch in ">)]}":
+            if ch == ">" and k > 0 and masked[k - 1] == "=":
+                pass  # the arrow of a function type
+            else:
+                depth = max(0, depth - 1)
+        last = ch
+        k += 1
+    return n
+
+
 def _function_body(s: "_Src", m: "re.Match") -> Optional[Tuple[int, int]]:
     """(start, end) offsets of the body of the function declared by ``m``: the matching
     braces of a block body, or an arrow's expression up to the end of its statement."""
@@ -475,10 +507,7 @@ def _function_body(s: "_Src", m: "re.Match") -> Optional[Tuple[int, int]]:
         if o < 0:
             return None
         _, close = args_at(s.clean, o)
-        j = close + 1
-        k = j
-        while k < len(masked) and masked[k] not in "{;":
-            k += 1  # skip a return type annotation (and a later `=>` of a function form)
+        k = _skip_return_type(masked, close + 1)
         if k >= len(masked) or masked[k] != "{":
             return None
         j = k

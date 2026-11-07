@@ -211,9 +211,14 @@ def list_items(r: Resolved, g: Groups, what: str) -> List[str]:
     by_src: Dict[str, List[Edge]] = {}
     for e in r.edges:
         by_src.setdefault(e.src, []).append(e)
+    steps_of: Dict[str, list] = {}  # job id -> its steps, indexed once
+    if what == "jobs":
+        for s in r.nodes.values():
+            if s.kind == "step" and s.attrs.get("job"):
+                steps_of.setdefault(str(s.attrs["job"]), []).append(s)
     lines = []
     for n in nodes:
-        desc = _one_line(_describe(r, n, by_src))
+        desc = _one_line(_describe(r, n, by_src, steps_of))
         lines.append("%s\t%s(%s)" % (_one_line(n.name), desc + " " if desc else "", _path(n)))
     return lines
 
@@ -241,7 +246,8 @@ def _names(items: List[str]) -> str:
     return ", ".join(items[:_MAX_DESC]) + more
 
 
-def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]]) -> str:
+def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]],
+              steps_of: Dict[str, list]) -> str:
     out = by_src.get(n.id, [])
     if n.kind == "transaction":
         progs = [_end_name(r, e.dst) for e in out if e.op == "runs"]
@@ -260,8 +266,7 @@ def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]]) -> str:
         return ("handler class%s %s" % ("es" if len(names) > 1 else "", _names(names))
                 if names else "")
     if n.kind == "job":
-        steps = sorted((s for s in r.nodes.values()
-                        if s.kind == "step" and s.attrs.get("job") == n.id),
+        steps = sorted(steps_of.get(n.id, []),
                        key=lambda s: (s.attrs.get("order") or 0, s.id))
         runs = []
         for s in steps:
