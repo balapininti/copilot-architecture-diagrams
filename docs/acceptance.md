@@ -122,7 +122,7 @@ test write its name (`tests\test_x.py::test_y`) and the first 5 lines of its tra
 Open "Windows PowerShell" (blue icon, not PowerShell 7). Check `$PSVersionTable.PSVersion` shows 5.1. Run steps 1 to 4 with the network **off** (the installer needs none).
 Exact messages the installer prints (from `install.ps1`):
 
-- Success: `Installed the personal skill at <path>` or `Installed the project skill at <path>` (green; the exact wording of the first part comes from the `$where` variable; record it), then `Python OK: <cmd> (<version>)` (green), then `Next:` with three numbered lines. Exit code 0.
+- Success: `Installed the personal skill at <target>` or, with `-Project`, `Installed the project skill for the workspace <root> at <target>` (green), then `Python OK: <cmd> (<version>)` (green), then `Next:` with three numbered lines. Exit code 0.
 - Existing copy: `Replacing the existing copy at <path>`.
 - No Python: `Python 3.9 or newer was not found (tried: py -3, python, python3).` then `To fix it:` with four numbered lines, ending `The skill is installed and will work once Python is available.` Exit code **2** (the skill is still installed).
 - Errors (red, exit 1): `Cannot find the skill at <path>. Run install.ps1 from the folder that holds 'skill\architecture-diagrams'.`, `The folder <path> does not exist.`, `USERPROFILE is not set; cannot find your home folder.`
