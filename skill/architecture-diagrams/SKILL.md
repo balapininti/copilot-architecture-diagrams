@@ -11,11 +11,15 @@ answer, and pass on what the scripts report. **Never draw, edit or guess a diagr
 link yourself.** People plan modernization around these pictures, and a missing or
 made-up link is the worst failure.
 
+**Never edit, create or delete files in the user's repos.** The skill only reads them.
+Only write inside `<ws>/architecture-diagrams/`, and there only `groups.json` and
+`archdiag.config.json`. The scripts write everything else.
+
 ## Paths and how to run a command
 
 - `<skill>` is the folder holding this `SKILL.md`: the path you read this file from.
   Installed copies are at `%USERPROFILE%\.copilot\skills\architecture-diagrams` (personal)
-  or `<repo>\.github\skills\architecture-diagrams` (project). In Copilot CLI,
+  or `<ws>\.github\skills\architecture-diagrams` (project, in the folder holding the clones). In Copilot CLI,
   `/skills info architecture-diagrams` shows it.
 - `<ws>`, the workspace, is the folder that holds the cloned repos. Usually it is the open
   VS Code folder or the CLI's current folder. If that folder is itself a git repo, it is
@@ -113,9 +117,14 @@ Map the request using `reference/levels-and-styles.md`.
 
 `python "<skill>/scripts/run.py" list --what jobs|transactions|pages|endpoints|applications|repos|programs --workspace "<ws>"`
 
-Each line is `NAME (repo/path)`. Use the exact NAME. **If the scope is unclear**, for
-example several transactions could be "claim details", or the user named something
-`list` doesn't show, **ask** and show the candidates. Don't guess.
+Each line is `NAME (repo/path)`. Use the exact NAME.
+
+**Scope rule.** When the user names a flow in words, for example "the claim details
+transaction", list `transactions`, `pages` and `endpoints`, plus `jobs` for batch, and
+match their words against the names. To match better, you may open the CSD, BMS map or
+Angular route file named in `(repo/path)`. Only read those files. If exactly one name
+clearly fits, use it and say which you picked. Otherwise, **show the candidates and ask**.
+Never guess between several.
 
 ### 5. Draw and report
 

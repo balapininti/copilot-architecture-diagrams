@@ -51,9 +51,12 @@ There can be hundreds.
   is `NAME (repo/path)`.
 - A name may appear twice, for example a job kept in both a PROD and a TEST folder. The
   draw uses one and the note `Also exists as: ...` names the others. Mention it.
-- A request in words ("the claim details transaction") has to be matched to a name. If
-  exactly one transaction, page or endpoint clearly fits, use it and say which one you
-  picked. If not, show the user the likely candidates and ask.
+- **Scope rule.** A request in words ("the claim details transaction") has to be matched
+  to a name. List `transactions`, `pages` and `endpoints`, plus `jobs` for batch, and
+  match the user's words against the names. To match better, you may open the CSD, BMS
+  map or route file named in `(repo/path)`. Only read those files. If exactly one name
+  clearly fits, use it and say which one you picked. Otherwise, show the candidates and
+  ask.
 - If `draw` exits with code 2, it prints `Did you mean: ...`. Offer those names. Don't
   pick one silently.
 - Scopes with spaces, for example the endpoint `GET /api/claims/{}`, go in double quotes.

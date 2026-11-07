@@ -21,7 +21,10 @@ VS Code agent mode and Copilot CLI read the same Agent Skills format (a folder h
 - Personal: `%USERPROFILE%\.copilot\skills\architecture-diagrams\` (the one personal folder
   both products list first). The installer copies there only. Installing into a second
   folder as well (for example `~/.agents/skills`) would make VS Code see the skill twice.
-- Project: `<repo>\.github\skills\architecture-diagrams\` (`install.ps1 -Project <repo>`).
+- Project: `<workspace>\.github\skills\architecture-diagrams\` (`install.ps1 -Project <workspace>`),
+  where `<workspace>` is the folder the user opens, the one holding the cloned repos. The
+  scanner skips any folder named `architecture-diagrams`, so the installed skill is never
+  scanned as code.
 
 ## SKILL.md front matter
 

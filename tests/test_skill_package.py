@@ -48,14 +48,30 @@ def test_skill_mentions_every_command():
     assert "groups.json" in text
     for what in ("jobs", "transactions", "pages", "endpoints", "applications", "repos", "programs"):
         assert what in text, what
-    for level in ("landscape", "application", "flow", "repomap"):
-        assert "--level %s" % level in text or level in _text(SKILL / "reference" / "levels-and-styles.md")
+    levels_doc = _text(SKILL / "reference" / "levels-and-styles.md")
+    for level, style in (("landscape", "b"), ("application", "a"), ("flow", "a"), ("repomap", "c")):
+        assert re.search(r"\| `--level %s` \|[^\n]*\| `%s`" % (level, style), text), level
+        assert re.search(r"^\| `%s` \|[^\n]*\| `%s`" % (level, style), levels_doc, re.M), level
 
 
 def test_skill_forbids_inventing_links():
     text = _text(SKILL / "SKILL.md").lower()
     assert "never add links" in text
     assert "suggested_links" in text and "dotted" in text
+
+
+def test_skill_forbids_changing_client_code():
+    text = _text(SKILL / "SKILL.md")
+    assert "never edit, create or delete files in the user's repos" in text.lower()
+    assert "Only write inside `<ws>/architecture-diagrams/`" in text
+
+
+def test_scope_rule_in_both_places():
+    for doc in (SKILL / "SKILL.md", SKILL / "reference" / "levels-and-styles.md"):
+        text = " ".join(_text(doc).split())
+        assert "Scope rule." in text, doc.name
+        assert "show the candidates and ask" in text.lower(), doc.name
+        assert "say which" in text, doc.name
 
 
 def test_skill_relays_results_and_handles_blocked_commands():
@@ -91,6 +107,12 @@ def test_tasks_json_runs_the_three_commands():
     for cmd in ("scan", "summary", "draw"):
         assert '"%s"' % cmd in cmds, cmd
     assert "${workspaceFolder}" in cmds
+    personal = _confirmed("Personal").rstrip("\\")  # %USERPROFILE%\.copilot\skills\architecture-diagrams
+    run_py = personal.replace("%USERPROFILE%", "${userHome}").replace("\\", "/") + "/scripts/run.py"
+    for task in data["tasks"]:
+        assert task["args"][0] == run_py, task["label"]
+    style = next(i for i in data["inputs"] if i["id"] == "archdiagStyle")
+    assert style["default"] == "" and {"label": "level default", "value": ""} in style["options"]
 
 
 def _confirmed(kind: str) -> str:
@@ -110,6 +132,38 @@ def test_install_ps1_targets_confirmed_paths():
     assert "-Project" in ps1 or "[string]$Project" in ps1
     for exe in ("py", "python", "python3"):
         assert "'%s'" % exe in ps1, exe
-    assert "3, 9" in ps1 or "(3,9)" in ps1.replace(" ", "")
+    assert "$major -gt 3 -or ($major -eq 3 -and $minor -ge 9)" in ps1
+    assert "--version" in ps1 and "Python (\\d+)\\.(\\d+)" in ps1
+    assert "Replacing the existing copy" in ps1
     assert not re.search(r"Invoke-WebRequest|Invoke-RestMethod|DownloadString|https?://", ps1, re.I)
     assert "?." not in ps1 and "??" not in ps1, "PowerShell 5.1 has no ?. or ?? operators"
+
+
+def _make_repo(path: Path, cobol: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".archdiag-repo").write_text("", encoding="utf-8")
+    (path / "PGM.cbl").write_text(cobol, encoding="utf-8")
+
+
+def test_installed_project_skill_is_not_scanned(tmp_path):
+    """install.ps1 -Project <ws> puts the skill in <ws>/.github/skills/architecture-diagrams:
+    neither a repo nor scanned, whether <ws> holds the clones or is itself the repo."""
+    import shutil
+    from archdiag.repos import discover_repos, iter_source_files
+
+    cobol = "       IDENTIFICATION DIVISION.\n       PROGRAM-ID. %s.\n"
+    for single in (False, True):
+        ws = tmp_path / ("single" if single else "multi")
+        if single:
+            _make_repo(ws, cobol % "MAINPGM")
+        else:
+            _make_repo(ws / "claims-batch", cobol % "MAINPGM")
+        installed = ws / ".github" / "skills" / "architecture-diagrams"
+        shutil.copytree(str(SKILL), str(installed), ignore=shutil.ignore_patterns("__pycache__"))
+        _make_repo(installed / "reference", cobol % "SKILLPGM")  # even a marker inside is ignored
+        repos = discover_repos(ws)
+        assert [r.name for r in repos] == ([ws.resolve().name] if single else ["claims-batch"])
+        for r in repos:
+            files = list(iter_source_files(ws / r.path))
+            assert files, "the repo's own file is scanned"
+            assert not any("architecture-diagrams" in f.parts for f in files), files

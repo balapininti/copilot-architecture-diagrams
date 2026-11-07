@@ -5,17 +5,21 @@
 .DESCRIPTION
   Copies skill\architecture-diagrams\ to the personal skills folder
   %USERPROFILE%\.copilot\skills\architecture-diagrams, which VS Code and Copilot CLI both read.
-  With -Project <repo>, copies it to <repo>\.github\skills\architecture-diagrams instead.
+  With -Project <workspace>, copies it to <workspace>\.github\skills\architecture-diagrams instead.
+  <workspace> is the folder you open in VS Code or start Copilot CLI in: the one holding the
+  cloned repos, not one repo inside it. The scanner skips folders named architecture-diagrams,
+  so the installed skill is never scanned as code.
   Then checks for Python 3.9 or newer. No network access. Works in Windows PowerShell 5.1.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\work\claims-online
+  powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\work\claims
 #>
 [CmdletBinding()]
 param(
+    # the folder that holds the cloned repos (the one opened in VS Code or Copilot CLI)
     [string]$Project = ''
 )
 
@@ -35,7 +39,7 @@ if ($Project -ne '') {
     }
     $projectRoot = (Resolve-Path -LiteralPath $Project).Path
     $skillsRoot = Join-Path (Join-Path $projectRoot '.github') 'skills'
-    $where = "project skill in $projectRoot"
+    $where = "project skill for the workspace $projectRoot"
 } else {
     if (-not $env:USERPROFILE) {
         Write-Host 'USERPROFILE is not set; cannot find your home folder.' -ForegroundColor Red
@@ -48,6 +52,7 @@ $target = Join-Path $skillsRoot $SkillName
 
 # ---------------------------------------------------------------- copy the skill
 if (Test-Path -LiteralPath $target) {
+    Write-Host "Replacing the existing copy at $target"
     Remove-Item -LiteralPath $target -Recurse -Force   # drop files from an older version
 }
 New-Item -ItemType Directory -Path $target -Force | Out-Null

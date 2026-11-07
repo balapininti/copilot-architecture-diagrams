@@ -18,6 +18,9 @@ and each one is listed in a links report with the file and line for both ends.
   Nothing else is installed. No pip packages, no internet.
 - **VS Code** with **GitHub Copilot** in agent mode, or the **Copilot CLI**. Agent skills
   are on by default in VS Code (setting `chat.useAgentSkills`).
+- If your organization manages VS Code settings: check that `chat.useAgentSkills` is on.
+  If the setting is managed and off, ask your admin. Until then, the run-it-yourself route
+  below works without the skill.
 
 ## Install
 
@@ -29,14 +32,21 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 This copies the skill to `%USERPROFILE%\.copilot\skills\architecture-diagrams`. VS Code
-and Copilot CLI both read skills from there. To install it for one repo instead, so
-everyone who clones that repo gets it, run:
+and Copilot CLI both read skills from there.
+
+To install it for one workspace only, point `-Project` at **the folder you open in VS Code
+or start Copilot CLI in**. That is the folder holding the cloned repos (see below), not
+one of the repos inside it:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\path\to\repo
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\work\claims
 ```
 
-This copies it to `<repo>\.github\skills\architecture-diagrams`. Commit that folder.
+This copies it to `C:\work\claims\.github\skills\architecture-diagrams`. That folder is
+named `architecture-diagrams`, and the scanner always skips folders with that name, so the
+skill's own files never show up on the diagrams. If you work on a single repo and open
+that repo itself, `-Project` can point at the repo. You can then commit the folder so
+others who clone the repo get the skill.
 
 The installer also checks for Python 3.9 or newer and says how to fix it if Python is
 missing. Without the installer, copy this whole `architecture-diagrams` folder to either
