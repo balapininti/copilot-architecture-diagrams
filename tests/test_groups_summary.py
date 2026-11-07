@@ -220,3 +220,24 @@ def test_case_insensitive_config_and_bad_kind(tmp_path):
     assert "TEST ~ PROD" not in s
     g = load_groups(write(tmp_path, {"apps": [{"name": "A", "kind": ["x"]}, {"name": "B", "kind": {}}]}), r)
     assert [a.kind for a in g.apps][:2] == ["application", "application"] and len(g.problems) >= 2
+
+
+def test_b8_touch_repos_skips_utility_external_and_not_analyzed_ends():
+    from archdiag.model import Edge, Node, Resolved
+    from archdiag.summary import _cross, _touch_repos
+    r, _ = _synth(2, 0)
+    nodes = dict(r.nodes)
+    nodes["dataset:D"] = Node("dataset:D", "dataset", "D", None, [], {})
+    nodes["utility:IDCAMS"] = Node("utility:IDCAMS", "utility", "IDCAMS", "r1", [], {})
+    nodes["external:FTP:h"] = Node("external:FTP:h", "external", "FTP:h", "r1", [], {})
+    nodes["notanalyzed:A"] = Node("notanalyzed:A", "notanalyzed", "A", "r1", [], {})
+    nodes["missing:program:M"] = Node("missing:program:M", "missing", "M", "r1", [], {})
+    edges = [Edge("program:P0", "write", "dataset:D", "confirmed", None, []),
+             Edge("utility:IDCAMS", "read", "dataset:D", "confirmed", None, []),
+             Edge("dataset:D", "transfer", "external:FTP:h", "partial", "x", []),
+             Edge("notanalyzed:A", "read", "dataset:D", "partial", "x", []),
+             Edge("missing:program:M", "read", "dataset:D", "loose", "x", [])]
+    rr = Resolved(r.inventory, nodes, edges)
+    touch = _touch_repos(rr)
+    assert touch["dataset:D"] == {"r0"}
+    assert not _cross(rr, edges[0], touch)

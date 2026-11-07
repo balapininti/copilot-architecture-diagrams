@@ -47,13 +47,19 @@ def _env_pairs(r: Resolved, cfg: Config, kind: str) -> List[Tuple[str, str, int,
     return out[:10]
 
 
+# ends that belong to no repo's code: their repo never makes a shared resource shared (B8)
+_NO_REPO_KINDS = ("missing", "utility", "external", "notanalyzed")
+
+
 def _touch_repos(r: Resolved) -> Dict[str, set]:
-    """Repos of the edge ends touching each repo-less node (datasets, queues...)."""
+    """Repos of the edge ends touching each repo-less node (datasets, queues...); utility,
+    external, missing and not-analyzed ends are not counted."""
     t: Dict[str, set] = {}
     for e in r.edges:
         for mine, other in ((e.src, e.dst), (e.dst, e.src)):
             n, o = r.nodes.get(mine), r.nodes.get(other)
-            if n is not None and n.repo is None and o is not None and o.repo:
+            if n is not None and n.repo is None and o is not None and o.repo \
+                    and o.kind not in _NO_REPO_KINDS:
                 t.setdefault(mine, set()).add(o.repo)
     return t
 
@@ -63,7 +69,7 @@ def _cross(r: Resolved, e: Edge, touch: Dict[str, set]) -> bool:
     the repos of everything that touches it (2 or more repos = shared across repos)."""
     def repos(nid: str) -> Optional[set]:
         n = r.nodes.get(nid)
-        if n is None or n.kind in ("missing", "utility", "external", "notanalyzed"):
+        if n is None or n.kind in _NO_REPO_KINDS:
             return None
         if n.repo:
             return {n.repo}
