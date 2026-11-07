@@ -163,3 +163,43 @@ def test_code_shaped_divisions_are_cobol():
     assert classify("src/P3", no_id) == "cobol"
     only_progid = "       PROGRAM-ID. P4.\n       PROCEDURE DIVISION.\n           GOBACK.\n"
     assert classify("src/P4", only_progid) == "cobol"
+
+
+def test_numbered_list_prose_is_not_cobol():
+    # review of A6: "Step 1" / "1. The" in columns 1-6 are not a sequence area
+    steps = ("Step 1 IDENTIFICATION DIVISION. names the program\n"
+             "Step 2 DATA DIVISION holds records\n"
+             "Then   CALL 'PROSEPGM' is how programs call.\n")
+    listed = ("1. The IDENTIFICATION DIVISION. comes first.\n"
+              "2. The PROCEDURE DIVISION has the code.\n")
+    assert classify("docs/notes.txt", steps) is None
+    assert classify("docs/list.txt", listed) is None
+    assert classify("docs/LIST", listed) is None
+    # a real alphanumeric sequence area still counts
+    assert classify("src/P5", "PRG001 IDENTIFICATION DIVISION.\nPRG002 PROGRAM-ID. P5.\n") \
+        == "cobol"
+
+
+def test_tab_indented_cobol_member_is_cobol(tmp_path):
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    text = ("\tIDENTIFICATION DIVISION.\n\tPROGRAM-ID. TABBED.\n\tPROCEDURE DIVISION.\n"
+            "\t    CALL 'TABSUB'.\n")
+    assert classify("src/TABBED", text) == "cobol"
+    repo = tmp_path / "r"
+    (repo / "src").mkdir(parents=True)
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "src" / "TABBED").write_text(text)
+    inv = scan_workspace(tmp_path, Config())
+    assert any(r.src == "program:TABBED" and r.target_name == "TABSUB" for r in inv.refs)
+
+
+def test_tab_indented_mainframe_text_is_reported_when_untyped(tmp_path):
+    from archdiag.config import Config
+    from archdiag.scan import scan_workspace
+    repo = tmp_path / "r"
+    repo.mkdir()
+    (repo / ".archdiag-repo").write_text("")
+    (repo / "MEMBER").write_text("\tPROCEDURE DIVISION.\n\t    CALL 'X'.\n")
+    inv = scan_workspace(tmp_path, Config())
+    assert [n["path"] for n in inv.not_scanned] == ["MEMBER"]

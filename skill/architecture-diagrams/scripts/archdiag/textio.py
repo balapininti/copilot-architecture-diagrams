@@ -76,7 +76,9 @@ SNIFF_LINES = 200  # code lines (comments and blanks not counted) read to decide
 
 # COBOL structure lines that look like code: the keyword starts the line's code area
 # (fixed format: after columns 1-7; free format: near column 1)
-_AREA = r"^(?:.{6} {1,8}| {0,7})"
+# columns 1-6 must be blank, digits or a sequence-number shape (letters and digits with at
+# least one digit, as cobol._is_fixed), never prose such as "Step 1" or "1. The"
+_AREA = r"^(?:(?:[ 0-9]{6}|(?=[A-Za-z0-9]{6})[A-Za-z]*\d[A-Za-z0-9]*) {1,8}| {0,7})"
 _ID_HEADER = re.compile(_AREA + r"(?:IDENTIFICATION|ID)\s+DIVISION\s*\.", re.I)
 _PROGID_LINE = re.compile(_AREA + r"PROGRAM-ID\s*\.?\s*['\"]?[A-Za-z0-9#$@][\w#$@-]*", re.I)
 _DIVISION_LINE = re.compile(_AREA + r"(?:DATA|PROCEDURE|ENVIRONMENT)\s+DIVISION\b", re.I)
@@ -85,18 +87,19 @@ _LEVEL01_LINE = re.compile(
     r"COMP)\b)", re.I)
 
 
-def _looks_like_cobol(line: str, code: List[str]) -> bool:
+def _looks_like_cobol(at: int, code: List[str]) -> bool:
     """A line naming the IDENTIFICATION DIVISION or PROGRAM-ID is COBOL only when it
     looks like code and the sniffed code also holds another part of a program
     (PROGRAM-ID, a DATA / PROCEDURE / ENVIRONMENT DIVISION header or an 01-level item),
-    so prose that mentions them is not a program."""
+    so prose that mentions them is not a program. ``at`` is the line's index in ``code``."""
+    line = code[at]
     if _ID_HEADER.match(line):
         others = (_PROGID_LINE, _DIVISION_LINE, _LEVEL01_LINE)
     elif _PROGID_LINE.match(line):
         others = (_ID_HEADER, _DIVISION_LINE, _LEVEL01_LINE)
     else:
         return False
-    return any(rx.match(c) for c in code if c is not line for rx in others)
+    return any(rx.match(c) for k, c in enumerate(code) if k != at for rx in others)
 
 
 def _is_comment(line: str) -> bool:
@@ -155,12 +158,12 @@ def classify(relpath: str, text: str) -> Optional[str]:
             break
         if _is_comment(line):
             continue  # a long comment header must not hide the code below it
-        code.append(line)
+        code.append(line.expandtabs(8))  # a tab-indented member reads like column 9
         if len(code) >= SNIFF_LINES:
             break
-    for line in code:
+    for at, line in enumerate(code):
         if _IDDIV.search(line) or _PROGID.search(line):
-            if _looks_like_cobol(line, code):
+            if _looks_like_cobol(at, code):
                 return "cobol"
             continue
         if _JOB.match(line):

@@ -272,7 +272,9 @@ def _ext(rel: str) -> str:
 
 def _looks_mainframe(rel: str, text: str) -> bool:
     """An untyped file with a mainframe source extension, or mainframe-looking lines."""
-    return _ext(rel) in _MAINFRAME_EXTS or bool(_MAINFRAME_TEXT.search(text[:20000]))
+    # tabs expanded: a tab-indented member's code then sits past column 7 like any other
+    return _ext(rel) in _MAINFRAME_EXTS or bool(
+        _MAINFRAME_TEXT.search(text[:20000].expandtabs(8)))
 
 
 def _source_under(folder: Path, exts: frozenset = _MAINFRAME_EXTS, limit: int = 1000
