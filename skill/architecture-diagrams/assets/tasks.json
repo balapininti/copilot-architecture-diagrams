@@ -1,0 +1,52 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Architecture diagrams: scan",
+      "type": "process",
+      "command": "python",
+      "args": ["${userHome}/.copilot/skills/architecture-diagrams/scripts/run.py", "scan", "--workspace", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Architecture diagrams: summary",
+      "type": "process",
+      "command": "python",
+      "args": ["${userHome}/.copilot/skills/architecture-diagrams/scripts/run.py", "summary", "--workspace", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Architecture diagrams: draw (whole estate)",
+      "type": "process",
+      "command": "python",
+      "args": ["${userHome}/.copilot/skills/architecture-diagrams/scripts/run.py", "draw", "--level", "${input:archdiagEstateLevel}", "--style", "${input:archdiagStyle}", "--workspace", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Architecture diagrams: draw (one application, job, transaction or repo)",
+      "type": "process",
+      "command": "python",
+      "args": ["${userHome}/.copilot/skills/architecture-diagrams/scripts/run.py", "draw", "--level", "${input:archdiagScopedLevel}", "--scope", "${input:archdiagScope}", "--style", "${input:archdiagStyle}", "--workspace", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    },
+    {
+      "label": "Architecture diagrams: list",
+      "type": "process",
+      "command": "python",
+      "args": ["${userHome}/.copilot/skills/architecture-diagrams/scripts/run.py", "list", "--what", "${input:archdiagWhat}", "--workspace", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+    }
+  ],
+  "inputs": [
+    {"id": "archdiagEstateLevel", "type": "pickString", "description": "Level", "options": ["landscape", "repomap"], "default": "landscape"},
+    {"id": "archdiagScopedLevel", "type": "pickString", "description": "Level", "options": ["application", "flow", "repomap"], "default": "flow"},
+    {"id": "archdiagScope", "type": "promptString", "description": "Application, job, transaction, page, endpoint or repo name (see the list task)"},
+    {"id": "archdiagStyle", "type": "pickString", "description": "Style: a pictorial, b C4 boxes, c repo link map, d whiteboard", "options": ["a", "b", "c", "d", "all"], "default": "a"},
+    {"id": "archdiagWhat", "type": "pickString", "description": "What to list", "options": ["jobs", "transactions", "pages", "endpoints", "applications", "repos", "programs"], "default": "jobs"}
+  ]
+}
