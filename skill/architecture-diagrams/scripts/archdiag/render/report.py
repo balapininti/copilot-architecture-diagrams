@@ -149,7 +149,8 @@ def _host_group(name: str) -> str:
 
 def _missing_section(edges: List[Edge], r: Resolved) -> List[str]:
     # {(kind, name): set of distinct places}
-    names: Dict[Tuple[str, str], Set[Tuple[Optional[str], str, int]]] = {}
+    # B10: a copy of a file in another folder is the same place (the links table's copy key)
+    names: Dict[Tuple[str, str], Set[tuple]] = {}
     repos: Dict[Tuple[str, str], Set[str]] = {}
     for e in edges:
         n = r.nodes.get(e.dst)
@@ -171,7 +172,7 @@ def _missing_section(edges: List[Edge], r: Resolved) -> List[str]:
         names.setdefault(key, set())
         repos.setdefault(key, set())
         if ev is not None:
-            names[key].add(_evkey(ev))
+            names[key].add(_copy_key(e, r))
             repos[key].add(ev.repo or "?")
     o = [MISSING_INTRO, ""]
     if not names:
@@ -205,7 +206,7 @@ def links_report(view: ViewGraph, r: Resolved) -> str:
     head = "%d confirmed · %d partly known · %d loose ends" % (
         count[CONFIRMED], count[PARTIAL], count[LOOSE])
     if len(edges) != len(links):
-        head += " (%d resolver edges incl. copies)" % len(edges)
+        head += " (%d rows from %d resolver edges incl. copies)" % (len(links), len(edges))
     o: List[str] = ["# Links: %s" % view.title, "", head, "", "## Links on this diagram", ""]
     if links:
         o += ["| From | Link | To | Status | Evidence |", "|---|---|---|---|---|"]

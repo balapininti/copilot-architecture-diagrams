@@ -66,14 +66,20 @@ def test_every_edge_listed():
                 assert _p(ev) in t, (level, scope, _p(ev))
         rows = _table_rows(t)
         r = fixture_resolved()
+        from archdiag.render.report import _display as _disp
+
+        def _name(nid):  # B10: an end that is not a node (app:X of a suggestion) has no name
+            n = r.nodes.get(nid)
+            return n.name if n is not None else _disp(r, nid)
         for e in edges:
-            assert r.nodes[e.src].name in t and r.nodes[e.dst].name.lstrip("?").split(":")[0] in t \
-                or r.nodes[e.dst].name.startswith("?"), (level, e.src, e.op, e.dst)
+            assert _name(e.src) in t and _name(e.dst).lstrip("?").split(":")[0] in t \
+                or _name(e.dst).startswith("?"), (level, e.src, e.op, e.dst)
         # one row per distinct link; copies in another file fold into "also in"
         assert 0 < len(rows) <= len(edges) or not edges
         text = "\n".join(rows)
         assert text.count("also in:") >= len(edges) - len(rows)
-        assert re.search(r"\(%d resolver edges incl\. copies\)" % len(edges), t) or len(rows) == len(edges)
+        assert re.search(r"\(%d rows from %d resolver edges incl\. copies\)"
+                         % (len(rows), len(edges)), t) or len(rows) == len(edges)
         # each reachable (src, op, dst) has a row of its own: From, Link and To as the
         # report writes them (copies of a file elsewhere share their original's row)
         from archdiag.render.report import _cell, _display, _link_text
@@ -174,3 +180,22 @@ def test_write_reports():
     for level, scope in CASES:
         name = "report-%s%s.md" % (level, "" if scope is None else "-" + re.sub(r"\W", "_", scope))
         (OUT / name).write_text(rep(level, scope), encoding="utf-8")
+
+
+# B10: places counted once per copy, header names rows and resolver edges -------------------
+
+def test_b10_missing_places_count_copies_once():
+    es = [Edge("program:P", "copy", "missing:copybook:C", LOOSE, None,
+               [Evidence("r", path, 3, "COPY C")]) for path in ("cbl/P.cbl", "test/cbl/P.cbl")]
+    es.append(Edge("program:P", "copy", "missing:copybook:C", LOOSE, None,
+                   [Evidence("r", "cbl/P.cbl", 9, "COPY C")]))
+    t = synth(es, [Node("program:P", "program", "P", "r", [])])
+    s = section(t, "Possibly missing repos")
+    assert "C (copybook) — referenced from r (2 places)" in s
+    assert "(2 rows from 3 resolver edges incl. copies)" in t
+
+
+def test_b10_report_survives_an_edge_end_that_is_not_a_node():
+    t = synth([Edge("app:x", "suggested", "program:B", PARTIAL, "suggested by Copilot", [])],
+              [Node("program:B", "program", "B", None, [])])
+    assert len(_table_rows(t)) == 1 and "x" in t
