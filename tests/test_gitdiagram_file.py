@@ -159,3 +159,20 @@ def test_file_of_archive_members():
                 [Evidence("claims-api", "lib/a.jar!/Y.class", 1, "t"), Evidence("claims-api", "src/Y.java", 2, "t")], {})
     assert file_of(both, r) == ("claims-api", "src/Y.java")
     assert file_of(Node("c:z", "class", "Z", None, [], {}), r) is None
+
+
+def test_group_whose_files_are_all_taken_earlier_is_a_problem(tmp_path):
+    r = fixture_resolved()
+    _write(tmp_path, {"repo": "claims-batch", "groups": [
+        {"name": "All COBOL", "files": ["cobol/"]},
+        {"name": "Jobs", "files": ["jcl/"]},
+        {"name": "Pricing", "files": ["cobol/CLMB200.cbl"]},
+        {"name": "Mixed", "files": ["cobol/CLMB210.cbl", "jcl/CLMD100.jcl"]},
+        {"name": "Partly new", "files": ["cobol/CLMB300.cbl", "proc/"]}]})
+    gd = load_gitdiagram(tmp_path, r, "claims-batch")
+    assert "group 'Pricing': every file it matches is already in 'All COBOL' (first match wins)" \
+        in gd.problems
+    assert "group 'Mixed': every file it matches is already in 'All COBOL' and 'Jobs' " \
+        "(first match wins)" in gd.problems
+    assert not any("'Partly new'" in p for p in gd.problems)
+    assert not any("'All COBOL':" in p or "'Jobs':" in p for p in gd.problems)

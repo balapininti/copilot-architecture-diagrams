@@ -185,13 +185,21 @@ def load_gitdiagram(out_dir: Path, r: Resolved, repo: str) -> GitDiagram:
                                _text(raw.get("description"), "group %r description" % gname, problems)))
     gd = GitDiagram(repo, overview, groups, [], problems, True, "ok")
     paths = [_norm(f["path"]) for f in repo_files(r, repo)]
-    for g in groups:
+    owner = {p: group_of(gd, p) for p in paths}
+    for g, (_, npats) in zip(groups, gd._pats):
         if not g.files:
             problems.append("group %r has no files" % g.name)
-        for pat in g.files:
-            npat = _norm(pat)
-            if not any(_matches(npat, p) for p in paths):
+        hits: List[str] = []
+        for pat, npat in zip(g.files, npats):
+            found = [p for p in paths if _matches(npat, p)]
+            if not found:
                 problems.append("group %r: pattern %r matches no file in %s" % (g.name, pat, repo))
+            hits += [p for p in found if p not in hits]
+        if hits and all(owner[p] != g.name for p in hits):
+            # first match wins: the box would vanish without a word
+            earlier = list(dict.fromkeys(owner[p] for p in hits))
+            problems.append("group %r: every file it matches is already in %s (first match wins)"
+                            % (g.name, " and ".join(repr(x) for x in earlier)))
     links = data.get("suggested_links")
     if links is None:
         links = []
