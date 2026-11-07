@@ -189,3 +189,22 @@ out.textContent=JSON.stringify({lit:lit,shown:shown,cells:cells});document.body.
     assert sorted(set(got["lit"])) == want
     assert got["shown"] == len(want)
     assert any("MqClaimGateway.java" in c for c in got["cells"]), got["cells"]
+
+
+def test_evidence_strip_total_leaves_out_job_structure_lines():
+    """Ruling 10: the strip's "N of M links" agrees with the stdout Summary, so the grey
+    Scheduler "starts" line is not a link in M (claims-batch: 17, not 18)."""
+    from conftest import ESTATE, fixture_resolved
+    from archdiag.gitdiagram import load_gitdiagram
+    from archdiag.groups import default_groups
+    from archdiag.views import build_view
+    from archdiag.views.common import STRUCTURAL
+    fixture_view("landscape")
+    r = fixture_resolved()
+    gd = load_gitdiagram(ESTATE / "architecture-diagrams", r, "claims-batch")
+    v = build_view(r, default_groups(r), "gitdiagram", "claims-batch", gitdiagram=gd)
+    links = sum(1 for e in v.edges if e.status != STRUCTURAL)
+    assert links == len(v.edges) - 1
+    svg = style_c.render(v)["svg"]
+    m = re.search(r"Evidence \((\d+) of (\d+) links", svg)
+    assert m and int(m.group(2)) == links, m and m.group(0)

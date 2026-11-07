@@ -22,6 +22,7 @@ from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLOR
                                     text, text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, marker_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
+from archdiag.views.common import STRUCTURAL  # Ruling 10: not a link in any total
 
 TITLE_H = 44.0
 HEAD_H = 32.0
@@ -309,7 +310,8 @@ def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
         body.append('<rect x="20" y="%s" width="%s" height="%s" rx="8" %s/>'
                     % (num(strip_y), num(width - 40), num(strip_h), STRIP_STYLE))
         body.append(text(34, strip_y + 14, "Evidence (%d of %d links; the HTML page lists all)"
-                         % (len(strip), len(view.edges)), 10.5, "#475569", weight="700"))
+                         % (len(strip), sum(1 for e in view.edges if e.status != STRUCTURAL)),
+                         10.5, "#475569", weight="700"))
         for k, s in enumerate(strip):
             body.append(text(34, strip_y + 16 + STRIP_LINE * (k + 1) - 5, s, STRIP_SIZE,
                              "#475569", mono=True))
