@@ -8,7 +8,7 @@ from conftest import ESTATE
 from archdiag.config import Config, load_config
 from archdiag.model import Evidence, Inventory, Node, Ref
 from archdiag.resolve import resolve
-from archdiag.resolve.names import norm_dataset, norm_path, split_http
+from archdiag.resolve.names import is_absolute_gdg, norm_dataset, norm_path, split_http
 from archdiag.scan import scan_workspace
 
 _CACHE = {}
@@ -47,7 +47,17 @@ def test_norm_dataset():
     assert norm_dataset("prod.claims.daily(0)", ["PROD"]) == ("CLAIMS.DAILY", "PROD")
     assert norm_dataset("PROD.CLAIMS.DAILY(-1)", []) == ("PROD.CLAIMS.DAILY", None)
     assert norm_dataset("QA.CLAIMS.DAILY", ["PROD", "TEST"]) == ("QA.CLAIMS.DAILY", None)
-    assert norm_dataset("PROD.CLAIMS.G0001V00", ["prod"]) == ("CLAIMS.G0001V00", "PROD")
+    assert norm_dataset("PROD.CLAIMS.G0001V00", ["prod"]) == ("CLAIMS", "PROD")
+    # absolute generations match their base, and are flagged
+    assert norm_dataset("PROD.CLAIMS.DAILY.G0012V00", ["PROD"]) == ("CLAIMS.DAILY", "PROD")
+    assert norm_dataset("PROD.CLAIMS.DAILY.G0012V00", ["PROD"])[0] == \
+        norm_dataset("PROD.CLAIMS.DAILY(+1)", ["PROD"])[0]
+    assert is_absolute_gdg("PROD.CLAIMS.DAILY.G0012V00")
+    assert not is_absolute_gdg("PROD.CLAIMS.DAILY(+1)")
+    assert not is_absolute_gdg("PROD.CLAIMS.G12V00")
+    # an unsigned number in parentheses is a generation, a member name is kept
+    assert norm_dataset("PROD.CLAIMS.DAILY(1)", []) == ("PROD.CLAIMS.DAILY", None)
+    assert norm_dataset("PROD.LOAD(CLMB200)", []) == ("PROD.LOAD(CLMB200)", None)
     # a lone qualifier is never dropped to nothing
     assert norm_dataset("PROD", ["PROD"]) == ("PROD", None)
 
@@ -62,6 +72,7 @@ def test_split_http():
         "GET", "/zos/claims/{}/status", "zcee.internal")
     assert split_http("delete /api/claims/${id}") == ("DELETE", "/api/claims/{}", None)
     assert split_http("POST //Rates.Example.com/v1") == ("POST", "/v1", "rates.example.com")
+    assert split_http("get") == ("GET", "/", None)
 
 
 # programs -----------------------------------------------------------------------------------
@@ -117,6 +128,14 @@ def test_system_calls_dropped():
     assert not [e for e in resolved().edges if e.dst.endswith("SQLCA")]
 
 
+def test_system_ref_gives_no_edge():
+    inv = _inv([_prog("A", 1)],
+               [Ref("program:A", "call", "program", "MQPUT", _ev(4), attrs={"system": True}),
+                Ref("program:A", "copy", "copybook", "MYCOPY", _ev(5), attrs={"system": True})])
+    r = resolve(inv, Config())
+    assert r.edges == [] and not [n for n in r.nodes if n.startswith("missing:")]
+
+
 def test_copybooks():
     assert edge("program:CLMB200", "copy", "copybook:CLMREC").status == "confirmed"
     assert not [e for e in resolved().edges if "DFHAID" in e.dst]
@@ -169,10 +188,30 @@ def test_reason_caps_at_partial():
 
 
 def test_unresolved_symbol_name_is_partial_not_loose():
-    inv = _inv([], [Ref("step:j#S1", "runs", "program", "&PGM", _ev(3),
+    inv = _inv([], [Ref("step:r/a.jcl#S1", "runs", "program", "&PGM", _ev(3),
                         "symbol &PGM has no value in these repos")])
+    r = resolve(inv, Config())
+    (e,) = r.edges
+    assert e.dst == "missing:program:?r/a.jcl#S1:3" and e.status == "partial"
+    assert e.reason == "symbol &PGM has no value in these repos"
+    assert r.nodes[e.dst].attrs["written_name"] == "&PGM"
+
+
+def test_unresolved_symbol_names_do_not_share_a_target():
+    why = "symbol &PGM has no value in these repos"
+    refs = [Ref("step:r/a.jcl#S1", "runs", "program", "&PGM", _ev(3), why),
+            Ref("step:r/b.jcl#S1", "runs", "program", "&PGM", _ev(3), why)]
+    r = resolve(_inv([], refs), Config())
+    assert len({e.dst for e in r.edges}) == 2
+    assert "missing:program:&PGM" not in r.nodes
+
+
+def test_literal_name_with_reason_matching_nothing_is_loose():
+    inv = _inv([], [Ref("step:r/p.proc#S1", "runs", "program", "NOSUCH", _ev(3),
+                        "scanned with the PROC defaults", attrs={"proc_default": True})])
     (e,) = resolve(inv, Config()).edges
-    assert e.dst == "missing:program:&PGM" and e.status == "partial"
+    assert e.dst == "missing:program:NOSUCH" and e.status == "loose"
+    assert e.reason == "scanned with the PROC defaults"
 
 
 def test_lowercase_target_matches():

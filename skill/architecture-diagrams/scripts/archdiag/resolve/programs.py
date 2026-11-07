@@ -8,8 +8,10 @@ and exactly one thing matches it. So:
 - no definition gives LOOSE to ``missing:<kind>:<NAME>``;
 - a name not worked out (``target_name=None``) gives PARTIAL to
   ``missing:<kind>:?<src>:<line>``, or to the one defined candidate when there is exactly one;
-- any Ref with a reason is at most PARTIAL (Ruling 18): never confirmed, and a name that is
-  not fully worked out never draws a red loose end either.
+- any Ref with a reason is at most PARTIAL (Ruling 18) when it matches; a name still holding
+  an unresolved ``&`` symbol that matches nothing is PARTIAL to ``missing:<kind>:?<src>:<line>``
+  (``attrs["written_name"]`` keeps the name), while a fully literal name that matches
+  nothing is LOOSE even when the ref has an unrelated reason.
 
 IBM-supplied copybooks and run-time routines (``attrs["system"]``) give no edge (Ruling 9).
 Every Edge's evidence is the Ref's evidence first, then the definition's evidence.
@@ -93,11 +95,20 @@ def _resolve_named(ref: Ref, kinds: Tuple[str, ...], nodes: Dict[str, Node],
     name = (ref.target_name or "").strip().upper()
     dst, defs = _definitions(nodes, kinds, name)
     if dst is None:
-        # nothing defines it: a red loose end, unless the name itself is not fully worked
-        # out (unresolved symbol, guessed default), which is only partly known
+        if "&" in name:
+            # the name still holds an unresolved symbol: only partly known, and keyed by
+            # where it is written so unrelated `PGM=&PGM` steps don't share one box
+            missing = _missing(nodes, ref.target_kind,
+                               "?%s:%d" % (_src_label(ref.src), ref.evidence.line),
+                               ref.reason or "name not worked out", [])
+            nodes[missing].attrs.setdefault("written_name", name)
+            edges.append(Edge(ref.src, ref.op, missing, PARTIAL,
+                              ref.reason or "name not worked out", [ref.evidence]))
+            return
+        # a fully literal name that nothing defines: only one side found, a red loose end
+        # (the missing-repo signal), keeping any unrelated reason the ref carries
         missing = _missing(nodes, ref.target_kind, name)
-        edges.append(Edge(ref.src, ref.op, missing, PARTIAL if ref.reason else LOOSE,
-                          ref.reason, [ref.evidence]))
+        edges.append(Edge(ref.src, ref.op, missing, LOOSE, ref.reason, [ref.evidence]))
         return
     status, reason = _status_for(defs, ref.reason)
     edges.append(Edge(ref.src, ref.op, dst, status, reason, [ref.evidence] + defs))

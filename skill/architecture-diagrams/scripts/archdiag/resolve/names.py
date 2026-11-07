@@ -31,23 +31,36 @@ def norm_path(path: str) -> str:
     return "/" + "/".join("{}" if _is_param(s) else s for s in segs)
 
 
+# A relative generation: (+1), (0), (-1). An unsigned (n) is stripped too: a PDS member
+# name can't start with a digit, so a number in parentheses is always a GDG generation
+# (JCL reads an unsigned positive number as +n).
 _GDG = re.compile(r"\(\s*[+-]?\d+\s*\)$")
+# An absolute generation: the last qualifier GnnnnVnn of a GDG base.
+_ABS_GDG = re.compile(r"\.G\d{4}V\d{2}$")
+HTTP_VERBS = frozenset("GET POST PUT DELETE PATCH HEAD OPTIONS TRACE ANY".split())
 _HOST = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*:)?//([^/?#]*)")
 
 
 def norm_dataset(name: str, env_quals: List[str]) -> Tuple[str, Optional[str]]:
     """Matching key for a dataset name, and the environment qualifier dropped (or None).
 
-    The key is upper-case with a GDG relative generation (``(+1)``, ``(0)``, ``(-1)``)
-    removed. If the first qualifier is one of ``env_quals`` (compared case-insensitively)
+    The key is upper-case with a GDG relative generation (``(+1)``, ``(0)``, ``(-1)``) or
+    an absolute generation (``.G0012V00``, see ``is_absolute_gdg``) removed, so every
+    generation matches its base. If the first qualifier is one of ``env_quals`` (compared case-insensitively)
     and more qualifiers follow, it is removed and returned. ``PDS(MEMBER)`` keeps its member.
     """
     key = _GDG.sub("", (name or "").strip().upper()).strip()
+    key = _ABS_GDG.sub("", key)
     quals = {q.strip().upper() for q in env_quals if q and q.strip()}
     first, dot, rest = key.partition(".")
     if dot and rest and first in quals:
         return rest, first
     return key, None
+
+
+def is_absolute_gdg(name: str) -> bool:
+    """True when the dataset name ends in an absolute GDG generation (``.G0012V00``)."""
+    return bool(_ABS_GDG.search(_GDG.sub("", (name or "").strip().upper()).strip()))
 
 
 def split_http(target: str) -> Tuple[str, str, Optional[str]]:
@@ -59,6 +72,8 @@ def split_http(target: str) -> Tuple[str, str, Optional[str]]:
     """
     t = (target or "").strip()
     method, sep, url = t.partition(" ")
+    if not sep and method.upper() in HTTP_VERBS:
+        return method.upper(), "/", None
     if not sep or "/" in method:
         method, url = "ANY", t
     url = url.strip()
