@@ -492,6 +492,7 @@ def _handler_estate(ha_status, hb_status=None):
         groups.append(GitGroup("B", "", ["b/"]))
         files.append(("b/HB.java", "java"))
     r = synthetic(nodes, edges, files)
+    _handler_estate.resolved = r  # for the report's completeness test
     return view_of(GitDiagram("r1", "", groups, [], [], True), r), edges
 
 

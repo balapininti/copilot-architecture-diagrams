@@ -143,3 +143,20 @@ def test_extra_sections_positions_and_info_in_section():
             if where is groups else where
         for line in n.info:
             assert md(line) in sub, (n.id, line)
+
+
+def test_redirected_handler_lines_are_complete():
+    # a caller group's use of the repo's own endpoint is drawn to the handler groups
+    # (Ruling 5); both the caller edge and each handler edge must be listed with a row
+    from test_gitdiagram_view import _handler_estate
+    from archdiag.render.report import _edges, _links
+    v, edges = _handler_estate("partial", "confirmed")
+    assert any(e.src == "grp:C" and e.dst == "grp:A" for e in v.edges)
+    r = _handler_estate.resolved
+    rows = _links(_edges(v), r)
+    text = links_report(v, r)
+    for e in edges:
+        assert any(any(e is x for x in g) for g in rows), (e.src, e.op, e.dst)
+    table = text.split("## Links on this diagram")[1].split("\n## ")[0]
+    assert sum(1 for ln in table.splitlines() if ln.startswith("| ")) - 1 == len(rows)
+    assert "GET /x" in table
