@@ -13,6 +13,7 @@ import pytest
 
 from conftest import ESTATE
 from archdiag.config import load_config
+from archdiag.gitdiagram import gitdiagram_path, load_gitdiagram
 from archdiag.groups import default_groups
 from archdiag.model import CONFIRMED, LOOSE, PARTIAL, Edge, Evidence, Inventory, Node, Repo, Resolved
 from archdiag.resolve import repo_link_status, repo_links, resolve
@@ -28,8 +29,14 @@ def _resolved(ws: Path):
     return r, default_groups(r)
 
 
-def _all_views(r, g):
+def _all_views(r, g, ws: Path = ESTATE):
+    """Every view of the estate at ``ws``, with the gitdiagram views of the repos that have
+    a grouping file there (claims-batch and claims-api in the fixture)."""
     out = [build_view(r, g, "landscape", None), build_view(r, g, "repomap", None)]
+    for repo in r.inventory.repos:
+        if gitdiagram_path(ws / "architecture-diagrams", repo.name).is_file():
+            out.append(build_view(r, g, "gitdiagram", repo.name, gitdiagram=load_gitdiagram(
+                ws / "architecture-diagrams", r, repo.name)))
     for repo in r.inventory.repos:
         out.append(build_view(r, g, "repomap", repo.name))
     for a in g.apps:
@@ -72,12 +79,13 @@ def estate_with_partial_sql(tmp_path_factory):
     at = next(i for i, ln in enumerate(lines) if "CLMS.POLICY" in ln)
     lines.insert(at + 1, '        jdbcTemplate.queryForList("SELECT * FROM OLDS.PAYMENT");')
     p.write_text("\n".join(lines), encoding="utf-8")
-    return _resolved(ws)
+    return _resolved(ws) + (ws,)
 
 
 def test_no_line_is_more_certain_than_its_targets_fixture():
     r, g = _resolved(ESTATE)
     views = _all_views(r, g)
+    assert {v.scope for v in views if v.level == "gitdiagram"} == {"claims-batch", "claims-api"}
     assert not _violations(views)
     # the C3 trap: PaymentArchiveRepository's OLDS.PAYMENT (partial) beside the solid POLICY
     sql = [e for e in views[0].edges if e.src == "app:claims-api" and e.dst == "app:claims-db"]
@@ -86,8 +94,8 @@ def test_no_line_is_more_certain_than_its_targets_fixture():
 
 
 def test_no_line_is_more_certain_than_its_targets_with_partial_sql(estate_with_partial_sql):
-    r, g = estate_with_partial_sql
-    views = _all_views(r, g)
+    r, g, ws = estate_with_partial_sql
+    views = _all_views(r, g, ws)
     assert not _violations(views)
     land = views[0]
     sql = [e for e in land.edges if e.src == "app:claims-api" and e.dst == "app:claims-db"]

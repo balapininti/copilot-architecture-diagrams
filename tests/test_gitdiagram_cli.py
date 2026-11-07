@@ -49,6 +49,22 @@ def test_draw_without_file_uses_folders_and_says_so(tmp_path, capsys):
     assert out.index("Grouped by folder") < out.index("Wrote:")
 
 
+def test_draw_with_fixture_grouping_file_has_no_fallback(tmp_path, capsys):
+    """The fixture's own gitdiagram-claims-batch.json (the release gate's) is used as is:
+    no folder-fallback or unusable-file line, only the two files it leaves ungrouped."""
+    w = tmp_path / "estate"
+    shutil.copytree(str(ESTATE), str(w))
+    assert (w / "architecture-diagrams" / "gitdiagram-claims-batch.json").is_file()
+    rc = main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "claims-batch"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Grouped by folder" not in out and "Ask Copilot to name groups" not in out
+    assert "couldn't be used" not in out and "folders were used instead" not in out
+    assert "Problem in gitdiagram-claims-batch.json" not in out
+    assert "Not yet grouped: 2 files" in out
+    assert (w / "architecture-diagrams" / "gitdiagram-claims-batch-b.svg").is_file()
+
+
 def test_unusable_file_says_so(tmp_path, capsys):
     w = _estate(tmp_path)
     (w / "architecture-diagrams" / "gitdiagram-claims-batch.json").write_text(

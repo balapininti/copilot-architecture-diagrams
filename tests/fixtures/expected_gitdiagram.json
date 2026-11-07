@@ -15,24 +15,24 @@
       "cobol/CLMB510.cbl": "grp:?"
     },
     "lines": [
-      {"id": "B1", "src": "act:scheduler", "dst": "grp:Nightly jobs", "label_family": "starts", "status": "structural"},
-      {"id": "B2", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "confirmed", "label_has": "via &&SORTED"},
-      {"id": "B3", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "partial"},
-      {"id": "B4", "src": "grp:Nightly jobs", "dst": "grp:Payments", "label_family": "runs", "status": "confirmed"},
-      {"id": "B5", "src": "grp:Claim pricing", "dst": "dataset:CLAIMS.DAILY", "label_family": "writes", "status": "confirmed"},
-      {"id": "B6", "src": "grp:Nightly jobs", "dst": "dataset:CLAIMS.DAILY", "label_family": "reads", "status": "confirmed"},
-      {"id": "B7", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no writer found", "status": "loose"},
-      {"id": "B8", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no reader found", "status": "loose"},
-      {"id": "B9", "src": "grp:Nightly jobs", "dst": "out:external", "label_family": "file transfer", "status": "partial"},
-      {"id": "B10", "src": "grp:Claim pricing", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
-      {"id": "B11", "src": "grp:Claim pricing", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
-      {"id": "B12", "src": "grp:Claim pricing", "dst": "grp:Not analyzed", "label_family": "CALL", "status": "confirmed"},
-      {"id": "B13", "src": "grp:Payments", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
-      {"id": "B14", "src": "grp:Payments", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
-      {"id": "B15", "src": "grp:Payments", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed"},
-      {"id": "B16", "src": "grp:?", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed"},
-      {"id": "B17", "src": "grp:?", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed"},
-      {"id": "B18", "src": "grp:?", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"}
+      {"id": "B1", "src": "act:scheduler", "dst": "grp:Nightly jobs", "label_family": "starts", "status": "structural", "targets": []},
+      {"id": "B2", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "confirmed", "label_has": "via &&SORTED", "targets": ["program:CLMB200"]},
+      {"id": "B3", "src": "grp:Nightly jobs", "dst": "grp:Claim pricing", "label_family": "runs", "status": "partial", "targets": ["program:CLMB210"]},
+      {"id": "B4", "src": "grp:Nightly jobs", "dst": "grp:Payments", "label_family": "runs", "status": "confirmed", "targets": ["program:CLMB300", "program:CLMB400"]},
+      {"id": "B5", "src": "grp:Claim pricing", "dst": "dataset:CLAIMS.DAILY", "label_family": "writes", "status": "confirmed", "targets": ["dataset:CLAIMS.DAILY"]},
+      {"id": "B6", "src": "grp:Nightly jobs", "dst": "dataset:CLAIMS.DAILY", "label_family": "reads", "status": "confirmed", "targets": ["dataset:CLAIMS.DAILY"]},
+      {"id": "B7", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no writer found", "status": "loose", "targets": ["missing:writer:CLM.MASTER.KSDS", "missing:writer:PAYMENT.FEED"]},
+      {"id": "B8", "src": "grp:Nightly jobs", "dst": "out:missing", "label_family": "no reader found", "status": "loose", "targets": ["missing:reader:CLAIMS.AUDIT"]},
+      {"id": "B9", "src": "grp:Nightly jobs", "dst": "out:external", "label_family": "file transfer", "status": "partial", "targets": ["external:NDM:FINANCE"]},
+      {"id": "B10", "src": "grp:Claim pricing", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed", "targets": ["copybook:CLMREC"]},
+      {"id": "B11", "src": "grp:Claim pricing", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed", "targets": ["table:CLMS.CLAIM"]},
+      {"id": "B12", "src": "grp:Claim pricing", "dst": "grp:Not analyzed", "label_family": "CALL", "status": "confirmed", "targets": ["notanalyzed:DATEUTIL"]},
+      {"id": "B13", "src": "grp:Payments", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed", "targets": ["copybook:PAYREC"]},
+      {"id": "B14", "src": "grp:Payments", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed", "targets": ["table:CLMS.PAYMENT"]},
+      {"id": "B15", "src": "grp:Payments", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed", "targets": ["program:CLMB210"]},
+      {"id": "B16", "src": "grp:?", "dst": "out:shared-copybooks", "label_family": "COPY", "status": "confirmed", "targets": ["copybook:CLMREC", "copybook:ADDRREC", "copybook:CLMPROC"]},
+      {"id": "B17", "src": "grp:?", "dst": "grp:Claim pricing", "label_family": "CALL", "status": "confirmed", "targets": ["program:CLMB210"]},
+      {"id": "B18", "src": "grp:?", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed", "targets": ["table:CLMS.CLAIM"]}
     ]
   },
   "claims-api": {
@@ -49,19 +49,19 @@
       "src/main/resources/application.yml": "grp:?"
     },
     "lines": [
-      {"id": "A1", "src": "act:endpoint", "dst": "grp:REST controllers", "label_family": "runs", "status": "confirmed"},
-      {"id": "A2", "src": "out:claims-portal", "dst": "act:endpoint", "label_family": "REST", "status": "confirmed"},
-      {"id": "A3", "src": "grp:Outbound clients", "dst": "grp:REST controllers", "label_family": "REST", "status": "partial"},
-      {"id": "A4", "src": "grp:REST controllers", "dst": "grp:MQ gateway", "label_family": "uses", "status": "confirmed"},
-      {"id": "A5", "src": "grp:REST controllers", "dst": "grp:z/OS Connect client", "label_family": "uses", "status": "confirmed"},
-      {"id": "A6", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ PUT", "status": "confirmed"},
-      {"id": "A7", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ GET", "status": "confirmed"},
-      {"id": "A8", "src": "grp:MQ gateway", "dst": "out:missing", "label_family": "no consumer found", "status": "partial"},
-      {"id": "A9", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
-      {"id": "A9b", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "partial"},
-      {"id": "A10", "src": "grp:z/OS Connect client", "dst": "out:claims-online", "label_family": "REST", "status": "partial"},
-      {"id": "A11", "src": "grp:Outbound clients", "dst": "out:external", "label_family": "REST", "status": "loose"},
-      {"id": "A12", "src": "grp:REST controllers", "dst": "grp:Data access", "label_family": "looks up claims in", "status": "partial", "suggested": true}
+      {"id": "A1", "src": "act:endpoint", "dst": "grp:REST controllers", "label_family": "runs", "status": "confirmed", "targets": ["class:claims-api/ClaimController"]},
+      {"id": "A2", "src": "out:claims-portal", "dst": "act:endpoint", "label_family": "REST", "status": "confirmed", "targets": ["endpoint:GET /api/claims/{}", "endpoint:POST /api/claims"]},
+      {"id": "A3", "src": "grp:Outbound clients", "dst": "grp:REST controllers", "label_family": "REST", "status": "partial", "targets": ["endpoint:GET /api/claims/{}"]},
+      {"id": "A4", "src": "grp:REST controllers", "dst": "grp:MQ gateway", "label_family": "uses", "status": "confirmed", "targets": ["class:claims-api/MqClaimGateway"]},
+      {"id": "A5", "src": "grp:REST controllers", "dst": "grp:z/OS Connect client", "label_family": "uses", "status": "confirmed", "targets": ["class:claims-api/ClaimStatusClient"]},
+      {"id": "A6", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ PUT", "status": "confirmed", "targets": ["queue:CLM.REQ.LQ"]},
+      {"id": "A7", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ GET", "status": "confirmed", "targets": ["queue:CLM.RSP"]},
+      {"id": "A8", "src": "grp:MQ gateway", "dst": "out:missing", "label_family": "no consumer found", "status": "partial", "targets": ["missing:queue-consumer:CLM.AUDIT"]},
+      {"id": "A9", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed", "targets": ["table:CLMS.POLICY"]},
+      {"id": "A9b", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "partial", "targets": ["table:CLMS.PAYMENT"]},
+      {"id": "A10", "src": "grp:z/OS Connect client", "dst": "out:claims-online", "label_family": "REST", "status": "partial", "targets": ["zosapi:GET /zos/claims/{}/status"]},
+      {"id": "A11", "src": "grp:Outbound clients", "dst": "out:external", "label_family": "REST", "status": "loose", "targets": ["external:rates.example.com"]},
+      {"id": "A12", "src": "grp:REST controllers", "dst": "grp:Data access", "label_family": "looks up claims in", "status": "partial", "suggested": true, "targets": []}
     ]
   }
 }

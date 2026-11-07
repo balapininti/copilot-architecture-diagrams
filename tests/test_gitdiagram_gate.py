@@ -18,6 +18,7 @@ from archdiag.gitdiagram import load_gitdiagram
 from archdiag.groups import default_groups
 from archdiag.model import CONFIRMED
 from archdiag.views import build_view
+from archdiag.views.common import _family, _missing_label, _short
 
 EXPECTED = json.loads((Path(__file__).parent / "fixtures" / "expected_gitdiagram.json")
                       .read_text(encoding="utf-8"))
@@ -39,6 +40,23 @@ def family(e):
     if any(u.op == "suggested" for u in e.underlying):
         return e.label
     return re.split(r" · | via ", e.label, maxsplit=1)[0]
+
+
+def targets(repo, e):
+    """Ids of the things line ``e`` names: the targets of its underlying edges of the line's
+    own family (the ``runs`` edge a dataset line also stands on, an entry point's handler
+    edge and a temporary dataset's edges are not named). A suggested line names none."""
+    if any(u.op == "suggested" for u in e.underlying):
+        return set()
+    nodes = fixture_resolved().nodes
+    return {u.dst for u in e.underlying if _family(u, nodes) == family(e)}
+
+
+def shown_name(nid):
+    n = fixture_resolved().nodes[nid]
+    if n.kind == "missing":
+        return _missing_label(n)[0] if n.name.startswith("?") else n.name
+    return _short(n)
 
 
 def actual(repo):
@@ -99,6 +117,30 @@ def test_group_arrow_status_matches(repo):
     keys = {t[:3] for t in expected(repo)}
     got = {t for t in actual(repo) if t[:3] in keys}
     assert got == expected(repo), "expected:\n%s\ndrawn:\n%s" % (_show(expected(repo)), _show(got))
+
+
+@pytest.mark.parametrize("repo", REPOS)
+def test_no_line_drawn_twice(repo):
+    seen = [(e.src, e.dst, family(e), e.status) for e in view(repo)[1].edges]
+    twice = {t for t in seen if seen.count(t) > 1}
+    assert not twice, "drawn twice:\n%s" % _show(twice)
+
+
+@pytest.mark.parametrize("repo", REPOS)
+def test_each_line_names_its_expected_targets(repo):
+    """A line names exactly the hand-listed targets, so a view that swaps targets between
+    the solid and the dotted line of one pair fails; and its label names only those."""
+    edges = view(repo)[1].edges
+    for x in EXPECTED[repo]["lines"]:
+        key = (x["src"], x["dst"], x["label_family"], x["status"])
+        hits = [e for e in edges if (e.src, e.dst, family(e), e.status) == key]
+        assert len(hits) == 1, (x["id"], len(hits))
+        e = hits[0]
+        assert targets(repo, e) == set(x["targets"]), (x["id"], sorted(targets(repo, e)))
+        m = re.match(r"[^·]+ · (.*?)( via .*)?$", e.label)
+        if m and not x.get("suggested"):
+            names = re.sub(r" \+\d+$", "", m.group(1)).split(", ")
+            assert set(names) <= {shown_name(t) for t in x["targets"]}, (x["id"], e.label)
 
 
 @pytest.mark.parametrize("repo", REPOS)

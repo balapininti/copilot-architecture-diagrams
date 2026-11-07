@@ -15,7 +15,8 @@ Every resolved node is mapped to one box by the file that defines it (``file_of`
   own shared box when two boxes of this repo touch it, else a detail line on its group.
 
 A step's dataset use is drawn from the group of the program it runs when that program opens
-the DD (10.1); the line is then no more certain than the step's ``runs`` edge. Lines between
+the DD (10.1), whatever the status of the step's ``runs`` edge; the line is then no more
+certain than that edge (Ruling 9). Lines between
 boxes of this repo follow the landscape rule (one line per family and status, so a target
 known only partly gets its own dotted line), lines to and from outside stubs too (Ruling 7).
 Links inside one group are counted on the box and kept in its
@@ -158,9 +159,10 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         return [x for x in out_of.get(nid, []) if str(base(x.dst)).startswith("grp:")]
 
     def program_run(e: Edge) -> Optional[Edge]:
-        """The confirmed ``runs`` edge of ``e``'s step to a program of this repo that opens
-        ``e``'s DD; None when there is no such single program (utilities, other repos, a
-        DD the program does not name)."""
+        """The ``runs`` edge of ``e``'s step to a program of this repo that opens ``e``'s DD,
+        whatever its status (the line then takes the less certain of the two, 10.1 and
+        Ruling 9); None when there is no such single program (utilities, other repos, a DD
+        the program does not name)."""
         if e.op == "runs" or not e.src.startswith("step:") or not e.evidence:
             return None
         dd = ddname.get((e.src, e.evidence[0]))
@@ -168,7 +170,7 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
             return None
         progs = [x for x in runs.get(e.src, [])
                  if nodes.get(x.dst) is not None and nodes[x.dst].kind == "program"]
-        if len(progs) != 1 or progs[0].status != CONFIRMED:
+        if len(progs) != 1:
             return None
         b = base(progs[0].dst)
         if b is None or not b.startswith("grp:"):

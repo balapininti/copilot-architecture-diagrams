@@ -24,7 +24,11 @@ Rules cited:
 Box ids: `grp:<name>`, `grp:?` ("Not yet grouped"), `act:scheduler`, `act:<kind>`,
 `out:<repo>`, `out:missing`, `out:external`, a shared resource's own node id.
 `label_family` is the label before " · " (and before " via "); a suggested line's family is
-its whole label.
+its whole label. `targets` are the node ids (from `expected_links.json`) the line names: the
+targets of its underlying edges of the line's own family, so the `runs` edge a dataset line
+also stands on (§10.1), an entry point's handler edge (R5) and a temporary dataset's edges (R6)
+are not targets. The Scheduler and suggested lines name none. The gate compares them per
+line and checks the label names only these.
 
 ## claims-batch: files to boxes
 
@@ -44,14 +48,14 @@ First matching group wins (§4.1). `jcl/**` matches `jcl/test/CLMD100.jcl` too (
 | B6 | Nightly jobs → CLAIMS.DAILY "reads" | confirmed | CLMD100.jcl:19 DAILYIN (STEP030; CLMB300 has no FILE-CONTROL, so the DD can't be matched to it: job's group, §10.1) and :23 SYSUT1 (IEBGENER, a utility: job's group, §10.1). claims-online's CLMO900 also reads it (CLMEXT.proc:4 there): named on the shared box, not drawn (§4.2 "without the other repos' insides") |
 | B7 | Nightly jobs → out:missing "no writer found · CLM.MASTER.KSDS, PAYMENT.FEED" | loose | CLMD100.jcl:5 SORTIN reads CLM.MASTER.KSDS; CLMPRC.proc:3 FEED reads PAYMENT.FEED (DD not in CLMB400: job's group); nothing writes either (expected_links loose ends). Each dataset is touched by one group only, so it is a detail line on Nightly jobs and its loose end leaves from there. Stub rule, §4.2 "loose ends stay visible" |
 | B8 | Nightly jobs → out:missing "no reader found · CLAIMS.AUDIT" | loose | CLMD100.jcl:25 AUDIT DD (IEBGENER step: job's group); read nowhere. Different family from B7, so its own line. Stub rule |
-| B9 | Nightly jobs → out:external "file transfer · FINANCE" | partial | CLMD100.jcl:28 `TO (SNODE=FINANCE …)`, STEP050 DMBATCH (utility: job's group); partial by Ruling 24 of the base spec. Stub rule |
+| B9 | Nightly jobs → out:external "file transfer · NDM:FINANCE" | partial | CLMD100.jcl:28 `TO (SNODE=FINANCE …)`, STEP050 DMBATCH (utility: job's group); partial by Ruling 24 of the base spec. Stub rule |
 | B10 | Claim pricing → out:shared-copybooks "COPY · CLMREC" | confirmed | CLMB200.cbl:15; CLMREC is defined in shared-copybooks/CLMREC.cpy, another repo: one stub per outside repo (§4.2) |
 | B11 | Claim pricing → out:claims-db "SQL · CLAIM" | confirmed | CLMB200.cbl:24-26 `FROM CLAIM`, one table CLAIM (claims-db/ddl/CLAIM.sql:3) |
 | B12 | Claim pricing → Not analyzed "CALL · DATEUTIL" | confirmed | CLMB200.cbl:29 `CALL 'DATEUTIL'`; DATEUTIL is defined by asm/DATEUTIL.asm:1 (`DATEUTIL CSECT`), a grouped file, so the target is part of "Not analyzed" (§10.2). The evidence is the COBOL CALL, so the line is drawn although the assembler brings no arrows of its own (§3 non-goals) |
 | B13 | Payments → out:shared-copybooks "COPY · PAYREC" | confirmed | CLMB300.cbl:6; shared-copybooks/PAYREC.cpy |
 | B14 | Payments → out:claims-db "SQL · PAYMENT" | confirmed | CLMB300.cbl:9 `INSERT INTO CLMS.PAYMENT`, exact DDL match |
 | B15 | Payments → Claim pricing "CALL · CLMB210" | confirmed | cobol.pds/CLMB400:4 `CALL 'CLMB210'` literal (CLMB210.cbl:2) |
-| B16 | Not yet grouped → out:shared-copybooks "COPY · ADDRREC, CLMPROC +1" | confirmed | CLMB500.cbl:8,9,12 (CLMREC, ADDRREC, CLMPROC, all in shared-copybooks). Ungrouped files still bring their evidence (§4.2 "Not yet grouped") |
+| B16 | Not yet grouped → out:shared-copybooks "COPY · CLMREC, ADDRREC +1" | confirmed | CLMB500.cbl:8,9,12 (CLMREC, ADDRREC, CLMPROC, all in shared-copybooks). Ungrouped files still bring their evidence (§4.2 "Not yet grouped") |
 | B17 | Not yet grouped → Claim pricing "CALL · CLMB210" | confirmed | shared-copybooks/copylib/CLMPROC:2 `CALL 'CLMB210'`, COPYed at CLMB500.cbl:12 (expected_links I3) |
 | B18 | Not yet grouped → out:claims-db "SQL · CLAIM" | confirmed | CLMPROC:3 `FROM CLMS.CLAIM` via CLMB500.cbl:12 |
 
@@ -59,7 +63,8 @@ Not drawn, on purpose:
 
 - Links inside one box: STEP0x0 → SORT/IEBGENER/DMBATCH/IEFBR14 (utilities are the job's own
   work, §10.1); every read/write of CLAIMS.EXTRACT (CLMD100.jcl:24,28; CLMEXT.proc:4, partial
-  and from Nightly jobs since the step's `runs` is not confirmed), `&UNDEF..OUT.FILE`
+  and from Nightly jobs because CLMB210.cbl has no FILE-CONTROL, so no DD/SELECT match exists
+  for DD IN; the partial `runs` would not stop it, Ruling 9), `&UNDEF..OUT.FILE`
   (CLMD300:4, partial); CLMB200 `CALL WS-PGM` → CLMB210 (CLMB200.cbl:31, partial, both in
   Claim pricing). They are counted on the box ("+N links (M partly known)").
 - CLMB510 `INSERT INTO CLMS.CLMHIST` (CLMB510.cbl:9, partial): the table has no DDL and only one
@@ -112,3 +117,10 @@ Not drawn, on purpose:
   changed (`views/gitdiagram.py`), not just the entry. No other entry changed: every other
   stub line stands on edges of one status. Ruling 8 confirmed that CLMS.CLMHIST stays a
   counted, named detail on its one group (no change).
+- Fix round 1 (review): every entry gained a hand-written `targets` list (the ids in the
+  tables above: B2 names only CLMB200, B3 only CLMB210, A9 only CLMS.POLICY, A9b only
+  CLMS.PAYMENT, and so on), and the gate fails on a line drawn twice. Ruling 9 (spec 10.1 as
+  written: a partial `runs` plus a DD/SELECT match draws from the program's group, dotted)
+  changed the view; no fixture line moved, because the only partial `runs` in the fixture is
+  CLMEXT.proc → CLMB210 and CLMB210 opens no files. Label names in B9 and B16 corrected to the
+  real labels ("NDM:FINANCE"; "CLMREC, ADDRREC +1").

@@ -156,6 +156,44 @@ def test_dataset_arrow_status_is_the_less_certain_of_the_two():
     assert ln.status == PARTIAL
 
 
+def _partial_runs_estate(dd):
+    """Step S1 runs P on a partial ``runs`` edge and writes A.B (confirmed) on DD ``dd``; P
+    opens OUTDD. Q also reads A.B, so A.B is a shared box."""
+    from archdiag.model import Ref
+    p = prog("P", "cobol/P.cbl", files={"OUTDD": "output"})
+    job = Node("job:r1/jcl/J.jcl", "job", "J", "r1", [_ev("r1", "jcl/J.jcl")])
+    st = Node("step:r1/jcl/J.jcl#S1", "step", "S1", "r1", [_ev("r1", "jcl/J.jcl", 2)],
+              {"job": job.id})
+    ds = Node("dataset:A.B", "dataset", "A.B", None, [], {"names": ["A.B"]})
+    q = prog("Q", "cobol/Q.cbl")
+    ev_w = _ev("r1", "jcl/J.jcl", 3)
+    ref = Ref(st.id, "write", "dataset", "A.B", ev_w, None, [], {"ddname": dd})
+    edges = [Edge(st.id, "runs", p.id, PARTIAL, "PROC default", [_ev("r1", "jcl/J.jcl", 2)]),
+             Edge(st.id, "write", ds.id, CONFIRMED, None, [ev_w]),
+             Edge(q.id, "read", ds.id, CONFIRMED, None, [_ev("r1", "cobol/Q.cbl")])]
+    r = synthetic([p, job, st, ds, q], edges,
+                  [("cobol/P.cbl", "cobol"), ("cobol/Q.cbl", "cobol"), ("jcl/J.jcl", "jcl")],
+                  refs=[ref])
+    gd = GitDiagram("r1", "", [GitGroup("Jobs", "JCL", ["jcl/"]), GitGroup("P", "", ["cobol/P.cbl"]),
+                               GitGroup("Q", "", ["cobol/Q.cbl"])], [], [], True)
+    return view_of(gd, r)
+
+
+def test_partial_runs_with_dd_match_draws_dotted_from_program_group():
+    """Ruling 9 (spec 10.1 as written): a partial ``runs`` edge plus a DD/SELECT match draws
+    the dataset arrow from the program's group, at the less certain of the two (dotted)."""
+    v = _partial_runs_estate("OUTDD")
+    ln, = lines(v, "grp:P", "dataset:A.B")
+    assert ln.status == PARTIAL and ln.label == "writes"
+    assert {u.op for u in ln.underlying} == {"write", "runs"}
+    assert not lines(v, "grp:Jobs", "dataset:A.B")
+    # with no match the arrow stays with the job's group, at the write's own status
+    v = _partial_runs_estate("OTHERDD")
+    ln, = lines(v, "grp:Jobs", "dataset:A.B")
+    assert ln.status == CONFIRMED
+    assert not lines(v, "grp:P", "dataset:A.B")
+
+
 def test_utility_dataset_arrow_stays_with_job_group():
     v = view_of(batch_gd())
     # STEP040 runs IEBGENER: its SYSUT2 write of CLAIMS.EXTRACT is the job's own work
