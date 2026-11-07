@@ -515,6 +515,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     files: List[Tuple[str, str, str, str]] = []
     unclassified: Dict[str, List[Tuple[str, str, Path]]] = {}  # STEM -> files of no type
     not_scanned: List[Dict[str, str]] = _non_repo_folders(workspace, repos, config)
+    archives: Set[Tuple[str, str, str]] = set()  # the .aar / .sar files themselves
     odd: List[Tuple[str, str, str]] = []  # untyped files that look like mainframe source
     for repo in repos:
         root = workspace / repo.path
@@ -525,6 +526,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             reader = ARCHIVE_READERS.get(path.suffix.lower())
             if reader is not None:
                 got, problems = reader(path)
+                archives.add((repo.name, rel, "zosconnect"))
                 for member, reason in problems:
                     skipped.append({"repo": repo.name, "reason": reason,
                                     "path": rel + (ARCHIVE_SEP + member if member else "")})
@@ -589,9 +591,12 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             not_scanned.append({"repo": repo_name, "path": rel, "reason": why})
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
+    listed = sorted({(r, p, k) for r, p, _t, k in files
+                     if ARCHIVE_SEP not in p and (r, p) not in ctx.used_files} | archives)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
-                     _config_hosts(ctx, nodes), not_scanned, __version__, SCHEMA_VERSION)
+                     _config_hosts(ctx, nodes), not_scanned, __version__, SCHEMA_VERSION,
+                     [{"repo": r, "path": p, "kind": k} for r, p, k in listed])
 
 
 _register_builtin_scanners()

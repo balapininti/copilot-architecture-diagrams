@@ -75,6 +75,9 @@ class Inventory:
     # version is rescanned, never served (final review I7)
     archdiag_version: str = ""
     schema_version: int = 0
+    # every classified file: {"repo", "path" (repo-relative), "kind"}, sorted; archive
+    # members and SYSIN-only members are left out
+    files: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
