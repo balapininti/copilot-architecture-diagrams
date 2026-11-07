@@ -28,7 +28,7 @@ import posixpath
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.gitdiagram import (ACTOR_NAMES, FALLBACK_NOTE, GitDiagram, actor_kind, file_of,
-                                 group_of, repo_files)
+                                 group_of, no_files_note, repo_files)
 from archdiag.model import CONFIRMED, PARTIAL, Edge, Evidence
 from archdiag.views.common import (_RANK, STRUCTURAL, VEdge, VNode, ViewGraph, _Ctx, _evidence,
                                    _family, _least_certain, _missing_label, _plural, _short,
@@ -510,6 +510,8 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
         groups.append(ungrouped)
         if paths:
             notes.append("%d file%s not yet grouped" % (len(paths), _s(len(paths))))
+    if not files:  # nothing to group: say so instead of "grouped by folder"
+        notes = [x for x in notes if x != FALLBACK_NOTE] + [no_files_note(repo)]
     if gd.from_file and files and not any(g.id != UNGROUPED and g.members for g in groups):
         notes.append("No group in gitdiagram-%s.json matches any file of the repo; every file "
                      "is under 'Not yet grouped'" % repo)
@@ -606,5 +608,5 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     v = ViewGraph("Gitdiagram %s" % repo, "gitdiagram", repo, vnodes, vedges, [], notes)
     v.overview = gd.overview
     v.repo_path = repo_path
-    v.problems = list(gd.problems) + undrawn
+    v.problems = [x for x in gd.problems if files or x != FALLBACK_NOTE] + undrawn
     return v

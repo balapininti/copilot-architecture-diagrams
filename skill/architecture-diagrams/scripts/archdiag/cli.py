@@ -280,17 +280,20 @@ def _top_issues(view, r: Resolved) -> List[str]:
 
 
 def _gitdiagram_lines(view, gd, links: Path) -> None:
-    from .gitdiagram import FALLBACK_NOTE
+    from .gitdiagram import FALLBACK_NOTE, no_files_note
     ung = next((n for n in view.nodes if n.role == "ungrouped"), None)
     n = len(ung.members) if ung is not None else 0
     if n:
         print("Not yet grouped: %d file%s (see %s)" % (n, "" if n == 1 else "s", links))
     problems = [" ".join(p.split()) for p in view.problems if p != FALLBACK_NOTE]
-    if gd.file_state == "missing":
+    if no_files_note(gd.repo) in view.notes:
+        print(no_files_note(gd.repo))
+    elif gd.file_state == "missing":
         print(FALLBACK_NOTE)
-    elif gd.file_state == "unusable":
+    if gd.file_state == "unusable":
         print("The gitdiagram file couldn't be used (%s); folders were used instead."
               % (problems[0] if problems else "unknown problem"))
+        problems = problems[1:]  # its reason, said on the line above
     for p in problems[:5]:
         print("Problem in gitdiagram-%s.json: %s" % (gd.repo, p))
     if len(problems) > 5:
@@ -314,7 +317,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     from .render import report, style_a, style_b, style_c, style_d
     from .layout import layout_notes
     from .views import ScopeError, build_view
-    from .gitdiagram import FALLBACK_NOTE
+    from .gitdiagram import FALLBACK_NOTE, no_files_note
     level = args.level
     if level not in CLI_LEVELS:
         raise _Exit(2, _did_you_mean(level, list(CLI_LEVELS), "level",
@@ -369,7 +372,8 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     _write(links, report.links_report(view, r))
     written.append(links)
     # the gitdiagram's own notes are said once, by the lines printed below
-    said = set(view.problems) | {FALLBACK_NOTE} if gd is not None else set()
+    said = set(view.problems) | {FALLBACK_NOTE, no_files_note(gd.repo)} if gd is not None \
+        else set()
     for note in view.notes + layout_notes(view):
         if note in said or (gd is not None and re.match(r"^\d+ files? not yet grouped$", note)):
             continue  # the "Not yet grouped: N files" line below says it

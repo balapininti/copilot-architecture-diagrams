@@ -130,3 +130,25 @@ def test_report_md_escapes_angle_brackets_and_collapses_names():
     assert "### Pay &lt;A> \\[JCL 1\\]" in text
     assert "first second" in text
     assert "Line one\nline two" in text
+
+
+def test_html_panel_wording_for_gitdiagram():
+    gd = batch_gd(links=[{"from": "Claim pricing", "to": "Payments", "label": "posts",
+                          "note": "CLMB200 hands its file to CLMB300"}])
+    v = view_of(gd)
+    html = style_c.render(v)["html"]
+    assert "<h2>Links in this repo</h2>" in html and "Links between repos" not in html
+    data = json.loads(html.split('id="edge-data">')[1].split("</script>")[0])
+    struct = [d for d in data if d["status"] == "structural"]
+    assert struct and all(d["note"] == "The job exists; who schedules it isn't in these repos"
+                          for d in struct)
+    sug = [d for d in data if d["label"] == "posts"]
+    assert sug and sug[0]["note"] == "suggested by Copilot: CLMB200 hands its file to CLMB300"
+    assert "d.note" in html  # the panel shows it
+
+
+def test_html_panel_of_other_levels_unchanged():
+    from conftest import fixture_view
+    html = style_c.render(fixture_view("landscape", None))["html"]
+    assert "<h2>Links between repos</h2>" in html
+    assert "d.note" not in html and '"note"' not in html

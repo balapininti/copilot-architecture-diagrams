@@ -332,14 +332,27 @@ def edge_data(view: ViewGraph) -> List[dict]:
 
     out = []
     for i, e in enumerate(view.edges):
-        out.append({
+        d = {
             "i": i, "from": name(e.src), "to": name(e.dst), "label": e.label,
             "status": e.status, "kind": e.kind, "style": line_style(e.status, e.kind),
             "evidence": [{"repo": x.repo or "", "path": x.path, "line": x.line,
                           "loc": "%s:%s" % (x.path, x.line), "text": x.text}
                          for x in e.evidence],
-        })
+        }
+        note = _edge_note(e)
+        if note:  # gitdiagram only: a Scheduler line or a suggested link has no evidence
+            d["note"] = note
+        out.append(d)
     return out
+
+
+def _edge_note(e) -> str:
+    """What the panel says for a line that stands on no code evidence."""
+    if e.status == STRUCTURAL:
+        return STRUCTURAL_NOTE
+    if e.underlying and all(u.op == "suggested" for u in e.underlying):
+        return "; ".join(dict.fromkeys(u.reason or "suggested by Copilot" for u in e.underlying))
+    return ""
 
 
 def _json_for_script(data: object) -> str:
@@ -419,7 +432,7 @@ var back=el('button','back','\\u2190 all links');back.type='button';back.onclick
 panel.appendChild(back);
 var h=el('h2','',d.label||'(link)');h.appendChild(tag(d));panel.appendChild(h);
 panel.appendChild(el('div','hint',d.from+' \\u2192 '+d.to));
-if(!d.evidence.length){panel.appendChild(el('p','hint','No file:line evidence was recorded for this link.'));return;}
+%NOTE%if(!d.evidence.length){panel.appendChild(el('p','hint','No file:line evidence was recorded for this link.'));return;}
 var t=el('table'),hr=el('tr');
 ['Repo','File','Line','Code'].forEach(function(c){hr.appendChild(el('th','',c));});
 t.appendChild(hr);
@@ -447,20 +460,30 @@ showList();
 """
 
 
+STRUCTURAL_NOTE = "The job exists; who schedules it isn't in these repos"
+# the gitdiagram panel shows a line's note (above), in place of "no evidence"; other levels'
+# pages keep their script as it was
+_JS_NOTE = ("if(d.note){panel.appendChild(el('p','hint',d.note));"
+            "if(!d.evidence.length)return;}\n")
+
+
 def _html(view: ViewGraph, svg: str) -> str:
     body = svg.split("?>", 1)[-1]
+    gd = view.level == "gitdiagram"
+    js = _JS.replace("%NOTE%", _JS_NOTE if gd else "")
     return (
         '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<title>%s</title><style>%s</style></head><body>'
         '<div class="wrap"><div class="map">%s</div>'
-        '<aside><h2>Links between repos</h2>'
+        '<aside><h2>%s</h2>'
         '<input id="q" type="search" placeholder="Search links by name, repo, file or code" '
         'aria-label="Search links">'
         '<div id="panel"></div></aside></div>'
         '<script type="application/json" id="edge-data">%s</script>'
         '<script>%s</script></body></html>\n'
-        % (esc(view.title), _CSS, body, _json_for_script(edge_data(view)), _JS))
+        % (esc(view.title), _CSS, body, "Links in this repo" if gd else "Links between repos",
+           _json_for_script(edge_data(view)), js))
 
 
 # ------------------------------------------------------------------ entry point

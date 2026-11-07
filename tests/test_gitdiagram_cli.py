@@ -74,7 +74,9 @@ def test_unusable_file_says_so(tmp_path, capsys):
     assert rc == 0
     assert "Ask Copilot to name groups" not in out
     assert "couldn't be used" in out and "folders were used instead" in out
-    assert "Problem in gitdiagram-claims-batch.json:" in out
+    # the reason is said once, on the "couldn't be used" line
+    assert "Problem in gitdiagram-claims-batch.json:" not in out
+    assert out.count("could not be read") == 1, out
     assert "Traceback" not in out
 
 
@@ -229,3 +231,16 @@ def test_grouping_file_for_a_repo_not_in_the_scan_is_named(tmp_path, capsys):
     assert note in out, out
     report = (d / "gitdiagram-claims-batch-links.md").read_text(encoding="utf-8")
     assert "gitdiagram-claims-old.json is for a repo" in report.split("## Notes")[1]
+
+
+def test_repo_with_no_classified_files_says_so(tmp_path, capsys):
+    w = _estate(tmp_path)
+    empty = w / "empty-repo"
+    empty.mkdir()
+    (empty / ".archdiag-repo").write_text("", encoding="utf-8")
+    (empty / "README.txt").write_text("nothing to see", encoding="utf-8")
+    rc = main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "empty-repo"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "No files to group in empty-repo" in out.splitlines(), out
+    assert "Grouped by folder" not in out and "Traceback" not in out

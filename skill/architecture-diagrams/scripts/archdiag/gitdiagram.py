@@ -33,6 +33,10 @@ ACTOR_NAMES = (("job", "Scheduler"), ("transaction", "CICS transactions"),
                ("zosapi", "z/OS Connect APIs"))
 
 
+def no_files_note(repo: str) -> str:
+    return "No files to group in %s" % repo
+
+
 def actor_kind(name: str) -> Optional[str]:
     """The node kind of the entry actor ``name`` names ("Scheduler", "CICS transactions (12)",
     any case), else None."""
