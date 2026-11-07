@@ -22,10 +22,10 @@ import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
+from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, wrap, FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     PARTIAL_COLOR, SHARED_COLOR, _LEGEND,
                                     esc, gd_details, group_colors, legend, legend_width, line_style,
-                                    link_wrap, loose_dot, note_lines, num, overview_block, path_d,
+                                    link_wrap, loose_dot, node_href, note_lines, num, overview_block, path_d,
                                     step_text, svg_doc, text, text_width, tint, wrap)
 from archdiag.render.pills import KEY_LINE, KEY_R, Pill, key_entries, key_svg, marker_svg, place_pills
 from archdiag.views import VNode, ViewGraph
@@ -538,10 +538,24 @@ class _Ex:
         return e
 
 
+def _link(X: "_Ex", eid: str, view: ViewGraph, n: VNode) -> None:
+    url = node_href(view, n)
+    if url:
+        X.by_id[eid]["link"] = url
+
+
 def _excalidraw(S: _Scene, seed: int) -> str:
     X = _Ex(seed)
     view, L, ox, oy = S.view, S.L, S.ox, S.oy
     X.label("title", 24, 12, view.title, 20)
+    ov = " ".join(str(view.overview or "").split())
+    if ov:  # the overview paragraph under the title, as the SVG's band
+        lines = wrap(ov, max(200.0, S.width - 64), OVERVIEW_SIZE)
+        oh = 14 + OVERVIEW_LINE * len(lines)
+        X.box("overview", "rectangle", 16, TITLE_H, max(240.0, S.width - 32), oh, "#f8fafc",
+              "#e2e8f0")
+        X.label("overview-text", 30, TITLE_H + 7, "\n".join(lines), OVERVIEW_SIZE, "#334155",
+                w=max(200.0, S.width - 64), h=OVERVIEW_LINE * len(lines))
     for g in view.groups:
         gb = L.groups.get(g.id)
         if gb is None:
@@ -568,6 +582,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         pastel = PASTELS[idx % len(PASTELS)]
         if n.kind == "person":  # invisible box to bind lines to, a stick figure on it
             X.box(eid, "rectangle", x, y, b.w, b.h, "transparent", "transparent", rounded=False)
+            _link(X, eid, view, n)
             cx = x + b.w / 2
             X.box(eid + "-head", "ellipse", cx - 10, y + 2, 20, 20, "transparent")
             X.base(eid + "-body", "line", cx, y + 22, 0, 0, points=[[0, 0], [0, 18], [-17, 12],
@@ -579,6 +594,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         if n.kind == "missing":
             partial = n.status == "partial"
             X.box(eid, "rectangle", x, y, b.w, b.h, STICKY, STICKY_EDGE, _tilt(i), False)
+            _link(X, eid, view, n)
             X.label(eid + "-text", x + 6, y + 6, t.plain(), 13, "#b45309" if partial else "#c92a2a",
                     container=eid, align="center", w=b.w - 12, h=b.h - 12, angle_deg=_tilt(i))
             continue
@@ -591,6 +607,7 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         if n.kind in PIPES:
             bg = "#fff3bf"
         X.box(eid, "rectangle", x, y, b.w, b.h, bg, stroke)
+        _link(X, eid, view, n)
         if n.kind in CYLINDERS:
             X.box(eid + "-cap", "ellipse", x, y, b.w, 22, "transparent", stroke)  # outline only: never hides the label
         X.label(eid + "-text", x + 6, y + 6, t.plain(), 14, ink, container=eid, align="center",

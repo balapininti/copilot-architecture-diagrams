@@ -13,11 +13,11 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
+from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, wrap, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
                                     PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, gd_details,
                                     group_colors,
                                     group_icon, legend, legend_width, line_attrs, line_style,
-                                    link_wrap, notes_block, notes_height, num, overview_block,
+                                    link_wrap, node_href, notes_block, notes_height, num, overview_block,
                                     path_d, step_text, svg_doc, text, text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, place_pills as _place_pills
 from archdiag.views import VNode, ViewGraph
@@ -345,6 +345,14 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
                      'spacingLeft=10;spacingTop=2;" vertex="1" parent="1">%s</mxCell>'
                      % (cid, esc(group_title(g.id, g.label)), tint(c, 0.08), c, shade(c),
                         _geom(gb.x, gb.y, gb.w, gb.h)))
+    ov = " ".join(str(view.overview or "").split())
+    if ov:  # the overview paragraph, wrapped, above the picture
+        wrapped = wrap(ov, max(200.0, L.width - 64), OVERVIEW_SIZE)
+        oh = 14 + OVERVIEW_LINE * len(wrapped)
+        cells.append('<mxCell id="overview" value="%s" style="text;html=0;whiteSpace=wrap;'
+                     'align=left;verticalAlign=middle;fontSize=12;fontColor=#334155;'
+                     'fillColor=#f8fafc;strokeColor=#e2e8f0;spacingLeft=10;" vertex="1" '
+                     'parent="1">%s</mxCell>' % (esc(ov), _geom(0, -oh - 16, max(240.0, L.width), oh)))
     node_cell: Dict[str, str] = {}
     for i, n in enumerate(view.nodes):
         b = L.boxes.get(n.id) or Box(0, 0, MIN_W, MIN_H)
@@ -355,8 +363,10 @@ def _drawio(view: ViewGraph, L: Layout) -> str:
             parent, gb = group_cell[n.group]
             px, py = gb.x, gb.y
         lines = [n.label, n.sublabel] + list(n.detail_lines)
-        cells.append('<mxCell id="%s" value="%s" style="%s" vertex="1" parent="%s">%s</mxCell>'
-                     % (cid, _value(lines), _vertex_style(n, _node_color(n, colors)), parent,
+        url = node_href(view, n)
+        cells.append('<mxCell id="%s" value="%s" style="%s"%s vertex="1" parent="%s">%s</mxCell>'
+                     % (cid, _value(lines), _vertex_style(n, _node_color(n, colors)),
+                        ' link="%s"' % esc(url) if url else "", parent,
                         _geom(b.x - px, b.y - py, b.w, b.h)))
     for i, e in enumerate(view.edges):
         style = _EDGE_STYLE[line_style(e.status, e.kind)]

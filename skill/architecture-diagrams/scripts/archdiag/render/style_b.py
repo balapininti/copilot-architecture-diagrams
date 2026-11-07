@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from archdiag.layout import Box, Layout, layout_for, layout_notes
 from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, esc, gd_details,
                                     group_colors, legend,
-                                    legend_width, line_style, link_wrap, notes_block,
+                                    legend_width, line_style, link_wrap, node_href, notes_block,
                                     notes_height, num, overview_block, step_text, svg_doc, text,
                                     text_width, wrap)
 from archdiag.render.pills import edge_svg, key_svg, place_pills
@@ -359,7 +359,8 @@ def mm(s: str) -> str:
     Mermaid reads as syntax, as ``#name;`` entity codes."""
     s = " ".join(str(s).split())
     for ch, code in (("#", "#35;"), ('"', "#quot;"), ("<", "#lt;"), (">", "#gt;"),
-                     ("&", "#amp;"), ("`", "#96;")):
+                     ("&", "#amp;"), ("`", "#96;"), ("[", "#91;"), ("]", "#93;"),
+                     ("|", "#124;")):
         s = s.replace(ch, code)
     return s
 
@@ -416,6 +417,9 @@ def _mermaid(view: ViewGraph) -> str:
             lines.append('  %s %s|"%s"| %s' % (a, arrow, mm(label), b))
         else:
             lines.append("  %s %s %s" % (a, arrow, b))
+    for i, n in enumerate(view.nodes):
+        if n.link:
+            lines.append('  click n%d "%s"' % (i, node_href(view, n)))
     for i, st in enumerate(styles):
         lines.append("  linkStyle %d %s" % (i, _LINE_STYLE[st]))
     for name, style in _CLASSES:
@@ -443,7 +447,8 @@ def _markdown(view: ViewGraph, azure: bool = False) -> str:
     ``::: mermaid`` block Azure DevOps wikis need (``azure=True``, the ``.azure.md`` copy)."""
     styles = {line_style(e.status, e.kind) for e in view.edges}
     fence = ("::: mermaid", ":::") if azure else ("```mermaid", "```")
-    out = ["# %s" % " ".join(view.title.split()), "", fence[0], _mermaid(view), fence[1], "",
+    ov = " ".join(str(view.overview or "").split())
+    out = ["# %s" % " ".join(view.title.split()), ""] + ([ov, ""] if ov else []) + [fence[0], _mermaid(view), fence[1], "",
            "## Legend", ""]
     for key, label in _MD_LEGEND:
         if key in styles:

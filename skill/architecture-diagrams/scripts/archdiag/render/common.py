@@ -306,12 +306,17 @@ def href(view_repo_path: str, link: str) -> str:
     return "../" + quote(posixpath.join(*parts) if parts else "", safe="/")
 
 
+def node_href(view: "ViewGraph", n: "VNode") -> str:
+    """The box's relative URL (unescaped), or "" when it has no link."""
+    return href(view.repo_path or view.scope or "", n.link) if n.link else ""
+
+
 def link_wrap(view: "ViewGraph", n: "VNode", svg: str) -> str:
     """``svg`` (one box) wrapped in ``<a>`` when the box has a link; as is otherwise. Both
     ``href`` (SVG 2) and ``xlink:href`` (older viewers) are written."""
     if not n.link or not svg:
         return svg
-    url = esc(href(view.repo_path or view.scope or "", n.link))
+    url = esc(node_href(view, n))
     return '<a href="%s" xlink:href="%s">%s</a>' % (url, url, svg)
 
 

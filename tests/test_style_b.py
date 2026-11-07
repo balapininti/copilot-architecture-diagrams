@@ -179,7 +179,7 @@ def test_every_real_kind_is_labelled_by_what_it_is():
                       edges=[], groups=[], notes=[])
         out = style_b.render(v)
         assert want in _texts(out["svg"]), (nid, _texts(out["svg"]))
-        assert "<br/>%s" % want.replace("&", "#amp;") in out["md"], (nid, out["md"])
+        assert "<br/>%s" % style_b.mm(want) in out["md"], (nid, out["md"])
 
 
 def test_fixture_views_keep_real_kind():
