@@ -110,3 +110,24 @@ def test_writes_samples():
         out = style_d.render(fixture_view(level, scope))
         (OUT / (name + ".svg")).write_text(out["svg"], encoding="utf-8")
         (OUT / (name + ".excalidraw")).write_text(out["excalidraw"], encoding="utf-8")
+
+
+def test_excalidraw_key_has_a_heading_and_square_brackets_for_plain_markers():
+    """E3: the Excalidraw key starts with the SVG's "Line labels" heading; a marker on a
+    numbered step is written (n), any other marker [n], on the line and in the key,
+    matching the SVG's circles and squares."""
+    import json
+    from archdiag.render.pills import Pill
+    step = Pill(0, "SELECT", (0, 0), "confirmed", number=24)
+    step.as_marker((10, 10)), setattr(step, "key", 24)
+    plain = Pill(1, "reads", (0, 0), "confirmed")
+    plain.as_marker((10, 10)), setattr(plain, "key", 31)
+    assert style_d.marker_text(step) == "(24)" and style_d.marker_text(plain) == "[31]"
+    j = json.loads(style_d.render(fixture_view("repomap", None))["excalidraw"])
+    texts = {el["id"]: el["text"] for el in j["elements"] if el["type"] == "text"}
+    assert texts.get("key-heading") == "Line labels (marked on the lines)"
+    keys = [t for i, t in texts.items() if i.startswith("key-") and i != "key-heading"]
+    assert keys and all(t.startswith("[") for t in keys), keys
+    marks = [t for i, t in texts.items() if i.startswith("label-") and t[:1] in "[("
+             and t.rstrip("])").lstrip("[(").isdigit()]
+    assert marks and all(t.startswith("[") for t in marks), marks

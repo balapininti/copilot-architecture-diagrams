@@ -584,12 +584,16 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         a["strokeWidth"] = 2
         for nid in (node_el[e.src], node_el[e.dst]):
             X.by_id[nid]["boundElements"].append({"id": aid, "type": "arrow"})
-    for p, s, dx, row in _key_entries(S.pills, S.width - 60):  # the key, as in the SVG
+    entries = _key_entries(S.pills, S.width - 60)
+    if entries:  # the key, as in the SVG
+        X.label("key-heading", 30, S.key_y + 1, "Line labels (marked on the lines)", 12,
+                "#475569")
+    for p, s, dx, row in entries:
         X.label("key-%d" % p.key, 30 + dx, S.key_y + 18 + KEY_LINE * row + 3,
-                "(%d) %s" % (p.key, s), 12, _PILL_INK[p.style])
+                "%s %s" % (marker_text(p), s), 12, _PILL_INK[p.style])
     for p in S.pills:
         if p.marker:  # just the number on the line; the label is in the key
-            X.label("label-%d" % p.i, p.x + ox - 4, p.y + oy + 1, "(%d)" % p.key, 11,
+            X.label("label-%d" % p.i, p.x + ox - 4, p.y + oy + 1, marker_text(p), 11,
                     _PILL_INK[p.style], align="center", w=p.w + 8)
             continue
         lines = list(p.lines)
@@ -625,6 +629,12 @@ def _excalidraw(S: _Scene, seed: int) -> str:
 
 
 # ------------------------------------------------------------------ entry point
+
+def marker_text(p: Pill) -> str:
+    """A marker written as text: ``(n)`` for a numbered step (the SVG's circle), ``[n]``
+    for any other line (the SVG's square)."""
+    return "(%d)" % p.key if p.number is not None else "[%d]" % p.key
+
 
 def render(view: ViewGraph, seed: int = 7) -> Dict[str, str]:
     """The whiteboard SVG and its Excalidraw file, from one layout of ``view``."""
