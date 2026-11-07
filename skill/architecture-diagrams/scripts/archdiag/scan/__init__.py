@@ -410,7 +410,8 @@ def _copy_names(refs: List[Ref]) -> Set[str]:
 
 def _copybooks_by_stem(refs: List[Ref], nodes: Dict[str, Node],
                        unclassified: Dict[str, List[Tuple[str, str, Path]]], ctx: ScanContext,
-                       skipped: List[Dict[str, str]]) -> None:
+                       skipped: List[Dict[str, str]],
+                       late: Set[Tuple[str, str, str]]) -> None:
     """COPY X with no copybook X found: a file of no type whose stem is X is the member
     (PDS exports often have no extension, or .txt / .inc)."""
     from . import cobol
@@ -433,6 +434,7 @@ def _copybooks_by_stem(refs: List[Ref], nodes: Dict[str, Node],
                                     "reason": "could not be analyzed (%s: %s)"
                                     % (type(e).__name__, e)})
                     continue
+                late.add((repo, rel, "copybook"))
                 _merge_nodes(nodes, new_nodes)
 
 
@@ -582,7 +584,8 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             continue
         _merge_nodes(nodes, new_nodes)
         refs.extend(new_refs)
-    _copybooks_by_stem(refs, nodes, unclassified, ctx, skipped)
+    late: Set[Tuple[str, str, str]] = set()  # untyped files scanned as copybooks by stem
+    _copybooks_by_stem(refs, nodes, unclassified, ctx, skipped, late)
     refs.extend(_copybook_refs(refs, nodes, ctx))
     used = {(ev.repo, ev.path) for n in nodes.values() for ev in n.evidence}
     used |= ctx.used_files
@@ -591,8 +594,12 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
             not_scanned.append({"repo": repo_name, "path": rel, "reason": why})
     from . import zosconnect
     refs = zosconnect.merge_built_copies(nodes, refs)
-    listed = sorted({(r, p, k) for r, p, _t, k in files
-                     if ARCHIVE_SEP not in p and (r, p) not in ctx.used_files} | archives)
+    # Files whose analysis raised are in `skipped`, not here: a completeness check must
+    # treat `skipped` as accounted for. The SYSIN-member exclusion applies only to untyped
+    # files (typed ones are never SYSIN-only); archive members are left out.
+    listed = sorted({(r, p, k) for r, p, _t, k in files if ARCHIVE_SEP not in p}
+                    | {x for x in late if (x[0], x[1]) not in ctx.used_files}
+                    | archives)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
                      _config_hosts(ctx, nodes), not_scanned, __version__, SCHEMA_VERSION,
