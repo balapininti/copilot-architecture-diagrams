@@ -60,6 +60,9 @@ class Inventory:
     refs: List[Ref]
     fingerprint: str
     languages_not_analyzed: Dict[str, int]
+    # files that could not be read or scanned: {"repo", "path", "reason"} (size, unreadable
+    # archive, read error); directory/extension skip lists are intentional and not listed
+    skipped: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

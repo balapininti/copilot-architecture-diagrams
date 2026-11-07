@@ -81,31 +81,50 @@ def _decode(data: bytes) -> str:
     return data.decode("latin-1")
 
 
-def _members(zf: zipfile.ZipFile, prefix: str, depth: int, out: List[Tuple[str, str]]) -> None:
-    for info in zf.infolist()[:MAX_MEMBERS]:
-        if info.is_dir() or info.file_size > MAX_MEMBER_BYTES:
+_ZIP_ERRORS = (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, RuntimeError, ValueError,
+               NotImplementedError, EOFError)
+
+
+def _members(zf: zipfile.ZipFile, prefix: str, depth: int, out: List[Tuple[str, str]],
+             problems: List[Tuple[str, str]]) -> None:
+    infos = zf.infolist()
+    if len(infos) > MAX_MEMBERS:
+        problems.append((prefix[:-len(ARCHIVE_SEP)] if prefix else "",
+                         "archive has %d members; only the first %d were read"
+                         % (len(infos), MAX_MEMBERS)))
+    for info in infos[:MAX_MEMBERS]:
+        if info.is_dir():
             continue
         name = info.filename.replace("\\", "/").lstrip("/")
+        nested = name.lower().endswith(".sar") and depth == 0
+        if not nested and not _TEXT_MEMBERS.search(name):
+            continue
+        if info.file_size > MAX_MEMBER_BYTES:
+            problems.append((prefix + name, "archive member larger than %d MB (%d bytes)"
+                             % (MAX_MEMBER_BYTES // (1024 * 1024), info.file_size)))
+            continue
         try:
-            if name.lower().endswith(".sar") and depth == 0:
+            if nested:
                 with zipfile.ZipFile(io.BytesIO(zf.read(info))) as inner:
-                    _members(inner, prefix + name + ARCHIVE_SEP, depth + 1, out)
-            elif _TEXT_MEMBERS.search(name):
+                    _members(inner, prefix + name + ARCHIVE_SEP, depth + 1, out, problems)
+            else:
                 text = _decode(zf.read(info)).replace("\r\n", "\n").replace("\r", "\n")
                 out.append((prefix + name, text))
-        except (zipfile.BadZipFile, OSError, RuntimeError, ValueError, NotImplementedError):
-            continue
+        except _ZIP_ERRORS as e:
+            problems.append((prefix + name, "unreadable archive member: %s" % e))
 
 
-def read_archive(path: Path) -> List[Tuple[str, str]]:
-    """Text members of a .sar/.aar that hold z/OS Connect facts; [] if not a readable zip."""
+def read_archive(path: Path) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Text members of a .sar/.aar that hold z/OS Connect facts, and the problems met:
+    ([(member, text)], [(member or "" for the whole archive, reason)])."""
     out: List[Tuple[str, str]] = []
+    problems: List[Tuple[str, str]] = []
     try:
         with zipfile.ZipFile(str(path)) as zf:
-            _members(zf, "", 0, out)
-    except (zipfile.BadZipFile, OSError, RuntimeError, ValueError, NotImplementedError):
-        return []
-    return out
+            _members(zf, "", 0, out, problems)
+    except _ZIP_ERRORS as e:
+        return [], [("", "unreadable archive: %s" % e)]
+    return out, problems
 
 
 # ------------------------------------------------------------------ small parsers
@@ -170,6 +189,27 @@ def _project_prefix(rel: str, marker: str) -> Optional[str]:
     return "" if rel.startswith(marker + "/") else None
 
 
+_OAS3_DOCS = ("openapi.yaml", "openapi.yml", "openapi.json", "swagger.json")
+
+
+def _servers_url(text: str) -> Optional[str]:
+    """First ``servers[].url`` of an OpenAPI document (YAML or JSON)."""
+    m = re.search(r'"servers"\s*:\s*\[\s*\{[^}]*?"url"\s*:\s*"([^"]*)"', text)
+    if m:
+        return m.group(1).strip() or None
+    lines = text.split("\n")
+    for i, raw in enumerate(lines):
+        if re.match(r"^servers\s*:", raw):
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and not nxt[:1].isspace() and not nxt.startswith("-"):
+                    break  # next top-level key
+                u = re.match(r"^\s*-?\s*url\s*:\s*(.+)$", nxt)
+                if u:
+                    return _yaml_scalar(u.group(1)) or None
+            break
+    return None
+
+
 # ------------------------------------------------------------------ pass 1
 
 
@@ -181,10 +221,16 @@ def _add_service(ctx: ScanContext, name: str, repo: str, program: Optional[str],
 def collect_zosconnect(repo: str, rel: str, text: str, ftype: Optional[str],
                        ctx: ScanContext) -> None:
     """Pass 1: services (name -> program) and OpenAPI 3 z/OS Assets, estate-wide."""
-    if ftype != "zosconnect":
-        return
     base = rel.rsplit("/", 1)[-1]
     low = base.lower()
+    if low in _OAS3_DOCS:
+        prefix = _project_prefix(rel, "api")
+        url = _servers_url(text) if prefix is not None else None
+        if url:
+            ctx.zc_servers[(repo, prefix)] = url
+        return
+    if ftype != "zosconnect":
+        return
     if low == "manifest.yml":
         name = _yaml_key(text, "name", "")
         provider = (_yaml_key(text, "provider", "") or ("", 0))[0]
@@ -229,9 +275,20 @@ def _attrs(s: str) -> Dict[str, str]:
 def _runs_ref(src: str, ev: Evidence, label: str,
               found: List[Tuple[str, Optional[str], Evidence, str]],
               repo: str, attrs: Dict[str, str]) -> Optional[Ref]:
-    """Ref from an API operation to the program behind a service or asset (or why unknown)."""
+    """Ref from an API operation to the program behind a service or asset (or why unknown).
+
+    The nearest definitions win: the API's own archive (for an API inside an .aar), then
+    unpacked files in the same repo, then anything in the same repo, then the estate.
+    """
+    container = ev.path.split(ARCHIVE_SEP, 1)[0] + ARCHIVE_SEP if ARCHIVE_SEP in ev.path else None
     local = [f for f in found if f[0] == repo]
-    use = local or found
+    tiers = [
+        [f for f in local if container and f[2].path.startswith(container)],
+        [f for f in local if ARCHIVE_SEP not in f[2].path],
+        local,
+        found,
+    ]
+    use = next((t for t in tiers if t), [])
     if not use:
         return Ref(src, "runs", "program", None, ev,
                    "z/OS Connect %s is not in these repos" % label, [], dict(attrs))
@@ -304,6 +361,9 @@ def _scan_operation(repo: str, rel: str, text: str,
     found = ctx.zc_assets.get((repo, prefix, asset[0])) if asset and asset[0] else None
     if found:
         attrs["provider"] = found[2] or None
+    base_url = ctx.zc_servers.get((repo, prefix))
+    if base_url:
+        attrs["base_url"] = base_url  # servers[].url: kept, not part of the id (unconfirmed)
     nodes = [Node(nid, "zosapi", "%s %s" % (method, path), repo, [ev], attrs)]
     if not asset or not asset[0]:
         return nodes, [Ref(nid, "runs", "program", None, ev,
@@ -311,6 +371,52 @@ def _scan_operation(repo: str, rel: str, text: str,
     cand = [(repo, found[0], found[1], found[2])] if found else []
     r = _runs_ref(nid, ev, "z/OS Asset %s" % asset[0], cand, repo, {"zasset": asset[0]})
     return nodes, [r] if r else []
+
+
+def merge_built_copies(nodes: Dict[str, Node], refs: List[Ref]) -> List[Ref]:
+    """One definition per API operation when a repo holds both the project and its build.
+
+    Within one repo, a ``zosapi`` operation defined in an unpacked project and again in an
+    archive (``!/`` path) with the same program keeps the unpacked file as its evidence and
+    ``runs`` Ref; the archive copies go to ``attrs["also_built_as"]``. Different programs
+    are a real ambiguity and are all kept.
+    """
+    def key(r: Ref) -> Tuple[str, Optional[str], Tuple[str, ...], Optional[str]]:
+        return (r.evidence.repo, r.target_name, tuple(r.candidates), r.reason)
+
+    by_src: Dict[str, List[Ref]] = {}
+    for r in refs:
+        if r.src.startswith("zosapi:"):
+            by_src.setdefault(r.src, []).append(r)
+    drop = set()
+    for nid, node in nodes.items():
+        if node.kind != "zosapi" or len(node.evidence) < 2:
+            continue
+        mine = by_src.get(nid, [])
+        built: List[str] = []
+        dropped_paths = set()
+        for r in mine:
+            if ARCHIVE_SEP not in r.evidence.path:
+                continue
+            if any(key(o) == key(r) and ARCHIVE_SEP not in o.evidence.path for o in mine):
+                drop.add(id(r))
+                dropped_paths.add((r.evidence.repo, r.evidence.path))
+        with_ref = {(r.evidence.repo, r.evidence.path) for r in mine}
+        unpacked_no_ref = {e.repo for e in node.evidence
+                           if ARCHIVE_SEP not in e.path and (e.repo, e.path) not in with_ref}
+        keep = []
+        for e in node.evidence:
+            k = (e.repo, e.path)
+            if ARCHIVE_SEP in e.path and (k in dropped_paths or (
+                    k not in with_ref and e.repo in unpacked_no_ref)):
+                if e.path not in built:
+                    built.append(e.path)
+                continue
+            keep.append(e)
+        if built:
+            node.evidence = keep
+            node.attrs["also_built_as"] = built
+    return [r for r in refs if id(r) not in drop]
 
 
 def scan_zosconnect(repo: str, relpath: str, text: str,

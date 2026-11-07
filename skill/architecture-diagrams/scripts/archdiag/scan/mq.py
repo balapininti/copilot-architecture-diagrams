@@ -23,12 +23,16 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
+from ..textio import drop_sequence_area
 from . import ScanContext
 
 _OBJ = {"QLOCAL": "local", "QL": "local", "QALIAS": "alias", "QA": "alias",
         "QREMOTE": "remote", "QR": "remote", "PROCESS": "process", "PRO": "process"}
-_CKBR = re.compile(r"\bCKBR\b(.{0,400}?)\bQ\s*=\s*([A-Za-z0-9._/%#$@]+)", re.I | re.S)
 _CKBR_APPLICID = "CKBR"
+DEFAULT_BRIDGE_QUEUE = "SYSTEM.CICS.BRIDGE.QUEUE"  # CKBR's queue when its start has no Q=
+_CKBR_START = re.compile(r"\bSTART\b.*?\bTRANS(?:ID)?\s*\(\s*['\"]?CKBR['\"]?\s*\)", re.I | re.S)
+_CKBR_Q = re.compile(r"\bQ\s*=\s*([A-Za-z0-9._/%#$@]+)", re.I)
+_CKBR_FROM = re.compile(r"\bFROM\s*\(\s*(['\"])?", re.I)
 
 
 def _commands(text: str) -> List[Tuple[int, str]]:
@@ -36,7 +40,10 @@ def _commands(text: str) -> List[Tuple[int, str]]:
     out: List[Tuple[int, str]] = []
     buf, first, cont = "", 0, None
     for no, raw in enumerate(text.split("\n"), 1):
-        line = raw.rstrip()
+        # z/OS MQSC input (CSQINP1/2, CSQUTIL): "Only columns 1 through 72 can contain
+        # meaningful information; columns 73 through 80 are ignored."
+        # https://publibfp.boulder.ibm.com/epubs/html/csqzaj06/csqzaj060f.htm
+        line = drop_sequence_area(raw).rstrip()
         if cont is None:
             if not line.strip() or line.lstrip()[:1] == "*":
                 continue
@@ -49,7 +56,9 @@ def _commands(text: str) -> List[Tuple[int, str]]:
         else:
             cont = None
             seg = line
-        buf += seg + " "
+        # '-' continues from column 1 of the next line, '+' from its first non-blank;
+        # neither inserts a blank, so a name may be split mid-token
+        buf += seg
         if cont is None:
             out.append((first, buf))
             buf = ""
@@ -116,8 +125,45 @@ def collect_mq(repo: str, rel: str, text: str, ftype: Optional[str],
                 if (_value(kws, "APPLICID") or "").upper() == _CKBR_APPLICID and kws[1][1]:
                     ctx.ckbr_processes.add(kws[1][1])
         return
-    for m in _CKBR.finditer(text):
-        ctx.ckbr_queues.add(m.group(2).upper())
+    for stmt in _ckbr_statements(text, ftype):
+        if not _CKBR_START.search(stmt):
+            continue
+        q = _CKBR_Q.search(stmt)
+        if q:
+            ctx.ckbr_queues.add(q.group(1).upper())
+            continue
+        f = _CKBR_FROM.search(stmt)
+        if f is None or f.group(1):  # no FROM, or a literal FROM without Q=
+            ctx.ckbr_queues.add(DEFAULT_BRIDGE_QUEUE)
+        # FROM(variable): the parameters are set at run time, so nothing is known
+
+
+def _ckbr_statements(text: str, ftype: Optional[str]) -> List[str]:
+    """The statements that mention CKBR: an EXEC CICS ... END-EXEC block, else the line."""
+    lines = text.split("\n")
+    cobol = ftype in ("cobol", "copybook")
+    out: List[str] = []
+    for i, raw in enumerate(lines):
+        if "CKBR" not in raw.upper():
+            continue
+        if cobol and len(raw) > 6 and raw[6] in "*/":
+            continue
+        start = end = i
+        for j in range(i, max(-1, i - 30), -1):
+            up = lines[j].upper()
+            if j < i and "END-EXEC" in up:
+                break
+            if re.search(r"\bEXEC\s+CICS\b", up):
+                start = j
+                break
+        if start != i or "EXEC" in raw.upper():
+            for j in range(i, min(len(lines), i + 30)):
+                if "END-EXEC" in lines[j].upper():
+                    end = j
+                    break
+        stmt = " ".join(lines[start:end + 1])
+        out.append(stmt)
+    return out
 
 
 def scan_mqsc(repo: str, relpath: str, text: str,
@@ -149,6 +195,8 @@ def scan_mqsc(repo: str, relpath: str, text: str,
             "initq": initq,
             "trigger": "TRIGGER" in keys and "NOTRIGGER" not in keys,
         }
+        if kind == "alias":
+            attrs["targtype"] = (_value(kws, "TARGTYPE") or "QUEUE").upper()
         if kind == "remote":
             attrs["rqmname"] = _value(kws, "RQMNAME")
             attrs["xmitq"] = _value(kws, "XMITQ")

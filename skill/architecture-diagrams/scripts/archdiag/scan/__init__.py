@@ -27,15 +27,19 @@ class ScanContext:
     # z/OS Connect OpenAPI 3: (repo, project prefix, asset name) -> (program or None, evidence, type)
     zc_assets: Dict[Tuple[str, str, str], Tuple[Optional[str], Evidence, str]] = field(
         default_factory=dict)
+    # z/OS Connect OpenAPI 3: (repo, project prefix) -> first servers[].url of openapi.yaml/json
+    zc_servers: Dict[Tuple[str, str], str] = field(default_factory=dict)
 
 
 # file type -> scanner(repo, relpath, text, ctx) -> (nodes, refs); registered by later tasks
 SCANNERS: Dict[str, Callable[[str, str, str, ScanContext], Tuple[List[Node], List[Ref]]]] = {}
 
-# Binary archives (z/OS Connect .sar/.aar): extension -> reader(path) -> [(member, text)].
+# Binary archives (z/OS Connect .sar/.aar): extension -> reader(path) -> (members, problems),
+# members = [(member, text)], problems = [(member or "" for the whole archive, reason)].
 # Text scanners keep the (repo, relpath, text, ctx) signature: every text member of an
 # archive is classified and scanned as its own file, with relpath "<archive>!/<member>".
-ARCHIVE_READERS: Dict[str, Callable[[Path], List[Tuple[str, str]]]] = {}
+ARCHIVE_READERS: Dict[str, Callable[[Path], Tuple[List[Tuple[str, str]],
+                                                  List[Tuple[str, str]]]]] = {}
 ARCHIVE_SEP = "!/"
 
 NOT_ANALYZED = ("asm", "pli", "easytrieve", "rexx")
@@ -75,22 +79,36 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     nodes: Dict[str, Node] = {}
     refs: List[Ref] = []
     not_analyzed: Dict[str, int] = {}
+    skipped: List[Dict[str, str]] = []
     # pass 1: read everything, classify, and collect procs / include members
     files: List[Tuple[str, str, str, str]] = []
     for repo in repos:
         root = workspace / repo.path
-        for path in iter_source_files(root, config.exclude_dirs):
+        too_big: List[Tuple[Path, str]] = []
+        for path in iter_source_files(root, config.exclude_dirs, too_big):
             rel = path.relative_to(root).as_posix()
             reader = ARCHIVE_READERS.get(path.suffix.lower())
             if reader is not None:
-                members = [(rel + ARCHIVE_SEP + m, t, classify(m, t)) for m, t in reader(path)]
+                got, problems = reader(path)
+                for member, reason in problems:
+                    skipped.append({"repo": repo.name, "reason": reason,
+                                    "path": rel + (ARCHIVE_SEP + member if member else "")})
+                members = [(rel + ARCHIVE_SEP + m, t, classify(m, t)) for m, t in got]
             else:
-                text = read_source(path)
+                try:
+                    text = read_source(path)
+                except (OSError, ValueError) as e:
+                    skipped.append({"repo": repo.name, "path": rel,
+                                    "reason": "cannot read file: %s" % e})
+                    continue
                 members = [(rel, text, classify(rel, text))]
             for mrel, text, ftype in members:
                 _collect_pass(repo.name, mrel, text, ftype, ctx)
                 if ftype is not None:
                     files.append((repo.name, mrel, text, ftype))
+        for path, reason in too_big:
+            skipped.append({"repo": repo.name, "path": path.relative_to(root).as_posix(),
+                            "reason": reason})
     # pass 2: scan with the whole estate's procs known
     for repo_name, rel, text, ftype in files:
         if ftype in NOT_ANALYZED:
@@ -108,8 +126,10 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                 if ev not in have.evidence:
                     have.evidence.append(ev)
         refs.extend(new_refs)
+    from . import zosconnect
+    refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
-                     fingerprint(workspace, repos, config), not_analyzed)
+                     fingerprint(workspace, repos, config), not_analyzed, skipped)
 
 
 _register_builtin_scanners()

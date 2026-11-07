@@ -15,6 +15,7 @@ import re
 from typing import List, Optional, Tuple
 
 from ..model import Evidence, Node, Ref
+from ..textio import drop_sequence_area
 from . import ScanContext
 
 _VERBS = frozenset(
@@ -23,33 +24,60 @@ _VERBS = frozenset(
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 
 
-def _statements(lines: List[str]) -> List[List[Tuple[int, str]]]:
-    """Group the lines of a DFHCSDUP input into commands of (line number, text)."""
-    stmts: List[List[Tuple[int, str]]] = []
+def _abbr(word: str, full: str, minimum: int) -> bool:
+    """DFHCSDUP keyword abbreviation: at least ``minimum`` leading letters of ``full``."""
+    return len(word) >= minimum and full.startswith(word)
+
+
+def _is_verb(word: str) -> bool:
+    return word in _VERBS or _abbr(word, "DEFINE", 3)
+
+
+Stmt = List[Tuple[int, str, str]]  # (line number, text, glue to the next line)
+
+
+def _statements(lines: List[str]) -> List[Stmt]:
+    """Group the lines of a DFHCSDUP input into commands.
+
+    IBM: "Enter the commands in columns 1 through 71 of 80-character input records",
+    an asterisk in column 72 continues a value and "Subsequent lines start in column 1",
+    "Comment records ... must have an asterisk (*) in column 1".
+    https://www.ibm.com/docs/en/SSJL4D_6.x/reference-system-management/resources/syntax.html
+    IBM's own sample CSDs put text in column 72, so only a column-72 ``*`` and a sequence
+    number in columns 73-80 are treated specially.
+    """
+    stmts: List[Stmt] = []
+    glue = " "
     for no, raw in enumerate(lines, 1):
-        if raw[:1] == "*" or not raw.strip():
+        line = drop_sequence_area(raw)
+        if glue == " " and (line[:1] == "*" or not line.strip()):
             continue
-        body = raw.rstrip()
-        m = _WORD.match(body.lstrip())
-        rest = body.lstrip()[m.end():] if m else ""
-        if m and m.group(0).upper() in _VERBS and not rest.lstrip().startswith("("):
-            stmts.append([])
+        body = line.rstrip()
+        if glue == " ":  # a value continued from column 72 never starts a command
+            m = _WORD.match(body.lstrip())
+            rest = body.lstrip()[m.end():] if m else ""
+            if m and _is_verb(m.group(0).upper()) and not rest.lstrip().startswith("("):
+                stmts.append([])
+        glue = " "
+        if len(body) >= 72 and body[71] == "*":
+            body, glue = body[:71], ""
         if stmts:
-            stmts[-1].append((no, body))
+            stmts[-1].append((no, body, glue))
     return stmts
 
 
-def _keywords(stmt: List[Tuple[int, str]]) -> List[Tuple[str, str, int]]:
+def _keywords(stmt: Stmt) -> List[Tuple[str, str, int]]:
     """KEYWORD(value) pairs of one command, with the line each starts on.
 
-    Values can hold balanced parentheses (DESCRIPTION(Claim (online))) and quotes.
+    Values can hold balanced parentheses (DESCRIPTION(Claim (online))) and quotes; blanks
+    between a keyword and its ``(`` are allowed.
     """
     out: List[Tuple[str, str, int]] = []
     text = ""
     starts: List[Tuple[int, int]] = []  # (offset, line)
-    for no, body in stmt:
+    for no, body, glue in stmt:
         starts.append((len(text), no))
-        text += body + " "
+        text += body + glue
 
     def line_at(off: int) -> int:
         ln = starts[0][1]
@@ -65,6 +93,8 @@ def _keywords(stmt: List[Tuple[int, str]]) -> List[Tuple[str, str, int]]:
             i += 1
             continue
         j = m.end()
+        while j < n and text[j] == " ":
+            j += 1
         if j < n and text[j] == "(":
             depth, k, quote = 0, j, None
             while k < n:
@@ -85,7 +115,7 @@ def _keywords(stmt: List[Tuple[int, str]]) -> List[Tuple[str, str, int]]:
             i = k + 1
         else:
             out.append((m.group(0).upper(), "", line_at(m.start())))
-            i = j
+            i = m.end()
     return out
 
 
@@ -96,9 +126,10 @@ def _name(v: str) -> str:
     return v.strip().upper()
 
 
-def _kw(kws: List[Tuple[str, str, int]], *names: str) -> Optional[Tuple[str, int]]:
+def _kw(kws: List[Tuple[str, str, int]], full: str,
+        minimum: int) -> Optional[Tuple[str, int]]:
     for k, v, ln in kws[1:]:  # kws[0] is the command verb
-        if k in names and v:
+        if _abbr(k, full, minimum) and v:
             return _name(v), ln
     return None
 
@@ -114,24 +145,23 @@ def scan_csd(repo: str, relpath: str, text: str,
 
     for stmt in _statements(lines):
         kws = _keywords(stmt)
-        if len(kws) < 2 or kws[0][0] not in ("DEFINE", "DEF"):
+        if len(kws) < 2 or not _abbr(kws[0][0], "DEFINE", 3):
             continue
         kind, value, line = kws[1]
         value = _name(value)
         if not value:
             continue
-        if kind in ("TRANSACTION", "TRANSACTIO", "TRANSACTI", "TRANSACT", "TRANSAC",
-                    "TRANSA", "TRANS"):
+        if _abbr(kind, "TRANSACTION", 5):
             tid = "transaction:" + value
-            group = _kw(kws, "GROUP")
+            group = _kw(kws, "GROUP", 5)
             nodes.append(Node(tid, "transaction", value, repo, [ev(line)],
                               {"group": group[0] if group else None}))
-            prog = _kw(kws, "PROGRAM", "PROGRA", "PROGR", "PROG")
+            prog = _kw(kws, "PROGRAM", 4)
             if prog:
                 refs.append(Ref(tid, "runs", "program", prog[0], ev(prog[1])))
         elif kind == "FILE":
             fid = "cicsfile:" + value
-            dsn = _kw(kws, "DSNAME", "DSNAM", "DSNA", "DSN")
+            dsn = _kw(kws, "DSNAME", 3)
             nodes.append(Node(fid, "cicsfile", value, repo, [ev(line)],
                               {"dsname": dsn[0] if dsn else None}))
             if dsn:

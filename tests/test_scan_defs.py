@@ -332,3 +332,141 @@ def test_not_analyzed_names():
     assert [(n.id, n.attrs["language"]) for n in nodes] == [("notanalyzed:TOOL", "rexx")]
     nodes, _ = register_other("r", "asm/MYMAC.mac", "         MACRO\n", ScanContext())
     assert nodes == []  # an assembler macro is not a callable program
+
+
+# ---------------------------------------------------------------- fix round 1
+
+
+def test_mq_continuation_splits_mid_token():
+    by = _mq("DEFINE QLOCAL(CLM.REQ.+\n      LQ) PROCESS(P.+\n   ONE)\n"
+             "DEFINE QLOCAL(ABC.-\nDEF) DESCR('two -\n words')\n")
+    assert set(by) == {"queue:CLM.REQ.LQ", "queue:ABC.DEF"}
+    assert by["queue:CLM.REQ.LQ"].attrs["process"] == "P.ONE"
+
+
+def test_mq_sequence_area_ignored():
+    line = "DEFINE QLOCAL(CLM.SEQ) PROCESS(CLM.PROC)".ljust(72) + "00010000"
+    long_line = "DEFINE QLOCAL(A.VERY.LONG.DISTRIBUTED.QUEUE.NAME.THAT.GOES.PAST.COLUMN.SEVENTY.TWO)"
+    by = _mq(line + "\n" + long_line + "\n")
+    assert by["queue:CLM.SEQ"].attrs["process"] == "CLM.PROC"
+    assert "queue:A.VERY.LONG.DISTRIBUTED.QUEUE.NAME.THAT.GOES.PAST.COLUMN.SEVENTY.TWO" in by
+
+
+def test_mq_alias_targtype():
+    by = _mq("DEFINE QALIAS(A1) TARGET(T1)\nDEFINE QALIAS(A2) TARGET(TOPIC1) TARGTYPE(TOPIC)\n")
+    assert by["queue:A1"].attrs["targtype"] == "QUEUE"
+    assert by["queue:A2"].attrs["targtype"] == "TOPIC"
+
+
+def test_ckbr_scoped_to_one_statement_and_default_queue():
+    cob = ("       PROCEDURE DIVISION.\n"
+           "           EXEC CICS START TRANSID('CKBR') END-EXEC.\n"
+           "           MOVE 'Q=NOT.BRIDGE' TO WS-X.\n"
+           "      *    EXEC CICS START TRANSID('CKBR') FROM('Q=COMMENTED') END-EXEC.\n"
+           "           EXEC CICS START TRANSID('CKBR') FROM(WS-PARMS) END-EXEC.\n")
+    by = _mq("DEFINE QLOCAL(SYSTEM.CICS.BRIDGE.QUEUE)\nDEFINE QLOCAL(NOT.BRIDGE)\n"
+             "DEFINE QLOCAL(COMMENTED)\n", [("cobol/S.cbl", cob)])
+    assert by["queue:SYSTEM.CICS.BRIDGE.QUEUE"].attrs["bridge"] is True
+    assert by["queue:NOT.BRIDGE"].attrs["bridge"] is False
+    assert by["queue:COMMENTED"].attrs["bridge"] is False
+
+
+def test_ddl_special_registers_do_not_set_schema():
+    text = ("SET CURRENT SQLID = 'PAY';\n"
+            "SET CURRENT SQLID = USER;\n"
+            "CREATE TABLE T1 (A INT);\n"
+            "SET SCHEMA = 'OPS';\n"
+            "SET CURRENT SCHEMA = CURRENT SQLID;\n"
+            "CREATE TABLE T2 (A INT);\n"
+            "SET SCHEMA = 'OPS';\n"
+            "SET SCHEMA = :HVSCHEMA;\n"
+            "CREATE TABLE T3 (A INT);\n")
+    nodes, _ = scan_ddl("r", "x.sql", text, ScanContext())
+    assert sorted(n.id for n in nodes) == ["table:T1", "table:T2", "table:T3"]
+
+
+def test_ddl_three_part_names():
+    nodes, _ = scan_ddl("r", "x.sql", "CREATE ALIAS LOC1.CLMS.RCLM FOR LOC2.CLMS.CLAIM;\n"
+                                      "CREATE TABLE LOC1.CLMS.T (A INT);\n", ScanContext())
+    by = {n.id: n for n in nodes}
+    assert set(by) == {"table:CLMS.RCLM", "table:CLMS.T"}
+    assert by["table:CLMS.RCLM"].attrs["alias_of"] == "CLMS.CLAIM"
+
+
+def test_csd_blanks_continuation_and_sequence_area():
+    head, tail = "DEFINE TRANSACTION (CLX1) GROUP (G)", "PROGRAM (CLMO"
+    l1 = head + " " * (71 - len(head) - len(tail)) + tail + "*"  # value runs to column 71
+    assert len(l1) == 72
+    text = (l1 + "\n100) DESCRIPTION(x)\n"
+            + "DEFINE FILE(F2) DSNAME(PROD.F2)".ljust(72) + "00020000\n"
+            + "DEFI TRANSAC(CLX2) PROG(CLMO200)\n")
+    nodes, refs = scan_csd("r", "x.csd", text, ScanContext())
+    got = {(r.src, r.target_name) for r in refs}
+    assert got == {("transaction:CLX1", "CLMO100"), ("cicsfile:F2", "PROD.F2"),
+                   ("transaction:CLX2", "CLMO200")}
+
+
+def test_zosconnect_project_and_its_build_in_one_repo(tmp_path):
+    repo = mark(tmp_path, "zc")
+    (repo / "zosconnect" / "apis" / "acct").mkdir(parents=True)
+    (repo / "zosconnect" / "apis" / "acct" / "package.xml").write_text(PKG)
+    (repo / "zosconnect" / "services").mkdir()
+    (repo / "zosconnect" / "services" / "e.properties").write_text(
+        "name=CSaccenq\nprovider=cics\nprogram=INQACC\n")
+    (repo / "zosconnect" / "services" / "d.properties").write_text(
+        "name=CSaccdel\nprovider=cics\nprogram=DELACC\n")
+    (repo / "deploy").mkdir()
+    (repo / "deploy" / "acct.aar").write_bytes(_zip([
+        ("package.xml", PKG),
+        ("services/CSaccenq/manifest.yml", MANIFEST % ("CSaccenq", "INQACC")),
+        ("services/CSaccdel/manifest.yml", MANIFEST % ("CSaccdel", "DELOLD"))]))
+    inv = scan_workspace(tmp_path, Config())
+    nid = "zosapi:GET /acct/enquiry/{}"
+    n = inv.nodes[nid]
+    assert [e.path for e in n.evidence] == ["zosconnect/apis/acct/package.xml"]
+    assert n.attrs["also_built_as"] == ["deploy/acct.aar!/package.xml"]
+    r = one_ref(inv, nid, "runs")
+    assert r.evidence.path == "zosconnect/apis/acct/package.xml" and r.target_name == "INQACC"
+    # DELETE: the aar's own service maps to another program -> real ambiguity, both kept
+    d = refs_from(inv, "zosapi:DELETE /acct/enquiry/{}")
+    assert len(d) == 2 and len(inv.nodes["zosapi:DELETE /acct/enquiry/{}"].evidence) == 2
+
+
+def test_skipped_files_recorded_and_round_trip(tmp_path, monkeypatch):
+    from archdiag import repos
+    from archdiag.store import load_inventory, save_json
+    repo = mark(tmp_path, "r")
+    (repo / "bad.aar").write_bytes(b"not a zip")
+    (repo / "big.cbl").write_text("x" * 200)
+    (repo / "ok.cbl").write_text("       PROGRAM-ID. OK.\n")
+    monkeypatch.setattr(repos, "MAX_BYTES", 100)
+    inv = scan_workspace(tmp_path, Config())
+    by = {s["path"]: s for s in inv.skipped}
+    assert set(by) == {"bad.aar", "big.cbl"}
+    assert by["bad.aar"]["repo"] == "r" and "unreadable archive" in by["bad.aar"]["reason"]
+    assert "larger than" in by["big.cbl"]["reason"]
+    save_json(tmp_path / "inv.json", inv)
+    assert load_inventory(tmp_path / "inv.json").skipped == inv.skipped
+
+
+def test_oversized_archive_member_recorded(tmp_path, monkeypatch):
+    from archdiag.scan import zosconnect
+    repo = mark(tmp_path, "r")
+    (repo / "a.aar").write_bytes(_zip([("package.xml", PKG),
+                                       ("services/x/manifest.yml", "y" * 5000)]))
+    monkeypatch.setattr(zosconnect, "MAX_MEMBER_BYTES", 2000)
+    inv = scan_workspace(tmp_path, Config())
+    assert [s["path"] for s in inv.skipped] == ["a.aar!/services/x/manifest.yml"]
+
+
+def test_oas3_base_url_kept_out_of_id(tmp_path):
+    repo = mark(tmp_path, "o")
+    main = repo / "src" / "main"
+    (main / "api").mkdir(parents=True)
+    (main / "api" / "openapi.yaml").write_text(
+        "openapi: 3.0.0\nservers:\n  - url: https://zos.example.com/claimsapi\npaths: {}\n")
+    op = main / "operations" / "%2Fclaims" / "get"
+    op.mkdir(parents=True)
+    (op / "operation.yaml").write_text('zasset: "a"\n')
+    inv = scan_workspace(tmp_path, Config())
+    assert inv.nodes["zosapi:GET /claims"].attrs["base_url"] == "https://zos.example.com/claimsapi"

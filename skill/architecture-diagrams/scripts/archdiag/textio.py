@@ -97,3 +97,18 @@ def classify(relpath: str, text: str) -> Optional[str]:
         if _REXX.match(line):
             return "rexx"
     return None
+
+
+_SEQ = re.compile(r"\s*[A-Za-z0-9]+\s*")
+
+
+def drop_sequence_area(line: str) -> str:
+    """Cut columns 73-80 when they hold a sequence number (80-byte z/OS records).
+
+    Only cut when the line fits an 80-byte record, column 72 is blank or a continuation
+    mark (+ - *), and columns 73-80 hold one alphanumeric word, so a long free-form line
+    from a distributed platform keeps its text.
+    """
+    if 72 < len(line) <= 80 and line[71] in " +-*" and _SEQ.fullmatch(line[72:]):
+        return line[:72]
+    return line

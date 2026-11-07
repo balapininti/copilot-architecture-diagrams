@@ -66,6 +66,7 @@ def _inventory(d: dict) -> Inventory:
         [_ref(r) for r in d.get("refs", [])],
         d.get("fingerprint", ""),
         dict(d.get("languages_not_analyzed", {})),
+        [dict(x) for x in d.get("skipped", [])],
     )
 
 

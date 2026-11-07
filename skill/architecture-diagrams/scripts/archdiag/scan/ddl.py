@@ -56,7 +56,10 @@ _CREATE = re.compile(
     r"(TABLE|VIEW|ALIAS|SYNONYM)\s+" + _QNAME + r"(?:\s+FOR\s+(?:TABLE\s+)?" + _QNAME + ")?",
     re.I)
 _SET_SCHEMA = re.compile(
-    r"\bSET\s+(?:CURRENT\s+)?(?:SCHEMA|SQLID)\s*=?\s*(?:'([^']+)'|(" + _PART + "))", re.I)
+    r"\bSET\s+(?:CURRENT\s+)?(?:SCHEMA|SQLID)\s*=?\s*(?:'([^']*)'|(" + _PART + r")|(?=\S))",
+    re.I)
+_REGISTERS = frozenset("USER CURRENT SESSION_USER SYSTEM_USER CURRENT_USER CURRENT_SCHEMA "
+                       "CURRENT_SQLID NULL DEFAULT".split())
 
 
 def _parts(qname: str) -> List[str]:
@@ -77,13 +80,20 @@ def scan_ddl(repo: str, relpath: str, text: str,
     for m in _SET_SCHEMA.finditer(text):
         if masked[m.start()] == " ":
             continue
-        val = m.group(1).strip().upper() if m.group(1) else _parts(m.group(2))[0]
+        if m.group(1) is not None:
+            val: Optional[str] = m.group(1).strip().upper() or None
+        elif m.group(2) is not None:
+            word = _parts(m.group(2))[0]
+            # special registers (USER, CURRENT SQLID ...) are run-time values: schema unknown
+            val = None if word.upper() in _REGISTERS else word
+        else:
+            val = None  # host variable (:hv) or anything else: schema unknown from here on
         sets.append((m.start(), val))
 
     def schema_at(off: int) -> Optional[str]:
         cur = None
         for o, s in sets:
-            if o < off and s:
+            if o < off:
                 cur = s
         return cur
 
@@ -92,14 +102,14 @@ def scan_ddl(repo: str, relpath: str, text: str,
         parts = _parts(m.group(2))
         if kind in ("ALIAS", "SYNONYM") and not m.group(3):
             continue
-        name = parts[-1]
+        name = parts[-1]  # LOCATION.SCHEMA.NAME: the location is dropped
         schema = parts[-2] if len(parts) >= 2 else schema_at(m.start())
         line = masked.count("\n", 0, m.start()) + 1
         full = schema + "." + name if schema else name
         attrs = {"schema": schema, "name": name,
                  "type": {"TABLE": "table", "VIEW": "view"}.get(kind, "alias")}
         if kind in ("ALIAS", "SYNONYM"):
-            attrs["alias_of"] = ".".join(_parts(m.group(3)))
+            attrs["alias_of"] = ".".join(_parts(m.group(3))[-2:])
         nodes.append(Node("table:" + full, "table", full, repo,
                           [Evidence(repo, relpath, line, lines[line - 1].strip())], attrs))
     return nodes, []
