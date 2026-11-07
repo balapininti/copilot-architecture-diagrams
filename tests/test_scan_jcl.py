@@ -587,3 +587,22 @@ def test_empty_exec_override_with_no_outer_set_is_unresolved(tmp_path):
     i = scan_text(tmp_path, text, extra={"P1.proc": _ENV_PROC})
     r = one_ref(i, "r/J1.jcl#RUN", "read")
     assert r.target_name == "&ENV..DS" and r.reason == "symbol &ENV has no value in these repos"
+
+
+@pytest.mark.parametrize("ftype", ["java", "angular_ts", "cobol", "copybook", "yaml", "ddl"])
+def test_collect_procs_ignores_files_that_are_not_jcl(ftype):
+    # A12: only jcl / proc / untyped files are parsed for PROC definitions and calls
+    from archdiag.scan import ScanContext
+    from archdiag.scan.jcl import collect_procs
+    ctx = ScanContext()
+    collect_procs("r", "src/MYPROC.x", "//MYPROC PROC\n//S1 EXEC OTHERP\n", ctx, ftype)
+    assert not ctx.proc_defs and not ctx.proc_calls and not ctx.proc_callers
+
+
+@pytest.mark.parametrize("ftype", ["jcl", "proc", None])
+def test_collect_procs_reads_jcl_proc_and_untyped_files(ftype):
+    from archdiag.scan import ScanContext
+    from archdiag.scan.jcl import collect_procs
+    ctx = ScanContext()
+    collect_procs("r", "src/MYPROC", "//MYPROC PROC\n//S1 EXEC OTHERP\n", ctx, ftype)
+    assert "MYPROC" in ctx.proc_defs and ctx.proc_calls == {"OTHERP"}
