@@ -1,4 +1,4 @@
-"""Command line: scan, summary, list, draw, init-config. Never shows a traceback."""
+"""Command line: scan, summary, list, draw, gitdiagram-context, init-config. Never shows a traceback."""
 from __future__ import annotations
 
 import argparse
@@ -21,12 +21,13 @@ from .store import cache_is_current, fingerprint, load_inventory, load_resolved,
 from .summary import _env_pairs, build_summary, count_unanalyzed, list_items
 
 OUT_DIR_NAME = "architecture-diagrams"
-CLI_LEVELS = ("landscape", "application", "flow", "repomap")
-DEFAULT_STYLE = {"landscape": "b", "application": "a", "flow": "a", "repomap": "c"}
+CLI_LEVELS = ("landscape", "application", "flow", "repomap", "gitdiagram")
+DEFAULT_STYLE = {"landscape": "b", "application": "a", "flow": "a", "repomap": "c",
+                 "gitdiagram": "b"}
 STYLES = ("a", "b", "c", "d")
 LISTINGS = ("jobs", "transactions", "pages", "endpoints", "applications", "repos", "programs")
 # what to list for a level, to find a valid scope
-LEVEL_LISTING = {"application": ["applications"], "repomap": ["repos"],
+LEVEL_LISTING = {"application": ["applications"], "repomap": ["repos"], "gitdiagram": ["repos"],
                  "flow": ["jobs", "transactions", "pages", "endpoints"]}
 
 
@@ -72,6 +73,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", default=None, help="application, job, transaction, page, "
                    "endpoint or repo, depending on the level")
     p.add_argument("--style", default=None, help="a, b, c, d or all (default depends on the level)")
+    p = common(sub.add_parser("gitdiagram-context", help="print what is needed to group one "
+                              "repo's files into a gitdiagram"))
+    p.add_argument("--repo", required=True, help="the repo folder name")
     common(sub.add_parser("init-config", help="write archdiag.config.json from the scan"))
     return parser
 
@@ -190,6 +194,26 @@ def _cmd_list(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     return 0
 
 
+def _repo_name(r: Resolved, repo: str) -> Optional[str]:
+    names = [x.name for x in r.inventory.repos]
+    if repo in names:
+        return repo
+    return next((x for x in names if x.lower() == repo.lower()), None)
+
+
+def _cmd_gitdiagram_context(args, workspace: Path, out_dir: Path,
+                            notice: Callable[[str], None]) -> int:
+    from .summary import gitdiagram_context
+    _check_workspace(workspace)
+    r = _load_current(workspace, out_dir, load_config(out_dir, notice), notice)
+    name = _repo_name(r, args.repo)
+    if name is None:
+        raise _Exit(2, _did_you_mean(args.repo, [x.name for x in r.inventory.repos], "repo",
+                                     "list --what repos"))
+    print(gitdiagram_context(r, name))
+    return 0
+
+
 def _cmd_init_config(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     _check_workspace(workspace)
     config = load_config(out_dir, notice)
@@ -253,10 +277,27 @@ def _top_issues(view, r: Resolved) -> List[str]:
     return out
 
 
+def _gitdiagram_lines(view, gd, links: Path) -> None:
+    from .gitdiagram import FALLBACK_NOTE
+    ung = next((n for n in view.nodes if n.role == "ungrouped"), None)
+    n = len(ung.members) if ung is not None else 0
+    if n:
+        print("Not yet grouped: %d file%s (see %s)" % (n, "" if n == 1 else "s", links))
+    problems = [" ".join(p.split()) for p in gd.problems if p != FALLBACK_NOTE]
+    if gd.file_state == "missing":
+        print(FALLBACK_NOTE)
+    elif gd.file_state == "unusable":
+        print("The gitdiagram file couldn't be used (%s); folders were used instead."
+              % (problems[0] if problems else "unknown problem"))
+    for p in problems[:5]:
+        print("Problem in gitdiagram-%s.json: %s" % (gd.repo, p))
+
+
 def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None]) -> int:
     from .render import report, style_a, style_b, style_c, style_d
     from .layout import layout_notes
     from .views import ScopeError, build_view
+    from .gitdiagram import FALLBACK_NOTE
     level = args.level
     if level not in CLI_LEVELS:
         raise _Exit(2, _did_you_mean(level, list(CLI_LEVELS), "level",
@@ -273,8 +314,15 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     view_level = level
     if level == "flow":
         view_level = "flow_job" if scope and _is_job(r, scope) else "flow_tx"
+    gd = None
+    if level == "gitdiagram":
+        from .gitdiagram import load_gitdiagram
+        name = _repo_name(r, scope) if scope else None
+        if name is not None:
+            scope = name
+            gd = load_gitdiagram(out_dir, r, name)
     try:
-        view = build_view(r, g, view_level, scope)
+        view = build_view(r, g, view_level, scope, gitdiagram=gd)
     except ScopeError as e:
         if level == "flow" and scope:  # a job name may be what was meant
             jobs = sorted(set(n.name for n in r.nodes.values() if n.kind == "job"))
@@ -301,12 +349,18 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     links = out_dir / ("%s-links.md" % base)
     _write(links, report.links_report(view, r))
     written.append(links)
+    # the gitdiagram's own notes are said once, by the lines printed below
+    said = set(gd.problems) | {FALLBACK_NOTE} if gd is not None else set()
     for note in view.notes + layout_notes(view):
+        if note in said:
+            continue
         notice("Note: %s" % note)
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:
         st[e.status] = st.get(e.status, 0) + 1
     _warn_unanalyzed(r.inventory, links)
+    if gd is not None:
+        _gitdiagram_lines(view, gd, links)
     print("Wrote:")
     for p in written:
         print("  %s" % p)
@@ -320,7 +374,8 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
 
 
 COMMANDS = {"scan": _cmd_scan, "summary": _cmd_summary, "list": _cmd_list,
-            "draw": _cmd_draw, "init-config": _cmd_init_config}
+            "draw": _cmd_draw, "gitdiagram-context": _cmd_gitdiagram_context,
+            "init-config": _cmd_init_config}
 
 
 def _plain_output() -> None:
@@ -343,19 +398,20 @@ def _log_error(out_dir: Path) -> Optional[Path]:
 
 def main(argv: List[str]) -> int:
     _plain_output()
-    machine = argv[:1] == ["list"]  # list's stdout is read by machines: messages go to stderr
+    machine = argv[:1] in (["list"], ["gitdiagram-context"])  # list's stdout is read by machines: messages go to stderr
     err = sys.stderr if machine else sys.stdout
     try:
         args = _build_parser().parse_args(argv)
         if not args.command:
-            raise _Exit(2, "Choose a command: scan, summary, list, draw, init-config. "
+            raise _Exit(2, "Choose a command: scan, summary, list, draw, gitdiagram-context, "
+                           "init-config. "
                            "Example: python run.py scan --workspace <folder>")
     except _Exit as e:
         print(e.message, file=err)
         return e.code
     except SystemExit as e:  # --help
         return e.code if isinstance(e.code, int) else 0
-    notice = _make_notice(args.command == "list")
+    notice = _make_notice(args.command in ("list", "gitdiagram-context"))
     workspace = Path(os.path.abspath(args.workspace))  # real lengths for the 260-char checks
     out_dir = workspace / OUT_DIR_NAME
     try:
