@@ -30,8 +30,9 @@ def extended_path(path: str, abspath: Callable[[str], str] = os.path.abspath) ->
 
 
 def with_long_path(func: Callable, path) -> object:
-    """``func(path)``; on Windows, when that fails for a path of 260 characters or more, once
-    more with the extended-length form (the original error is raised if that fails too)."""
+    """``func(path)``; on Windows, when that fails with OSError for a path of 260 characters
+    or more, once more with the extended-length form. If that fails too, the error of the
+    second attempt is raised; anywhere else the first error is raised."""
     try:
         return func(path)
     except OSError:
@@ -41,6 +42,13 @@ def with_long_path(func: Callable, path) -> object:
             return func(extended_path(str(path)))
         except OSError as e2:
             raise e2
+
+
+def walk_suffix(dirpath: str, walk_root: str) -> str:
+    """The part of ``dirpath`` below ``walk_root`` (both as os.walk gives them, so both with
+    the same extended prefix), without a leading separator: "" for the root itself."""
+    rest = dirpath[len(walk_root):] if dirpath.startswith(walk_root) else dirpath
+    return rest.lstrip("\\/")
 
 
 REPO_MARKER_FILE = ".archdiag-repo"
@@ -76,19 +84,25 @@ def iter_source_files(root: Path, exclude_dirs: Iterable[str] = (),
         if skipped is not None:
             skipped.append((Path(e.filename or str(root)),
                             "cannot read folder: %s" % (e.strerror or e)))
-    for dirpath, dirnames, filenames in os.walk(str(root), onerror=walk_error):
+    # On Windows walk from the extended form of the root, so folders of 260+ characters can
+    # be listed; yielded paths are rebuilt from ``root`` and never carry the prefix.
+    walk_root = extended_path(str(root)) if os.name == "nt" else str(root)
+    for dirpath, dirnames, filenames in os.walk(walk_root, onerror=walk_error):
+        suffix = walk_suffix(dirpath, walk_root) if walk_root != str(root) else None
         dirnames[:] = sorted(d for d in dirnames if d.lower() not in skip)
         for name in sorted(filenames):
             if os.path.splitext(name)[1].lower() in SKIP_EXTS:
                 continue
-            p = Path(dirpath) / name
+            p = (Path(root) / suffix / name) if suffix is not None else Path(dirpath) / name
             try:
                 st = with_long_path(os.stat, str(p))
                 if not stat.S_ISREG(st.st_mode):
                     continue
                 size = st.st_size
-            except FileNotFoundError:
-                continue  # a broken link, or a file that went away
+            except FileNotFoundError as e:
+                if len(str(p)) >= MAX_PATH and skipped is not None:
+                    skipped.append((p, "cannot read file: %s" % (e.strerror or e)))
+                continue  # otherwise a broken link, or a file that went away
             except OSError as e:
                 if skipped is not None:
                     skipped.append((p, "cannot read file: %s" % (e.strerror or e)))

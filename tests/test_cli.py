@@ -232,7 +232,9 @@ def test_crashed_rescan_never_serves_stale_links(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "resolve", real)
     capsys.readouterr()
     assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
-    assert "Repos changed since last scan; rescanned." in capsys.readouterr().out
+    cap = capsys.readouterr()
+    assert "Repos changed since last scan; rescanned." in cap.err
+    assert "rescanned" not in cap.out
 
 
 def test_stale_links_json_alone_triggers_rescan(tmp_path, capsys):
@@ -243,7 +245,7 @@ def test_stale_links_json_alone_triggers_rescan(tmp_path, capsys):
     cbl.write_text(cbl.read_text(encoding="utf-8") + "\n      * t\n", encoding="utf-8")
     capsys.readouterr()
     assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
-    assert "rescanned" in capsys.readouterr().out
+    assert "rescanned" in capsys.readouterr().err
 
 
 def test_save_json_is_atomic(tmp_path, monkeypatch):
@@ -332,3 +334,62 @@ def test_malformed_config_uses_defaults(tmp_path, capsys):
         assert cfg.environment_qualifiers == [] and cfg.exclude_dirs == []
     out = capsys.readouterr().out
     assert out.count("archdiag.config.json is not valid JSON — using defaults") >= 3
+
+
+def test_walk_suffix_strips_extended_prefix():
+    from archdiag.repos import walk_suffix
+    root = "\\\\?\\C:\\ws\\repo"
+    assert walk_suffix(root, root) == ""
+    assert walk_suffix(root + "\\src\\deep", root) == "src\\deep"
+    unc = "\\\\?\\UNC\\srv\\share\\r"
+    assert walk_suffix(unc + "\\a", unc) == "a"
+    assert walk_suffix("/ws/r/a/b", "/ws/r") == "a/b"
+
+
+def test_missing_long_path_file_is_recorded(tmp_path, monkeypatch):
+    from archdiag import repos
+    (tmp_path / "a.cbl").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(repos, "MAX_PATH", 5)  # every path counts as long
+    real = os.stat
+
+    def gone(path, *a, **k):
+        raise FileNotFoundError(2, "No such file or directory", path)
+    monkeypatch.setattr(repos.os, "stat", gone)
+    skipped = []
+    assert list(repos.iter_source_files(tmp_path, (), skipped)) == []
+    assert skipped and "cannot read file" in skipped[0][1]
+    monkeypatch.setattr(repos.os, "stat", real)
+
+
+def test_list_sends_every_notice_to_stderr(tmp_path, capsys):
+    w = _estate(tmp_path)
+    (w / "architecture-diagrams" / "groups.json").write_text(
+        json.dumps({"apps": [{"name": "x", "members": [5]}]}), encoding="utf-8")
+    (w / "architecture-diagrams" / "archdiag.config.json").write_text("{bad", encoding="utf-8")
+    assert main(["list", "--workspace", str(w), "--what", "jobs"]) == 0
+    cap = capsys.readouterr()
+    assert all(l.split()[0].startswith("CLM") for l in cap.out.splitlines())
+    assert "groups.json" in cap.err and "not valid JSON" in cap.err
+    assert main(["draw", "--workspace", str(w), "--level", "landscape"]) == 0
+    assert "groups.json" in capsys.readouterr().out
+
+
+def test_failed_replace_leaves_no_tmp(tmp_path, monkeypatch):
+    from archdiag import store
+    monkeypatch.setattr(store.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("no")))
+    with pytest.raises(OSError):
+        store.save_json(tmp_path / "a.json", {"a": 1})
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("fname", ["start.xml", "start.json"])
+def test_ckbr_start_in_xml_or_json_marks_queue_bridged(tmp_path, fname):
+    w = tmp_path / "ws"
+    (w / "r" / ".git").mkdir(parents=True)
+    (w / "r" / "q.mqsc").write_text("DEFINE QLOCAL(CLM.BRQ)\n", encoding="utf-8")
+    (w / "r" / fname).write_text(
+        "<step>EXEC CICS START TRANSID('CKBR')\n FROM('Q=CLM.BRQ,AUTH=LOCAL') LENGTH(22) "
+        "END-EXEC.</step>\n", encoding="utf-8")
+    assert main(["scan", "--workspace", str(w)]) == 0
+    inv = load_inventory(w / "architecture-diagrams" / "inventory.json")
+    assert inv.nodes["queue:CLM.BRQ"].attrs["bridge"] is True

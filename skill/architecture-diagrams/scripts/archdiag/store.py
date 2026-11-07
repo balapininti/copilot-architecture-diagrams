@@ -39,7 +39,14 @@ def save_json(path: Path, obj: Any) -> None:
         obj = dataclasses.asdict(obj)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(str(tmp), str(path))
+    try:
+        os.replace(str(tmp), str(path))
+    except OSError:
+        try:
+            os.remove(str(tmp))
+        except OSError:
+            pass
+        raise
 
 
 def _evidence(d: dict) -> Evidence:

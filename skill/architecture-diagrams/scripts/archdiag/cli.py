@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import sys
 import traceback
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import resolve as _resolve_pkg
+from . import config as _config_mod
 from .config import CONFIG_NAME, Config, load_config
 from .groups import Groups, load_groups
 from .model import CONFIRMED, LOOSE, PARTIAL, Inventory, Resolved
@@ -31,6 +33,12 @@ LEVEL_LISTING = {"application": ["applications"], "repomap": ["repos"],
 
 def resolve(inv: Inventory, config: Config) -> Resolved:
     return _resolve_pkg.resolve(inv, config)
+
+
+def _notice(message: str) -> None:
+    """A notice about what was done: stdout, except for `list`, whose stdout is read by
+    machines (Copilot) and must hold the listing only."""
+    print(message, file=sys.stderr if _config_mod.NOTICE["stderr"] else sys.stdout, flush=True)
 
 
 class _Exit(Exception):
@@ -126,7 +134,7 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
             resolved = resolve(cached.inventory, config)  # settings changed: no rescan
             save_json(links_path, resolved)
             return resolved
-        print("Repos changed since last scan; rescanned.", flush=True)
+        _notice("Repos changed since last scan; rescanned.")
     else:
         print("No earlier scan found; scanning.", file=sys.stderr)
     inv, resolved = _scan_and_save(workspace, out_dir, config)
@@ -137,7 +145,7 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
 def _groups(out_dir: Path, r: Resolved) -> Groups:
     g = load_groups(out_dir / "groups.json", r)
     for problem in g.problems:
-        print("groups.json: %s" % problem)
+        _notice("groups.json: %s" % problem)
     return g
 
 
@@ -289,7 +297,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
     _write(links, report.links_report(view, r))
     written.append(links)
     for note in view.notes:
-        print("Note: %s" % note)
+        _notice("Note: %s" % note)
     st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
     for e in view.edges:
         st[e.status] = st.get(e.status, 0) + 1
@@ -340,7 +348,8 @@ def main(argv: List[str]) -> int:
         return e.code
     except SystemExit as e:  # --help
         return e.code if isinstance(e.code, int) else 0
-    workspace = Path(args.workspace)
+    _config_mod.NOTICE["stderr"] = args.command == "list"
+    workspace = Path(os.path.abspath(args.workspace))  # real lengths for the 260-char checks
     out_dir = workspace / OUT_DIR_NAME
     try:
         return COMMANDS[args.command](args, workspace, out_dir)

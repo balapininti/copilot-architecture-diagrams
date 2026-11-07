@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
 CONFIG_NAME = "archdiag.config.json"
+NOTICE = {"stderr": False}  # set by the CLI for machine-read commands (list)
 
 
 @dataclass
@@ -29,7 +31,8 @@ def load_config(out_dir: Path) -> Config:
     except (OSError, ValueError):
         data = None
     if not isinstance(data, dict):
-        print("archdiag.config.json is not valid JSON \u2014 using defaults")
+        print("archdiag.config.json is not valid JSON \u2014 using defaults",
+              file=sys.stderr if NOTICE["stderr"] else sys.stdout)
         return Config()
     return Config(
         environment_qualifiers=_names(data.get("environment_qualifiers", [])),
