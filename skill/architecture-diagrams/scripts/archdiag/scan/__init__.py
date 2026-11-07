@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -18,6 +19,11 @@ class ScanContext:
     proc_calls: Set[str] = field(default_factory=set)  # PROC names some JCL EXECs (pass 1)
     props: Dict[str, Dict[str, str]] = field(default_factory=dict)   # per repo
     ts_env: Dict[str, Dict[str, str]] = field(default_factory=dict)  # per repo
+    # Java / Angular (pass 1): class names defined per repo, and `static final String`
+    # constants per repo (name -> source literal)
+    java_classes: Dict[str, Set[str]] = field(default_factory=dict)
+    java_consts: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    ts_classes: Dict[str, Set[str]] = field(default_factory=dict)
     # MQ (pass 1): processes whose APPLICID is CKBR, and queues named in a CKBR start (Q=...)
     ckbr_processes: Set[str] = field(default_factory=set)
     ckbr_queues: Set[str] = field(default_factory=set)
@@ -58,6 +64,9 @@ def _register_builtin_scanners() -> None:
     SCANNERS["ddl"] = ddl.scan_ddl
     SCANNERS["mqsc"] = mq.scan_mqsc
     SCANNERS["zosconnect"] = zosconnect.scan_zosconnect
+    from . import angular, java
+    SCANNERS["java"] = java.scan_java
+    SCANNERS["angular_ts"] = angular.scan_angular
     for lang in NOT_ANALYZED:
         SCANNERS[lang] = other.register_other
     for ext in zosconnect.ARCHIVE_EXTS:
@@ -70,6 +79,54 @@ def _collect_pass(repo: str, rel: str, text: str, ftype: Optional[str],
     jcl.collect_procs(repo, rel, text, ctx)
     mq.collect_mq(repo, rel, text, ftype, ctx)
     zosconnect.collect_zosconnect(repo, rel, text, ftype, ctx)
+    if ftype == "java":
+        from . import java
+        java.collect_java(repo, rel, text, ctx)
+    elif ftype == "angular_ts":
+        from . import angular
+        angular.collect_angular(repo, rel, text, ctx)
+        _load_ts_env(repo, rel, text, ctx)
+    elif ftype in ("yaml", "properties"):
+        _load_props(repo, rel, text, ftype, ctx)
+
+
+_BASE_CONFIG = re.compile(r"^(application|bootstrap)\.(ya?ml|properties)$", re.I)
+
+
+def _load_props(repo: str, rel: str, text: str, ftype: str, ctx: ScanContext) -> None:
+    """application*.yml / *.properties into ctx.props[repo]. The base file wins; profile
+    files (application-dev.yml) and later YAML documents only add keys not yet set."""
+    from .lexutil import parse_properties, parse_yaml_docs
+    name = rel.rsplit("/", 1)[-1]
+    if not name.lower().startswith(("application", "bootstrap")) and ftype == "yaml":
+        return
+    docs = parse_yaml_docs(text) if ftype == "yaml" else [parse_properties(text)]
+    props = ctx.props.setdefault(repo, {})
+    base = bool(_BASE_CONFIG.match(name))
+    for i, doc in enumerate(docs):
+        for k, v in doc.items():
+            if base and i == 0:
+                props[k] = v
+            else:
+                props.setdefault(k, v)
+
+
+def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
+    from .lexutil import parse_ts_object, strip_code
+    name = rel.rsplit("/", 1)[-1].lower()
+    if not re.match(r"environment(\.[\w-]+)?\.ts$", name):
+        return
+    clean, masked = strip_code(text, ts=True)
+    m = re.search(r"\benvironment\b[^=\n]*=\s*\{", masked)
+    if not m:
+        return
+    vals = parse_ts_object(clean, m.end() - 1)
+    env = ctx.ts_env.setdefault(repo, {})
+    for k, v in vals.items():
+        if name == "environment.ts":
+            env[k] = v
+        else:
+            env.setdefault(k, v)
 
 
 def scan_workspace(workspace: Path, config: Config) -> Inventory:

@@ -1,0 +1,6 @@
+# claims-api settings
+mq:
+  request: CLM.REQ
+  reply: CLM.RSP
+zosconnect:
+  url: https://zcee.internal:9443
