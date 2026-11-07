@@ -528,3 +528,22 @@ def test_channel_lanes_nest_in_a_synthetic_wrap():
     cross, bad = _cross_band_pairs_that_cross(v, L)
     assert len(cross) >= 4, cross
     assert not bad, bad
+
+
+def test_groups_on_a_job_flow_or_repomap_are_reported_not_dropped_silently():
+    """E5: layout_for draws no groups on a job flow or repo map; when a view gives some,
+    it says so in the view's notes (once, however often the view is laid out)."""
+    for level in ("flow_job", "repomap"):
+        v = ViewGraph("t", level, "J",
+                      [VNode("job:J", "J", kind="job", group="g1"),
+                       VNode("step:J#S1", "S1", kind="program", row="lane", group="g1")],
+                      [VEdge("job:J", "step:J#S1", kind="sequence")],
+                      [VGroup("g1", "app", "#3b82f6")])
+        L = layout_for(v, lambda n: (140, 80))
+        layout_for(v, lambda n: (140, 80))
+        assert L.groups == {}
+        notes = [n for n in v.notes if "group" in n.lower()]
+        assert len(notes) == 1 and "not drawn" in notes[0], v.notes
+    v = ViewGraph("t", "flow_job", "J", [VNode("job:J", "J", kind="job")], [], [])
+    layout_for(v, lambda n: (140, 80))
+    assert v.notes == []

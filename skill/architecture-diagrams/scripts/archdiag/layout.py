@@ -114,9 +114,14 @@ class Layout:
     groups: Dict[str, Box]      # only groups with members (draw groups from here). Always
                                 # empty for flow_job and repomap: job rows and card grids do
                                 # not arrange by group, the views for those levels set none
-                                # (tests/test_layout.py checks), and any given are ignored
+                                # (tests/test_layout.py checks); any given are not drawn and
+                                # layout_for says so in view.notes (GROUPS_NOT_DRAWN)
     routes: List[List[Point]]   # one polyline per view.edges index
     label_at: List[Point]       # one label anchor per edge
+
+
+GROUPS_NOT_DRAWN = ("Groups are not drawn on a job flow or a repo map: its boxes are laid "
+                    "out in rows or a grid, not by group.")
 
 
 def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
@@ -133,6 +138,9 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
     for n in view.nodes:
         w, h = node_size(n)
         sizes[n.id] = (float(w), float(h))
+    if view.level in ("flow_job", "repomap") and view.groups \
+            and GROUPS_NOT_DRAWN not in view.notes:
+        view.notes.append(GROUPS_NOT_DRAWN)  # E5: said, not silently dropped
     if view.level == "flow_job":
         boxes, routes = job_rows(view, sizes)
         groups: Dict[str, Box] = {}
