@@ -800,3 +800,28 @@ def test_b1_half_of_the_spec_paths_served_ties_the_host(tmp_path):
                        "openapi: 3.0.0\nservers:\n  - url: https://api.repob.example\n"
                        "paths:\n  /health:\n    get: {}\n  /other:\n    get: {}\n")])
     assert e.status == "confirmed"
+
+
+# B6: handler edges for endpoints defined twice, and for classes defined twice -----------------
+
+def test_b6_duplicate_endpoint_label_runs_every_handler_partial(tmp_path):
+    ctl = ("package x;\nimport org.springframework.web.bind.annotation.*;\n"
+           "@RestController\npublic class %s {\n"
+           "  @GetMapping(\"/dup\")\n  public String h() { return \"\"; }\n}\n")
+    _write_estate(tmp_path, [("api", "src/main/java/x/A.java", ctl % "A"),
+                             ("api", "src/main/java/x/B.java", ctl % "B")])
+    inv = scan_workspace(tmp_path, Config())
+    assert sorted(inv.nodes["endpoint:GET /dup"].attrs["handlers"]) == \
+        ["class:api/A", "class:api/B"]
+    r = resolve(inv, Config())
+    runs = sorted((e.dst, e.status) for e in edges(src="endpoint:GET /dup", op="runs", r=r))
+    assert runs == [("class:api/A", "partial"), ("class:api/B", "partial")]
+    assert all("handler" in e.reason for e in edges(src="endpoint:GET /dup", op="runs", r=r))
+
+
+def test_b6_handler_class_defined_twice_is_partial():
+    ep = _ep("GET", "/a", handler="class:api/C")
+    cls = Node("class:api/C", "class", "C", "api",
+               [_ev(3, "C.java", "api"), _ev(3, "copy/C.java", "api")], {})
+    e = edge("endpoint:GET /a", "runs", "class:api/C", _run([ep, cls], []))
+    assert e.status == "partial" and e.reason

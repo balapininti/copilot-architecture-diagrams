@@ -558,29 +558,36 @@ class _Data:
     def handlers(self) -> None:
         """``endpoint -runs-> class`` for each Spring endpoint with a known handler class, so
         a client call reaches the code behind it. Confirmed for a worked-out path defined in
-        one place; partial for an ``endpoint:?`` node (its unresolved reason) or a path that
-        several handlers define."""
+        one place; partial for an ``endpoint:?`` node (its unresolved reason), a path that
+        several handlers define (one runs edge per handler, B6) or a handler class defined
+        more than once."""
         for ep in list(self.inv.nodes.values()):
             if ep.kind != "endpoint":
                 continue
             handler = str(ep.attrs.get("handler") or "").strip()
-            if not handler:
+            many = sorted(set(str(h).strip() for h in (ep.attrs.get("handlers") or [])
+                              if str(h).strip()) | ({handler} if handler else set()))
+            if not many:
                 continue
             unresolved = ep.attrs.get("unresolved")
             why: Optional[str] = None
             if unresolved or ep.id.startswith("endpoint:?"):
                 why = unresolved if isinstance(unresolved, str) and unresolved \
                     else "endpoint path not worked out"
+            several = ("defined by %d handler classes: %s" % (len(many), ", ".join(many))
+                       if len(many) > 1 else None)
             evid = list(ep.evidence)
-            cls = self.nodes.get(handler)
-            if cls is None:
-                name = handler.split(":", 1)[1] if ":" in handler else handler
-                self.edges.append(Edge(ep.id, "runs", missing(self.nodes, "class", name),
-                                       LOOSE, why, evid))
-                continue
-            status, reason = _status(why, _defs_reason(ep))
-            self.edges.append(Edge(ep.id, "runs", cls.id, status, reason,
-                                   evid + list(cls.evidence)))
+            for h in many:
+                cls = self.nodes.get(h)
+                if cls is None:
+                    name = h.split(":", 1)[1] if ":" in h else h
+                    self.edges.append(Edge(ep.id, "runs", missing(self.nodes, "class", name),
+                                           LOOSE, join(why, several), evid))
+                    continue
+                status, reason = _status(why, several, _defs_reason(ep) if not several
+                                         else None, _defs_reason(cls))
+                self.edges.append(Edge(ep.id, "runs", cls.id, status, reason,
+                                       evid + list(cls.evidence)))
 
     # -- driver --------------------------------------------------------------------------
     def run(self) -> None:

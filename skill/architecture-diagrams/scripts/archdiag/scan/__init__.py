@@ -341,6 +341,20 @@ def _merge_nodes(nodes: Dict[str, Node], new_nodes: List[Node]) -> None:
             if ev not in have.evidence:
                 have.evidence.append(ev)
         _merge_files(have, n)
+        _merge_handlers(have, n)
+
+
+def _merge_handlers(have: Node, new: Node) -> None:
+    """An endpoint label two handler classes define: keep every handler (B6)."""
+    if have.kind != "endpoint":
+        return
+    mine = [h for h in [have.attrs.get("handler")] + list(have.attrs.get("handlers") or [])
+            if h]
+    theirs = [h for h in [new.attrs.get("handler")] + list(new.attrs.get("handlers") or [])
+              if h]
+    both = sorted(set(mine) | set(theirs))
+    if len(both) > 1:
+        have.attrs["handlers"] = both
 
 
 def _merge_files(have: Node, new: Node) -> None:
