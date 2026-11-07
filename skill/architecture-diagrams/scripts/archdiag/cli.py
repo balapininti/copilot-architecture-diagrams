@@ -1,29 +1,347 @@
+"""Command line: scan, summary, list, draw, init-config. Never shows a traceback."""
 from __future__ import annotations
 
 import argparse
+import difflib
+import json
+import re
 import sys
+import traceback
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
-from .config import load_config
+from . import resolve as _resolve_pkg
+from .config import CONFIG_NAME, Config, load_config
+from .groups import Groups, load_groups
+from .model import CONFIRMED, LOOSE, PARTIAL, Inventory, Resolved
+from .repos import discover_repos
 from .scan import scan_workspace
-from .store import save_json
+from .store import fingerprint, load_inventory, load_resolved, save_json
+from .summary import _env_pairs, build_summary, list_items
 
 OUT_DIR_NAME = "architecture-diagrams"
+CLI_LEVELS = ("landscape", "application", "flow", "repomap")
+DEFAULT_STYLE = {"landscape": "b", "application": "a", "flow": "a", "repomap": "c"}
+STYLES = ("a", "b", "c", "d")
+LISTINGS = ("jobs", "transactions", "pages", "endpoints", "applications", "repos", "programs")
+# what to list for a level, to find a valid scope
+LEVEL_LISTING = {"application": ["applications"], "repomap": ["repos"],
+                 "flow": ["jobs", "transactions", "pages", "endpoints"]}
+
+
+def resolve(inv: Inventory, config: Config) -> Resolved:
+    return _resolve_pkg.resolve(inv, config)
+
+
+class _Exit(Exception):
+    """A planned early end of a command: print ``message`` and return ``code``."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # no usage dump on stderr, no sys.exit
+        raise _Exit(2, "%s\n%s" % (message, self.format_usage().strip()))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = _Parser(prog="archdiag")
+    sub = parser.add_subparsers(dest="command", parser_class=_Parser)
+
+    def common(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument("--workspace", default=".",
+                       help="folder that holds the repos (default: current folder)")
+        return p
+    common(sub.add_parser("scan", help="scan the repos and write inventory.json and links.json"))
+    common(sub.add_parser("summary", help="print the scan summary and write summary.md"))
+    p = common(sub.add_parser("list", help="list jobs, transactions, pages and so on"))
+    p.add_argument("--what", required=True, help="one of: " + ", ".join(LISTINGS))
+    p = common(sub.add_parser("draw", help="draw a diagram"))
+    p.add_argument("--level", required=True, help="one of: " + ", ".join(CLI_LEVELS))
+    p.add_argument("--scope", default=None, help="application, job, transaction, page, "
+                   "endpoint or repo, depending on the level")
+    p.add_argument("--style", default=None, help="a, b, c, d or all (default depends on the level)")
+    common(sub.add_parser("init-config", help="write archdiag.config.json from the scan"))
+    return parser
+
+
+# ------------------------------------------------------------------ workspace and cache
+
+def _check_workspace(workspace: Path) -> None:
+    if not workspace.is_dir() or not discover_repos(workspace):
+        raise _Exit(3, "No git repos found under %s. Clone the repos into one folder and run "
+                       "again." % workspace)
+
+
+def _scan_and_save(workspace: Path, out_dir: Path, config: Config) -> Tuple[Inventory, Resolved]:
+    inventory = scan_workspace(workspace, config)
+    save_json(out_dir / "inventory.json", inventory)
+    resolved = resolve(inventory, config)
+    save_json(out_dir / "links.json", resolved)
+    return inventory, resolved
+
+
+def _counts_line(inv: Inventory, r: Resolved) -> str:
+    st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
+    for e in r.edges:
+        st[e.status] = st.get(e.status, 0) + 1
+    line = "%d repo(s), %d things found, %d links (%d confirmed, %d partly known, %d loose ends)" % (
+        len(inv.repos), len(r.nodes), len(r.edges), st[CONFIRMED], st[PARTIAL], st[LOOSE])
+    if inv.skipped:
+        line += "; %d file(s) skipped" % len(inv.skipped)
+    return line
+
+
+def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
+    """The resolved links for the workspace as it is now: the cache when the repos have not
+    changed, otherwise a fresh scan (stating so)."""
+    inv_path, links_path = out_dir / "inventory.json", out_dir / "links.json"
+    cached: Optional[Inventory] = None
+    if inv_path.is_file() and links_path.is_file():
+        try:
+            cached = load_inventory(inv_path)
+        except (OSError, ValueError, KeyError, TypeError):
+            cached = None
+    if cached is not None:
+        repos = discover_repos(workspace)
+        if fingerprint(workspace, repos, config) == cached.fingerprint:
+            cfg_path = out_dir / CONFIG_NAME
+            try:
+                config_newer = cfg_path.is_file() and cfg_path.stat().st_mtime > links_path.stat().st_mtime
+                if not config_newer:
+                    return load_resolved(links_path)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            resolved = resolve(cached, config)  # settings changed: re-resolve, no rescan
+            save_json(links_path, resolved)
+            return resolved
+        print("Repos changed since last scan; rescanned.")
+    else:
+        print("No earlier scan found; scanning.")
+    inv, resolved = _scan_and_save(workspace, out_dir, config)
+    print("Scanned: " + _counts_line(inv, resolved))
+    return resolved
+
+
+def _groups(out_dir: Path, r: Resolved) -> Groups:
+    g = load_groups(out_dir / "groups.json", r)
+    for problem in g.problems:
+        print("groups.json: %s" % problem)
+    return g
+
+
+# ------------------------------------------------------------------ commands
+
+def _cmd_scan(args, workspace: Path, out_dir: Path) -> int:
+    _check_workspace(workspace)
+    inv, resolved = _scan_and_save(workspace, out_dir, load_config(out_dir))
+    print("Scanned " + _counts_line(inv, resolved))
+    print("Wrote %s and %s" % (out_dir / "inventory.json", out_dir / "links.json"))
+    return 0
+
+
+def _cmd_summary(args, workspace: Path, out_dir: Path) -> int:
+    _check_workspace(workspace)
+    config = load_config(out_dir)
+    r = _load_current(workspace, out_dir, config)
+    text = build_summary(r, load_groups(out_dir / "groups.json", r), config)
+    _write(out_dir / "summary.md", text)
+    print(text, end="")
+    print("Wrote %s" % (out_dir / "summary.md"))
+    return 0
+
+
+def _cmd_list(args, workspace: Path, out_dir: Path) -> int:
+    if args.what not in LISTINGS:
+        raise _Exit(2, _did_you_mean(args.what, list(LISTINGS), "what", "list --what <one of "
+                                     + ", ".join(LISTINGS) + ">"))
+    _check_workspace(workspace)
+    r = _load_current(workspace, out_dir, load_config(out_dir))
+    items = list_items(r, _groups(out_dir, r), args.what)
+    for line in items:
+        print(line)
+    if not items:
+        print("No %s found." % args.what)
+    return 0
+
+
+def _cmd_init_config(args, workspace: Path, out_dir: Path) -> int:
+    _check_workspace(workspace)
+    config = load_config(out_dir)
+    r = _load_current(workspace, out_dir, config)
+    found: List[str] = []
+    for kind in ("dataset", "table"):
+        for q1, q2, _n, _ex in _env_pairs(r, config, kind):
+            for q in (q1, q2):
+                if q.upper() not in [x.upper() for x in found]:
+                    found.append(q.upper())
+    quals = list(config.environment_qualifiers)
+    for q in found:
+        if q.upper() not in [x.upper() for x in quals]:
+            quals.append(q)
+    path = out_dir / CONFIG_NAME
+    _write(path, json.dumps({"environment_qualifiers": quals,
+                             "exclude_dirs": list(config.exclude_dirs)}, indent=2) + "\n")
+    print("Wrote %s with environment_qualifiers: %s" % (path, ", ".join(quals) or "(none found)"))
+    print("Please confirm these are real environment names (for example PROD and TEST) "
+          "and delete any that are not, then run scan again.")
+    return 0
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9._-]", "-", text.lower())
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def _did_you_mean(bad: str, options: List[str], noun: str, listing: str) -> str:
+    hits = difflib.get_close_matches(bad, options, n=3, cutoff=0.5)
+    lines = ["No %s named %r." % (noun, bad)]
+    if hits:
+        lines.append("Did you mean: %s" % ", ".join(hits))
+    lines.append("To see the choices, run: %s" % listing)
+    return "\n".join(lines)
+
+
+def _is_job(r: Resolved, scope: str) -> bool:
+    up = scope.strip().upper()
+    return any(n.kind == "job" and (n.id == scope or n.name.upper() == up)
+               for n in r.nodes.values())
+
+
+def _top_issues(view, r: Resolved) -> List[str]:
+    names = {n.id: n.label for n in view.nodes}
+    out = []
+    for e in sorted((e for e in view.edges if e.status != CONFIRMED),
+                    key=lambda e: (e.status != LOOSE, e.src, e.dst)):
+        reason = next((u.reason for u in e.underlying if u.reason), None) or (
+            "link is not confirmed" if e.status == PARTIAL else "nothing found at the other end")
+        src, dst = names.get(e.src, e.src), names.get(e.dst, e.dst)
+        label = " (%s)" % e.label if e.label and e.label not in (src, dst) else ""
+        out.append("- %s -> %s%s [%s]: %s" % (src, dst, label, e.status, reason))
+        if len(out) == 3:
+            break
+    return out
+
+
+def _cmd_draw(args, workspace: Path, out_dir: Path) -> int:
+    from .render import report, style_a, style_b, style_c, style_d
+    from .views import ScopeError, build_view
+    level = args.level
+    if level not in CLI_LEVELS:
+        raise _Exit(2, _did_you_mean(level, list(CLI_LEVELS), "level",
+                                     "draw --level <%s>" % "|".join(CLI_LEVELS)))
+    style = (args.style or DEFAULT_STYLE[level]).lower()
+    if style != "all" and style not in STYLES:
+        raise _Exit(2, _did_you_mean(style, list(STYLES) + ["all"], "style", "draw --style a|b|c|d|all"))
+    styles = list(STYLES) if style == "all" else [style]
+    _check_workspace(workspace)
+    config = load_config(out_dir)
+    r = _load_current(workspace, out_dir, config)
+    g = _groups(out_dir, r)
+    scope = args.scope
+    view_level = level
+    if level == "flow":
+        view_level = "flow_job" if scope and _is_job(r, scope) else "flow_tx"
+    try:
+        view = build_view(r, g, view_level, scope)
+    except ScopeError as e:
+        if level == "flow" and scope:  # a job name may be what was meant
+            jobs = sorted(set(n.name for n in r.nodes.values() if n.kind == "job"))
+            close = difflib.get_close_matches(scope.upper(), jobs, n=3, cutoff=0.6)
+            e.suggestions = close + [x for x in e.suggestions if x not in close]
+        hint = "; ".join("list --what %s" % w for w in LEVEL_LISTING.get(level, ["applications"]))
+        lines = [e.message]
+        if e.suggestions and "did you mean" not in e.message.lower():
+            lines.append("Did you mean: %s" % ", ".join(e.suggestions))
+        elif e.suggestions:
+            lines = [e.message.split("; did you mean")[0] + ".",
+                     "Did you mean: %s" % ", ".join(e.suggestions)]
+        lines.append("To see the choices, run: " + " or ".join(
+            "python run.py %s --workspace <folder>" % h for h in hint.split("; ")))
+        raise _Exit(2, "\n".join(lines))
+    renderers = {"a": style_a.render, "b": style_b.render, "c": style_c.render, "d": style_d.render}
+    base = level + ("-" + _slug(scope) if scope else "")
+    written: List[Path] = []
+    for s in styles:
+        for ext, text in renderers[s](view).items():
+            path = out_dir / ("%s-%s.%s" % (base, s, ext))
+            _write(path, text)
+            written.append(path)
+    links = out_dir / ("%s-links.md" % base)
+    _write(links, report.links_report(view, r))
+    written.append(links)
+    for note in view.notes:
+        print("Note: %s" % note)
+    st = {CONFIRMED: 0, PARTIAL: 0, LOOSE: 0}
+    for e in view.edges:
+        st[e.status] = st.get(e.status, 0) + 1
+    print("Wrote:")
+    for p in written:
+        print("  %s" % p)
+    print("Summary: %d nodes, %d links: %d confirmed, %d partly known, %d loose ends"
+          % (len(view.nodes), len(view.edges), st[CONFIRMED], st[PARTIAL], st[LOOSE]))
+    print("Top issues:")
+    issues = _top_issues(view, r)
+    for line in issues or ["- none"]:
+        print("  " + line)
+    return 0
+
+
+COMMANDS = {"scan": _cmd_scan, "summary": _cmd_summary, "list": _cmd_list,
+            "draw": _cmd_draw, "init-config": _cmd_init_config}
+
+
+def _plain_output() -> None:
+    """Windows consoles may not encode every character; never fail on printing."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _log_error(out_dir: Path) -> Optional[Path]:
+    try:
+        path = out_dir / "error.log"
+        _write(path, traceback.format_exc())
+        return path
+    except Exception:
+        return None
 
 
 def main(argv: List[str]) -> int:
-    parser = argparse.ArgumentParser(prog="archdiag")
-    sub = parser.add_subparsers(dest="command")
-    p_scan = sub.add_parser("scan", help="scan a workspace and write inventory.json")
-    p_scan.add_argument("--workspace", required=True)
-    args = parser.parse_args(argv)
-    if args.command != "scan":
-        parser.print_usage(sys.stderr)
-        return 2
+    _plain_output()
+    try:
+        args = _build_parser().parse_args(argv)
+        if not args.command:
+            raise _Exit(2, "Choose a command: scan, summary, list, draw, init-config. "
+                           "Example: python run.py scan --workspace <folder>")
+    except _Exit as e:
+        print(e.message)
+        return e.code
+    except SystemExit as e:  # --help
+        return e.code if isinstance(e.code, int) else 0
     workspace = Path(args.workspace)
     out_dir = workspace / OUT_DIR_NAME
-    inventory = scan_workspace(workspace, load_config(out_dir))
-    save_json(out_dir / "inventory.json", inventory)
-    print("Scanned %d repo(s); wrote %s" % (len(inventory.repos), out_dir / "inventory.json"))
-    return 0
+    try:
+        return COMMANDS[args.command](args, workspace, out_dir)
+    except _Exit as e:
+        print(e.message)
+        return e.code
+    except KeyboardInterrupt:
+        print("Stopped.")
+        return 1
+    except Exception as e:  # never show a traceback
+        log = _log_error(out_dir) if workspace.is_dir() else None
+        if log is not None:
+            print("Something went wrong (%s: %s). Details: %s" % (type(e).__name__, e, log))
+        else:
+            print("Something went wrong (%s: %s)." % (type(e).__name__, e))
+        return 1

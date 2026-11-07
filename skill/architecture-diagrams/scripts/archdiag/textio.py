@@ -30,6 +30,32 @@ _EXT = {
     ".clist": "rexx", ".sar": "zosconnect", ".aar": "zosconnect",
 }
 
+# Extensions of files no scanner or collector looks at (data, docs, web assets): their text is
+# never read, which saves decoding most of a large Angular or Java repo. Files that z/OS
+# Connect needs (package.xml, openapi.json and anything under a zosconnect folder) are exempt.
+_NO_TEXT_EXTS = frozenset([
+    ".json", ".md", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".svg", ".csv",
+    ".log", ".map", ".xml", ".xsd", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".webp",
+    ".bmp", ".tif", ".tiff", ".mp3", ".mp4", ".gz", ".tgz", ".7z", ".rar", ".tar", ".bin",
+    ".pyc", ".o", ".obj", ".a", ".lib", ".db", ".sqlite", ".xlsx", ".xls", ".docx", ".doc",
+    ".pptx", ".ppt",
+])
+_ZC_NAMES = frozenset(["package.xml", "openapi.json", "swagger.json"])
+
+
+def needs_text(relpath: str) -> bool:
+    """False when classify() could not give this path a type from its name alone and no
+    scanner reads its text, so the file need not be read. Extensionless files, unknown
+    extensions and every extension in ``_EXT`` are read (they may be classified by content)."""
+    parts = relpath.replace("\\", "/").lower().split("/")
+    name = parts[-1]
+    dot = name.rfind(".")
+    ext = name[dot:] if dot > 0 else ""
+    if ext not in _NO_TEXT_EXTS:
+        return True
+    return name in _ZC_NAMES or "zosconnect" in parts[:-1]
+
+
 _JOB = re.compile(r"^//(?!\*)\S+\s+JOB\b", re.I)
 _PROC = re.compile(r"^//(?!\*)\S*\s+PROC\b", re.I)
 _PROGID = re.compile(r"\bPROGRAM-ID\b", re.I)

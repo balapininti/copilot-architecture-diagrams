@@ -9,7 +9,7 @@ from ..config import Config
 from ..model import Evidence, Inventory, Node, Ref
 from ..repos import discover_repos, iter_source_files
 from ..store import fingerprint
-from ..textio import classify, read_source
+from ..textio import classify, needs_text, read_source
 
 
 @dataclass
@@ -195,6 +195,8 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                                     "path": rel + (ARCHIVE_SEP + member if member else "")})
                 members = [(rel + ARCHIVE_SEP + m, t, classify(m, t)) for m, t in got]
             else:
+                if not needs_text(rel):
+                    continue
                 try:
                     text = read_source(path)
                 except (OSError, ValueError) as e:
@@ -203,7 +205,13 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     continue
                 members = [(rel, text, classify(rel, text))]
             for mrel, text, ftype in members:
-                _collect_pass(repo.name, mrel, text, ftype, ctx)
+                try:
+                    _collect_pass(repo.name, mrel, text, ftype, ctx)
+                except Exception as e:  # one odd file must not stop the scan
+                    skipped.append({"repo": repo.name, "path": mrel,
+                                    "reason": "could not be analyzed (%s: %s)"
+                                    % (type(e).__name__, e)})
+                    continue
                 if ftype is not None:
                     files.append((repo.name, mrel, text, ftype))
         for path, reason in too_big:
@@ -216,7 +224,12 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
         scanner = SCANNERS.get(ftype)
         if scanner is None:
             continue
-        new_nodes, new_refs = scanner(repo_name, rel, text, ctx)
+        try:
+            new_nodes, new_refs = scanner(repo_name, rel, text, ctx)
+        except Exception as e:  # one odd file must not stop the scan
+            skipped.append({"repo": repo_name, "path": rel,
+                            "reason": "could not be analyzed (%s: %s)" % (type(e).__name__, e)})
+            continue
         for n in new_nodes:
             have = nodes.get(n.id)
             if have is None:
