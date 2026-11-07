@@ -1,0 +1,358 @@
+<h2>Which diagram style should the skill draw?</h2>
+<p class="subtitle">Same made-up system in four styles: an online shop spread across 4 linked repos (shop-web, order-api, payment-service, shared-contracts). Click any you like. You can pick more than one.</p>
+
+<div class="options" data-multiselect>
+
+  <!-- ================= A: Pictorial icon diagram ================= -->
+  <div class="option" data-choice="a-pictorial-icons" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content" style="width:100%">
+      <h3>Pictorial icons, grouped by repo</h3>
+      <p>Pictures for each kind of thing (person, web app, server, database, queue, cloud), a colored box per repo, numbered steps along the arrows. The look you'd get in draw.io or Visio with an icon set. <b>Output:</b> .drawio file you can edit, plus PNG/SVG.</p>
+      <svg viewBox="0 0 1000 380" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" style="background:#fff;border-radius:8px;margin-top:8px">
+        <defs>
+          <marker id="a-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
+        </defs>
+        <!-- customer -->
+        <g transform="translate(20,115)">
+          <circle cx="30" cy="18" r="14" fill="#64748b"/>
+          <path d="M4,72 Q4,38 30,38 Q56,38 56,72 z" fill="#64748b"/>
+          <text x="30" y="92" text-anchor="middle" font-size="13" fill="#0f172a" font-weight="600">Customer</text>
+        </g>
+        <!-- shop-web repo -->
+        <rect x="100" y="50" width="165" height="200" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="114" y="72" font-size="12" fill="#1d4ed8" font-weight="700">repo: shop-web</text>
+        <g transform="translate(137,95)">
+          <rect width="90" height="66" rx="6" fill="#fff" stroke="#3b82f6" stroke-width="2"/>
+          <rect width="90" height="14" rx="6" fill="#3b82f6"/>
+          <circle cx="9" cy="7" r="2.5" fill="#fff"/><circle cx="17" cy="7" r="2.5" fill="#fff"/><circle cx="25" cy="7" r="2.5" fill="#fff"/>
+          <rect x="10" y="24" width="45" height="6" rx="2" fill="#bfdbfe"/>
+          <rect x="10" y="36" width="70" height="6" rx="2" fill="#bfdbfe"/>
+          <rect x="10" y="48" width="30" height="10" rx="3" fill="#3b82f6"/>
+        </g>
+        <text x="182" y="190" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Shop Web</text>
+        <text x="182" y="207" text-anchor="middle" font-size="12" fill="#475569">React web app</text>
+
+        <!-- order-api repo -->
+        <rect x="320" y="30" width="180" height="310" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="334" y="52" font-size="12" fill="#15803d" font-weight="700">repo: order-api</text>
+        <g transform="translate(375,68)">
+          <rect y="0" width="70" height="22" rx="4" fill="#fff" stroke="#16a34a" stroke-width="2"/>
+          <rect y="26" width="70" height="22" rx="4" fill="#fff" stroke="#16a34a" stroke-width="2"/>
+          <rect y="52" width="70" height="22" rx="4" fill="#fff" stroke="#16a34a" stroke-width="2"/>
+          <circle cx="58" cy="11" r="3.5" fill="#22c55e"/><circle cx="58" cy="37" r="3.5" fill="#22c55e"/><circle cx="58" cy="63" r="3.5" fill="#22c55e"/>
+          <rect x="8" y="8" width="30" height="5" rx="2" fill="#bbf7d0"/><rect x="8" y="34" width="30" height="5" rx="2" fill="#bbf7d0"/><rect x="8" y="60" width="30" height="5" rx="2" fill="#bbf7d0"/>
+        </g>
+        <text x="410" y="165" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Order API</text>
+        <text x="410" y="182" text-anchor="middle" font-size="12" fill="#475569">Java · Spring Boot</text>
+        <g transform="translate(375,222)">
+          <path d="M0,10 L0,58 A35,10 0 0,0 70,58 L70,10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+          <ellipse cx="35" cy="10" rx="35" ry="10" fill="#bbf7d0" stroke="#16a34a" stroke-width="2"/>
+          <path d="M0,28 A35,10 0 0,0 70,28 M0,44 A35,10 0 0,0 70,44" fill="none" stroke="#16a34a" stroke-width="1.2"/>
+        </g>
+        <text x="410" y="308" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Orders DB</text>
+        <text x="410" y="325" text-anchor="middle" font-size="12" fill="#475569">SQL Server</text>
+
+        <!-- queue -->
+        <g transform="translate(548,125)">
+          <rect width="110" height="44" rx="22" fill="#fff7ed" stroke="#f97316" stroke-width="2"/>
+          <rect x="18" y="12" width="16" height="20" rx="3" fill="#fdba74"/>
+          <rect x="40" y="12" width="16" height="20" rx="3" fill="#fdba74"/>
+          <rect x="62" y="12" width="16" height="20" rx="3" fill="#fdba74"/>
+          <path d="M84,22 l10,0" stroke="#f97316" stroke-width="2" marker-end="url(#a-arr)"/>
+        </g>
+        <text x="603" y="190" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">order-events</text>
+        <text x="603" y="207" text-anchor="middle" font-size="12" fill="#475569">Kafka topic</text>
+
+        <!-- payment-service repo -->
+        <rect x="705" y="30" width="160" height="195" rx="12" fill="#faf5ff" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="719" y="52" font-size="12" fill="#7e22ce" font-weight="700">repo: payment-service</text>
+        <g transform="translate(750,68)">
+          <rect y="0" width="70" height="22" rx="4" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+          <rect y="26" width="70" height="22" rx="4" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+          <rect y="52" width="70" height="22" rx="4" fill="#fff" stroke="#9333ea" stroke-width="2"/>
+          <circle cx="58" cy="11" r="3.5" fill="#a855f7"/><circle cx="58" cy="37" r="3.5" fill="#a855f7"/><circle cx="58" cy="63" r="3.5" fill="#a855f7"/>
+        </g>
+        <text x="785" y="165" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Payment Service</text>
+        <text x="785" y="182" text-anchor="middle" font-size="12" fill="#475569">.NET 8 worker</text>
+
+        <!-- external cloud -->
+        <g transform="translate(888,72)">
+          <path d="M18,52 a18,18 0 0,1 2,-36 a24,24 0 0,1 44,-6 a18,18 0 0,1 30,22 a14,14 0 0,1 -6,20 z" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
+        </g>
+        <text x="935" y="148" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Stripe</text>
+        <text x="935" y="165" text-anchor="middle" font-size="12" fill="#475569">external</text>
+
+        <!-- shared-contracts repo -->
+        <rect x="545" y="265" width="160" height="90" rx="12" fill="#fefce8" stroke="#eab308" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="559" y="285" font-size="12" fill="#a16207" font-weight="700">repo: shared-contracts</text>
+        <g transform="translate(565,298)">
+          <path d="M0,10 L20,0 L40,10 L40,34 L20,44 L0,34 z" fill="#fde68a" stroke="#ca8a04" stroke-width="1.5"/>
+          <path d="M0,10 L20,20 L40,10 M20,20 L20,44" fill="none" stroke="#ca8a04" stroke-width="1.5"/>
+        </g>
+        <text x="618" y="320" font-size="12" font-weight="700" fill="#0f172a">API + event</text>
+        <text x="618" y="336" font-size="12" font-weight="700" fill="#0f172a">schemas</text>
+
+        <!-- flows -->
+        <g stroke="#334155" stroke-width="2" fill="none">
+          <path d="M80,148 L133,130" marker-end="url(#a-arr)"/>
+          <path d="M229,128 L371,100" marker-end="url(#a-arr)"/>
+          <path d="M410,190 L410,218" marker-end="url(#a-arr)"/>
+          <path d="M447,105 L545,140" marker-end="url(#a-arr)"/>
+          <path d="M660,140 L746,105" marker-end="url(#a-arr)"/>
+          <path d="M822,100 L888,100" marker-end="url(#a-arr)"/>
+        </g>
+        <g stroke="#ca8a04" stroke-width="1.5" fill="none" stroke-dasharray="4 4">
+          <path d="M545,300 L502,300" marker-end="url(#a-arr)"/>
+          <path d="M680,265 L760,228" marker-end="url(#a-arr)"/>
+        </g>
+        <g font-size="12" fill="#0f172a">
+          <text x="84" y="128">①</text>
+          <text x="262" y="102">② POST /orders</text>
+          <text x="418" y="210">③ SQL</text>
+          <text x="462" y="112">④ publish</text>
+          <text x="672" y="112">⑤ consume</text>
+          <text x="830" y="92">⑥ charge</text>
+          <text x="505" y="350" fill="#a16207">uses</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ================= B: C4 style ================= -->
+  <div class="option" data-choice="b-c4-boxes" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content" style="width:100%">
+      <h3>Standard architecture boxes (C4 style)</h3>
+      <p>The industry-standard "C4" look: solid boxes saying what each part is and what technology it uses, and a plain sentence on every arrow. Less pictorial, very consistent. <b>Output:</b> Mermaid or PlantUML text that shows up as a picture in GitHub / Azure DevOps wikis, plus PNG.</p>
+      <svg viewBox="0 0 1060 380" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" style="background:#fff;border-radius:8px;margin-top:8px">
+        <defs>
+          <marker id="b-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#666"/></marker>
+        </defs>
+        <!-- person -->
+        <circle cx="85" cy="128" r="24" fill="#08427b"/>
+        <rect x="20" y="150" width="130" height="90" rx="18" fill="#08427b"/>
+        <text x="85" y="185" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Customer</text>
+        <text x="85" y="203" text-anchor="middle" fill="#cfe0f5" font-size="11">[Person]</text>
+        <text x="85" y="222" text-anchor="middle" fill="#fff" font-size="11">Buys products</text>
+
+        <!-- boundaries -->
+        <g fill="none" stroke="#888" stroke-dasharray="7 5" stroke-width="1.3">
+          <rect x="195" y="110" width="215" height="160" rx="4"/>
+          <rect x="450" y="30" width="215" height="335" rx="4"/>
+          <rect x="705" y="30" width="200" height="175" rx="4"/>
+        </g>
+        <g font-size="11" fill="#555">
+          <text x="203" y="262">shop-web  [repository]</text>
+          <text x="458" y="357">order-api  [repository]</text>
+          <text x="713" y="197">payment-service  [repository]</text>
+        </g>
+
+        <!-- containers -->
+        <g>
+          <rect x="215" y="135" width="175" height="105" rx="6" fill="#1168bd"/>
+          <text x="302" y="163" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Shop Web</text>
+          <text x="302" y="181" text-anchor="middle" fill="#cfe0f5" font-size="11">[Container: React]</text>
+          <text x="302" y="203" text-anchor="middle" fill="#fff" font-size="11">Browse, cart and</text>
+          <text x="302" y="218" text-anchor="middle" fill="#fff" font-size="11">checkout pages</text>
+
+          <rect x="470" y="55" width="175" height="105" rx="6" fill="#1168bd"/>
+          <text x="557" y="83" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Order API</text>
+          <text x="557" y="101" text-anchor="middle" fill="#cfe0f5" font-size="11">[Container: Java, Spring]</text>
+          <text x="557" y="123" text-anchor="middle" fill="#fff" font-size="11">Validates and stores</text>
+          <text x="557" y="138" text-anchor="middle" fill="#fff" font-size="11">orders</text>
+
+          <path d="M470,232 L470,320 A87,14 0 0,0 645,320 L645,232" fill="#1168bd"/>
+          <ellipse cx="557" cy="232" rx="87" ry="14" fill="#2a7fd4"/>
+          <text x="557" y="272" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Orders DB</text>
+          <text x="557" y="290" text-anchor="middle" fill="#cfe0f5" font-size="11">[Container: SQL Server]</text>
+
+          <rect x="718" y="55" width="175" height="105" rx="6" fill="#1168bd"/>
+          <text x="805" y="83" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Payment Service</text>
+          <text x="805" y="101" text-anchor="middle" fill="#cfe0f5" font-size="11">[Container: .NET 8]</text>
+          <text x="805" y="123" text-anchor="middle" fill="#fff" font-size="11">Charges the card for</text>
+          <text x="805" y="138" text-anchor="middle" fill="#fff" font-size="11">each new order</text>
+
+          <rect x="718" y="255" width="175" height="80" rx="6" fill="#438dd5"/>
+          <text x="805" y="285" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">order-events</text>
+          <text x="805" y="303" text-anchor="middle" fill="#e3eefa" font-size="11">[Container: Kafka topic]</text>
+
+          <rect x="935" y="65" width="115" height="85" rx="6" fill="#999"/>
+          <text x="992" y="98" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Stripe</text>
+          <text x="992" y="116" text-anchor="middle" fill="#f1f1f1" font-size="11">[External system]</text>
+        </g>
+
+        <!-- relationships -->
+        <g stroke="#666" stroke-width="1.6" fill="none">
+          <path d="M150,195 L213,190" marker-end="url(#b-arr)"/>
+          <path d="M390,160 L468,120" marker-end="url(#b-arr)"/>
+          <path d="M557,160 L557,216" marker-end="url(#b-arr)"/>
+          <path d="M645,140 L716,275" marker-end="url(#b-arr)"/>
+          <path d="M805,255 L805,162" marker-end="url(#b-arr)"/>
+          <path d="M893,107 L933,107" marker-end="url(#b-arr)"/>
+        </g>
+        <g font-size="10.5" fill="#444">
+          <text x="152" y="182">Uses</text>
+          <text x="384" y="118">Places order</text><text x="384" y="131" fill="#888">[JSON/HTTPS]</text>
+          <text x="565" y="190">Reads/writes</text><text x="565" y="203" fill="#888">[JDBC]</text>
+          <text x="660" y="232">Publishes</text><text x="660" y="245" fill="#888">OrderPlaced</text>
+          <text x="812" y="215">Consumes</text>
+          <text x="896" y="98">Charges</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ================= C: Repo link map ================= -->
+  <div class="option" data-choice="c-repo-link-map" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content" style="width:100%">
+      <h3>Repo link map (how the repos connect)</h3>
+      <p>Each repo is a card showing its key files and classes. The lines show exactly how repos link: API calls, message topics, shared packages. Each line points to the code where the link was found. Best when the question is "what breaks if I change this repo?" <b>Output:</b> SVG/PNG, plus an HTML version you can click through.</p>
+      <svg viewBox="0 0 1000 420" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" style="background:#fff;border-radius:8px;margin-top:8px">
+        <defs>
+          <marker id="c-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0f172a"/></marker>
+          <marker id="c-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a16207"/></marker>
+          <filter id="c-sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.15"/></filter>
+        </defs>
+        <!-- cards -->
+        <g filter="url(#c-sh)">
+          <rect x="25" y="40" width="270" height="150" rx="10" fill="#fff" stroke="#cbd5e1"/>
+          <rect x="365" y="40" width="270" height="190" rx="10" fill="#fff" stroke="#cbd5e1"/>
+          <rect x="705" y="40" width="270" height="150" rx="10" fill="#fff" stroke="#cbd5e1"/>
+          <rect x="365" y="300" width="270" height="100" rx="10" fill="#fff" stroke="#cbd5e1"/>
+        </g>
+        <g>
+          <path d="M25,50 a10,10 0 0,1 10,-10 h250 a10,10 0 0,1 10,10 v22 h-270 z" fill="#3b82f6"/>
+          <path d="M365,50 a10,10 0 0,1 10,-10 h250 a10,10 0 0,1 10,10 v22 h-270 z" fill="#16a34a"/>
+          <path d="M705,50 a10,10 0 0,1 10,-10 h250 a10,10 0 0,1 10,10 v22 h-270 z" fill="#9333ea"/>
+          <path d="M365,310 a10,10 0 0,1 10,-10 h250 a10,10 0 0,1 10,10 v22 h-270 z" fill="#ca8a04"/>
+        </g>
+        <g fill="#fff" font-size="14" font-weight="700">
+          <text x="38" y="62">⎇ shop-web</text>
+          <text x="378" y="62">⎇ order-api</text>
+          <text x="718" y="62">⎇ payment-service</text>
+          <text x="378" y="322">⎇ shared-contracts</text>
+        </g>
+        <g fill="#e2e8f0" font-size="11" text-anchor="end">
+          <text x="285" y="61">TypeScript · React</text>
+          <text x="625" y="61">Java · Spring Boot</text>
+          <text x="965" y="61">C# · .NET 8</text>
+          <text x="625" y="321">OpenAPI · Avro</text>
+        </g>
+        <g font-family="Consolas, Menlo, monospace" font-size="12" fill="#334155">
+          <text x="40" y="100">pages/Checkout.tsx</text>
+          <text x="40" y="122">pages/Cart.tsx</text>
+          <rect x="34" y="134" width="190" height="22" rx="4" fill="#dbeafe"/>
+          <text x="40" y="150">api/orderClient.ts</text>
+
+          <rect x="374" y="88" width="160" height="22" rx="4" fill="#dcfce7"/>
+          <text x="380" y="104">OrderController</text>
+          <text x="380" y="128">OrderService</text>
+          <text x="380" y="152">OrderRepository</text>
+          <text x="380" y="174" fill="#64748b">  └ table ORDERS</text>
+          <rect x="374" y="186" width="160" height="22" rx="4" fill="#dcfce7"/>
+          <text x="380" y="202">OrderEventPublisher</text>
+
+          <rect x="714" y="88" width="190" height="22" rx="4" fill="#f3e8ff"/>
+          <text x="720" y="104">OrderEventsConsumer</text>
+          <text x="720" y="128">ChargeHandler</text>
+          <text x="720" y="152">StripeClient</text>
+          <text x="720" y="174" fill="#64748b">  └ → Stripe API (external)</text>
+
+          <text x="380" y="360">orders.openapi.yaml</text>
+          <text x="380" y="382">OrderPlaced.avsc</text>
+        </g>
+        <!-- runtime links -->
+        <g stroke="#0f172a" stroke-width="2.2" fill="none">
+          <path d="M224,145 C300,145 300,99 372,99" marker-end="url(#c-arr)"/>
+          <path d="M534,197 C640,197 620,99 712,99" marker-end="url(#c-arr)"/>
+        </g>
+        <g font-size="11.5">
+          <rect x="248" y="104" width="98" height="20" rx="10" fill="#0f172a"/>
+          <text x="297" y="118" text-anchor="middle" fill="#fff">POST /orders</text>
+          <rect x="590" y="142" width="104" height="20" rx="10" fill="#0f172a"/>
+          <text x="642" y="156" text-anchor="middle" fill="#fff">topic order-events</text>
+        </g>
+        <!-- build-time links -->
+        <g stroke="#a16207" stroke-width="1.6" fill="none" stroke-dasharray="6 4">
+          <path d="M365,350 C200,350 160,260 160,192" marker-end="url(#c-arr2)"/>
+          <path d="M500,300 L500,232" marker-end="url(#c-arr2)"/>
+          <path d="M635,375 C820,375 840,260 840,192" marker-end="url(#c-arr2)"/>
+        </g>
+        <g font-size="11" fill="#a16207">
+          <text x="130" y="290">npm package</text><text x="130" y="304" fill="#94a3b8">generated client</text>
+          <text x="508" y="272">Maven</text>
+          <text x="790" y="290">NuGet package</text><text x="790" y="304" fill="#94a3b8">Avro classes</text>
+        </g>
+        <!-- evidence footnotes -->
+        <g font-size="10.5" fill="#64748b" font-family="Consolas, Menlo, monospace">
+          <text x="25" y="22">found in orderClient.ts:42  →  OrderController.java:18</text>
+          <text x="660" y="22">found in OrderEventPublisher.java:31</text>
+        </g>
+        <!-- legend -->
+        <g font-size="11" fill="#334155">
+          <line x1="700" y1="395" x2="730" y2="395" stroke="#0f172a" stroke-width="2.2"/><text x="736" y="399">runtime call / message</text>
+          <line x1="860" y1="395" x2="890" y2="395" stroke="#a16207" stroke-width="1.6" stroke-dasharray="6 4"/><text x="896" y="399">shared code</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ================= D: Whiteboard sketch ================= -->
+  <div class="option" data-choice="d-whiteboard-sketch" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content" style="width:100%">
+      <h3>Whiteboard sketch</h3>
+      <p>Hand-drawn look, like someone sketched it in a meeting. Friendly for walkthroughs and slides; signals "overview, not blueprint". <b>Output:</b> Excalidraw file you can keep editing, plus PNG/SVG.</p>
+      <svg viewBox="0 0 1000 360" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe Print, 'Comic Sans MS', 'Bradley Hand', cursive" style="background:#fffdf7;border-radius:8px;margin-top:8px">
+        <defs>
+          <filter id="d-rough"><feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="4"/></filter>
+          <marker id="d-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,0 L9,5 L0,10" fill="none" stroke="#1e1e1e" stroke-width="1.6"/></marker>
+        </defs>
+        <g filter="url(#d-rough)" stroke="#1e1e1e" stroke-width="2.2" fill="none">
+          <!-- stick figure -->
+          <circle cx="55" cy="125" r="16"/>
+          <path d="M55,141 L55,195 M55,160 L30,178 M55,160 L80,178 M55,195 L35,230 M55,195 L75,230"/>
+          <!-- boxes -->
+          <rect x="130" y="110" width="170" height="95" rx="8" fill="#a5d8ff" fill-opacity="0.55"/>
+          <rect x="380" y="60" width="180" height="95" rx="8" fill="#b2f2bb" fill-opacity="0.55"/>
+          <path d="M395,230 L395,295 A75,14 0 0,0 545,295 L545,230" fill="#b2f2bb" fill-opacity="0.4"/>
+          <ellipse cx="470" cy="230" rx="75" ry="14" fill="#b2f2bb" fill-opacity="0.55"/>
+          <rect x="640" y="60" width="180" height="95" rx="8" fill="#d0bfff" fill-opacity="0.55"/>
+          <path d="M650,250 q20,-40 60,-25 q30,-35 70,-5 q40,0 30,35 q-5,25 -40,20 h-90 q-40,0 -30,-25 z" fill="#e9ecef"/>
+          <!-- arrows -->
+          <path d="M85,165 Q105,160 126,158" marker-end="url(#d-arr)"/>
+          <path d="M302,145 Q340,110 376,108" marker-end="url(#d-arr)"/>
+          <path d="M470,157 Q474,190 470,212" marker-end="url(#d-arr)"/>
+          <path d="M562,105 Q600,98 636,106" marker-end="url(#d-arr)"/>
+          <path d="M730,157 Q735,185 732,210" marker-end="url(#d-arr)"/>
+        </g>
+        <g fill="#1e1e1e" font-size="17" text-anchor="middle">
+          <text x="55" y="258">customer</text>
+          <text x="215" y="150">shop-web</text>
+          <text x="215" y="176" font-size="13" fill="#1971c2">(React)</text>
+          <text x="470" y="100">order-api</text>
+          <text x="470" y="126" font-size="13" fill="#2f9e44">(Java)</text>
+          <text x="470" y="275">orders DB</text>
+          <text x="730" y="100">payment-service</text>
+          <text x="730" y="126" font-size="13" fill="#6741d9">(.NET)</text>
+          <text x="740" y="262" font-size="16">Stripe</text>
+        </g>
+        <g fill="#495057" font-size="13">
+          <text x="318" y="105">POST /orders</text>
+          <text x="565" y="88">Kafka: order-events</text>
+          <text x="745" y="190">charge card</text>
+        </g>
+        <!-- sticky note -->
+        <g transform="rotate(3 905 120)">
+          <rect x="850" y="70" width="125" height="100" fill="#ffec99" stroke="#e8b600" stroke-width="1"/>
+          <text x="862" y="98" font-size="13" fill="#5c4400">shared-contracts</text>
+          <text x="862" y="120" font-size="12" fill="#5c4400">schemas used by</text>
+          <text x="862" y="140" font-size="12" fill="#5c4400">all 3 repos ✓</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+</div>
