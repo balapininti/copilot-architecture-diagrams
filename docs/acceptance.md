@@ -131,13 +131,15 @@ Exact messages the installer prints (from `install.ps1`):
 |---|---|---|---|
 | 1 | `powershell -ExecutionPolicy Bypass -File .\install.ps1` from the package root; then `$LASTEXITCODE` | success and `Python OK:` lines above; `$LASTEXITCODE` is 0 | |
 | 2 | `dir "$env:USERPROFILE\.copilot\skills\architecture-diagrams"` | contains `SKILL.md`, `README.md`, `scripts\`, `assets\`, `reference\` | |
-| 3 | `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\work\claims-estate` (the folder that holds the cloned repos; create it first with a copy of the fixture) | `Installed the project skill at C:\work\claims-estate\.github\skills\architecture-diagrams` (or the wording above); exit 0 | |
+| 3 | `powershell -ExecutionPolicy Bypass -File .\install.ps1 -Project C:\work\claims-estate` (the folder that holds the cloned repos; create it first with a copy of the fixture) | `Installed the project skill for the workspace C:\work\claims-estate at C:\work\claims-estate\.github\skills\architecture-diagrams`; exit 0 | |
 | 4 | Run step 3 again | prints `Replacing the existing copy at ...`; no `architecture-diagrams\architecture-diagrams` nesting | |
 | 5 | Path with a space: `mkdir "C:\work dir\ws"` then `... .\install.ps1 -Project "C:\work dir\ws"` | installs under `C:\work dir\ws\.github\skills\architecture-diagrams`; exit 0 | |
 | 6 | Missing folder: `... .\install.ps1 -Project C:\does\not\exist` | prints `The folder C:\does\not\exist does not exist.`; exit 1 | |
 | 7 | No-Python test, safe (changes nothing permanently): open a **new** PowerShell and run `$env:PATH = (($env:PATH -split ';') \| Where-Object { $_ -notmatch 'Python\|WindowsApps' }) -join ';'`, then `.\install.ps1` in that window. Note: the `py` launcher lives in `C:\Windows`, so it may still be found; if `py -3` still works, also run `Get-Command py` and record it, and rename nothing | if Python is found only via `py`, record it as "py launcher found". If nothing is found: the fix message above is printed, exit code 2, no stack trace | |
 | 8 | `type "$env:USERPROFILE\.copilot\skills\architecture-diagrams\assets\tasks.json"` | commands refer to the installed path and the Python command found (`python` or `py -3`) | |
 | 9 | Close that PowerShell window; network back on | | |
+
+Note on W2 step 7: the `\|` in that command is a Markdown table escape. In PowerShell type a plain `|`.
 
 ### W3. VS Code agent mode, the five spec section 9 requests
 
@@ -166,7 +168,7 @@ Start `copilot` in `<fixture>` (or the workspace folder).
 |---|---|---|---|
 | 1 | With the **personal** install only: `/skills list`. Paste the output as text into the Result column | `architecture-diagrams` is listed | |
 | 2 | Ask the five requests from W3 and fill a copy of the W3 table | each passes by the W3 rule | |
-| 3 | Non-git workspace: `mkdir C:\temp\nogit`, copy the fixture repos in, check no `.git` exists in `C:\temp\nogit` or any parent (`git -C C:\temp\nogit rev-parse --show-toplevel` must fail). Remove the personal install first (rename `%USERPROFILE%\.copilot\skills\architecture-diagrams`), run `install.ps1 -Project C:\temp\nogit`, start `copilot` in `C:\temp\nogit`, run `/skills list`, paste the text | **Record whether the project install is found.** If not, record what is needed (a `.git` folder, or the personal install). If not found, the README's `-Project` advice must change | |
+| 3 | Non-git workspace: `mkdir C:\temp\nogit`, copy the fixture repos in, check no `.git` exists in `C:\temp\nogit` or any parent (`git -C C:\temp\nogit rev-parse --show-toplevel` must fail). Remove the personal install first (rename `$env:USERPROFILE\.copilot\skills\architecture-diagrams`), run `install.ps1 -Project C:\temp\nogit`, start `copilot` in `C:\temp\nogit`, run `/skills list`, paste the text | **Record whether the project install is found.** If not, record what is needed (a `.git` folder, or the personal install). If not found, the README's `-Project` advice must change | |
 | 4 | Same with `git init` run in `C:\temp\nogit` | listed | |
 | 5 | Add the skill while a session is open, then `/skills reload` and `/skills list` | listed after reload | |
 | 6 | Ask for a diagram and watch the approval prompt | command shown and approvable once; the answer relays the paths | |
@@ -210,11 +212,11 @@ Run in Windows PowerShell inside the copied workspace (`C:\work\claims-estate`).
 $d = "\\?\C:\work\claims-estate\claims-batch\cobol"; 1..12 | ForEach-Object { $d += "\" + ("longfolder_" + $_ + "_" + ("x" * 12)) }; New-Item -ItemType Directory -Path $d -Force | Out-Null; Copy-Item "\\?\C:\work\claims-estate\claims-batch\cobol\CLMB200.cbl" "$d\LONGPATH1.cbl"; "$d\LONGPATH1.cbl".Length
 ```
 
-The last number printed must be over 260 (it is about 330). Then:
+The last number printed is 373 (the string includes the 4-character `\\?\` prefix; the real path is 369 characters), so it is over 260. Then:
 
 | Step | What to do | Pass when | Result |
 |---|---|---|---|
-| 1 | `python "%USERPROFILE%\.copilot\skills\architecture-diagrams\scripts\run.py" scan --workspace C:\work\claims-estate` with long paths **not** enabled (default on most machines) | finishes without a traceback. Record which happened: **(A) file read, or (B) clear "skipped / path too long" message naming the file, then the scan continues.** A silent skip with no message = **FAIL** | |
+| 1 | `python "$env:USERPROFILE\.copilot\skills\architecture-diagrams\scripts\run.py" scan --workspace C:\work\claims-estate` with long paths **not** enabled (default on most machines) | finishes without a traceback. Record which happened: **(A) file read, or (B) clear "skipped / path too long" message naming the file, then the scan continues.** A silent skip with no message = **FAIL** | |
 | 2 | `python ... list --what programs --workspace C:\work\claims-estate` and look for `LONGPATH1` | listed (A), or reported as skipped in step 1 (B) | |
 | 3 | Repeat step 1 after enabling long paths (`LongPathsEnabled` = 1 under `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem`, then sign out and in) | file read | |
 | 4 | Deep workspace: put the whole workspace at a path about 200 characters long and run `draw --level landscape` | outputs are written, or a clear error names the path | |
