@@ -147,3 +147,16 @@ def test_more_than_five_problems_are_summarised(tmp_path, capsys):
     assert out.count("Problem in gitdiagram-claims-batch.json:") == 5
     assert "... and 3 more (see " in out and "gitdiagram-claims-batch-links.md" in out.split("... and 3 more")[1].split("\n")[0]
     assert "not yet grouped" not in out.replace("Not yet grouped", "")
+
+
+def test_top_issues_leave_out_the_scheduler_starts_line(tmp_path, capsys):
+    """The grey "starts" line is structure, not an issue (Ruling 2): it is never listed under
+    "Top issues" as "nothing found at the other end", and never crowds out a real one."""
+    w = tmp_path / "estate"
+    shutil.copytree(str(ESTATE), str(w))
+    rc = main(["draw", "--workspace", str(w), "--level", "gitdiagram", "--scope", "claims-batch"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    issues = out[out.index("Top issues:"):]
+    assert "structural" not in issues
+    assert "Scheduler ->" not in issues

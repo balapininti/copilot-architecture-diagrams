@@ -263,9 +263,11 @@ def _is_job(r: Resolved, scope: str) -> bool:
 
 
 def _top_issues(view, r: Resolved) -> List[str]:
+    from .views.common import STRUCTURAL
     names = {n.id: n.label for n in view.nodes}
     out = []
-    for e in sorted((e for e in view.edges if e.status != CONFIRMED),
+    # the Scheduler's grey "starts" line is structure, not an issue (Ruling 2)
+    for e in sorted((e for e in view.edges if e.status not in (CONFIRMED, STRUCTURAL)),
                     key=lambda e: (e.status != LOOSE, e.src, e.dst)):
         reason = next((u.reason for u in e.underlying if u.reason), None) or (
             "link is not confirmed" if e.status == PARTIAL else "nothing found at the other end")
