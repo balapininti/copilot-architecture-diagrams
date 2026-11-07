@@ -163,6 +163,28 @@ def test_cap():
     assert [e.status for e in edges(v, "program:P151", "program:P152")] == [PARTIAL]
 
 
+def test_cap_keeps_confirmed_links_inside_a_folded_box_in_the_report():
+    # final review I8: a confirmed line between two boxes folded into one "… N more" box
+    # is not drawn, but its resolver edges stay listed (on the folded box's underlying)
+    from archdiag.render.report import links_report
+    r = _big()
+    # a chain of confirmed calls through every program: folding must cut some of them
+    r.edges[:] = [Edge("program:P%03d" % i, "call", "program:P%03d" % (i + 1), CONFIRMED, None,
+                       []) for i in range(0, 199)]
+    v = build_view(r, default_groups(r), "application", "big")
+    more = [n for n in v.nodes if n.id.startswith("more:")]
+    drawn = {id(u) for e in v.edges for u in e.underlying}
+    listed = {id(u) for n in more for u in n.underlying}
+    assert listed  # the fixture folds some P -> P calls into one box
+    for e in r.edges:
+        if e.src.startswith("program:P") and e.dst.startswith("program:P"):
+            assert id(e) in drawn or id(e) in listed, (e.src, e.dst)
+    report = links_report(v, r)
+    for e in r.edges:
+        if e.src.startswith("program:P") and e.dst.startswith("program:P"):
+            assert "| program %s | call | program %s |" % (e.src[8:], e.dst[8:]) in report, e.src
+
+
 # ------------------------------------------------------------------ further checks
 
 def test_every_level_lays_out():

@@ -81,12 +81,20 @@ def cap(ctx: _Ctx, v: ViewGraph) -> None:
                                row=rows.pop() if len(rows) == 1 else None,
                                underlying=[u for m in ms for u in m.underlying]))
     remap = {nid: more_id(k) for nid, k in fold.items()}
+    new_by_id = {n.id: n for n in new_nodes}
     order: List[tuple] = []
     by: Dict[tuple, List[VEdge]] = {}
     for e in v.edges:
         s, d = remap.get(e.src, e.src), remap.get(e.dst, e.dst)
         if s == d and e.status == CONFIRMED and e.src != e.dst:
-            continue  # a confirmed line inside one folded box
+            # a confirmed line inside one folded box is not drawn; the box keeps its edges
+            # so the links report still lists every one
+            box = new_by_id.get(s)
+            if box is not None:
+                for u in e.underlying:
+                    if not any(x is u for x in box.underlying):
+                        box.underlying.append(u)
+            continue
         key = (s, d, e.status, e.kind)
         if key not in by:
             by[key] = []
