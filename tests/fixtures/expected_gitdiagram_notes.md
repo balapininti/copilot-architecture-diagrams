@@ -14,8 +14,9 @@ Rules cited:
 - **C3** the landscape combining rule: a line is never more certain than the least certain
   target its label names; between boxes of this repo one line per (family, best status per
   target), so a partly known target rides on its own dotted line.
-- **Stub rule** Task 4 brief: a line to or from an `out:` stub takes the least certain edge
-  under it (one line per family), so loose and partial stay visible.
+- **Stub rule** Task 4 brief, revised by Ruling 7 (task 9 review): a line to or from an `out:`
+  stub is one line per (family, status) like C3, so loose and partial stay visible and a
+  confirmed target keeps a solid line of its own.
 - **R2, R5, R6** global.md Rulings 2 (structural Scheduler lines), 5 (a group's call to an
   entry point is drawn to the handler's group, no more certain than either edge), 6 (temp
   `&&` datasets are not boxes; folded into the job line as "via &&X").
@@ -85,7 +86,8 @@ of every group on purpose: "Not yet grouped" (§4.2). It defines no node, so it 
 | A6 | MQ gateway → out:claims-online "MQ PUT · CLM.REQ.LQ" | confirmed | MqClaimGateway.java:22 `${mq.request}` = CLM.REQ (application.yml:3), QALIAS → CLM.REQ.LQ, defined in claims-online/mq/claims.mqsc:2: another repo (§4.2, §10.2) |
 | A7 | MQ gateway → out:claims-online "MQ GET · CLM.RSP" | confirmed | MqClaimGateway.java:26, `${mq.reply}` = CLM.RSP (application.yml:4), claims.mqsc:7. Different family from A6 |
 | A8 | MQ gateway → out:missing "no consumer found · …CLM.AUDIT" | partial | AuditPublisher.java:15 puts to CLM.AUDIT, which no MQSC defines: a resource with no defining file, touched by one group only, so a detail line on MQ gateway (§10.2). Its gap edge (put only, no get or trigger: partial, base Ruling 21) leaves from there to the loose-ends stub. Stub rule; a loose end never looks solid. claims-online CLMO140's put is named on the detail line, not drawn |
-| A9 | Data access → out:claims-db "SQL · PAYMENT, POLICY" | partial | ClaimRepository.java:15 `CLMS.POLICY` (confirmed) and PaymentArchiveRepository.java:17 `OLDS.PAYMENT` (partial: OLDS is not an environment qualifier). Both tables are in claims-db: one line to the one stub, at the least certain edge under it (stub rule, C3: never more certain than PAYMENT). See "Needs a ruling" in the task 9 report |
+| A9 | Data access → out:claims-db "SQL · POLICY" | confirmed | ClaimRepository.java:15 `FROM CLMS.POLICY`, qualified, exact DDL match (claims-db/ddl/POLICY.sql:1). Ruling 7: lines to and from outside stubs split per status like the landscape's C3 fix, so the confirmed target keeps its own solid line (was one dotted "SQL · PAYMENT, POLICY" line under the Task 4 stub rule) |
+| A9b | Data access → out:claims-db "SQL · PAYMENT" | partial | PaymentArchiveRepository.java:17 `FROM OLDS.PAYMENT`: OLDS is not an environment qualifier, so the match to CLMS.PAYMENT (PAYMENT.sql:1) is partial. Ruling 7: its own dotted line, never riding on POLICY's solid one |
 | A10 | z/OS Connect client → out:claims-online "REST · GET /zos/claims/{}/status" | partial | ClaimStatusClient.java:19 with zosUrl from application.yml:6; the zosapi is in claims-online (apis/claimstatus/package.xml); host not tied to claims-online: partial (base Ruling 36) |
 | A11 | Outbound clients → out:external "REST · rates.example.com" | loose | RatesClient.java:11 absolute URL nothing serves (expected_links): loose. Stub rule |
 | A12 | REST controllers → Data access "looks up claims in" | partial (suggested) | the one suggested link in gitdiagram-claims-api.json; suggested arrows are always dotted and name existing groups (§4.2, §2) |
@@ -105,3 +107,8 @@ Not drawn, on purpose:
   line. No entry was changed and no view fix was needed.
 - `tests/test_gitdiagram_cli.py` copies the estate; its tests start with no gitdiagram file,
   so its helper now removes the two fixture files from the copy.
+- Ruling 7 (coordinator, after the first gate run): outside-stub lines split per status. A9 was
+  one dotted line; it is now A9 (solid, POLICY) and A9b (dotted, PAYMENT). The view was
+  changed (`views/gitdiagram.py`), not just the entry. No other entry changed: every other
+  stub line stands on edges of one status. Ruling 8 confirmed that CLMS.CLMHIST stays a
+  counted, named detail on its one group (no change).

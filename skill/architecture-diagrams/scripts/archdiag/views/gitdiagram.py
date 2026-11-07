@@ -17,8 +17,8 @@ Every resolved node is mapped to one box by the file that defines it (``file_of`
 A step's dataset use is drawn from the group of the program it runs when that program opens
 the DD (10.1); the line is then no more certain than the step's ``runs`` edge. Lines between
 boxes of this repo follow the landscape rule (one line per family and status, so a target
-known only partly gets its own dotted line); a line to or from an outside stub takes the
-least certain edge under it. Links inside one group are counted on the box and kept in its
+known only partly gets its own dotted line), lines to and from outside stubs too (Ruling 7).
+Links inside one group are counted on the box and kept in its
 ``underlying`` for the links report.
 """
 from __future__ import annotations
@@ -277,8 +277,8 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     order: List[tuple] = []
     by: Dict[tuple, List[Tuple[Edge, str, List[Edge]]]] = {}
     for s, d, fam, e, st, extra in drawn:
-        outside = s.startswith("out:") or d.startswith("out:")
-        key = (s, d, fam, None if outside else best[(s, d, fam, e.dst)])
+        # one line per family and status, to an outside stub too (Ruling 7)
+        key = (s, d, fam, best[(s, d, fam, e.dst)])
         if key not in by:
             by[key] = []
             order.append(key)
@@ -294,7 +294,7 @@ def gitdiagram_view(ctx: _Ctx, gd: GitDiagram, repo: str) -> ViewGraph:
     for key in order:
         s, d, fam, st = key
         items = by[key]
-        status = st if st is not None else _least_certain(x[1] for x in items)
+        status = st
         under: List[Edge] = []
         for e, _, extra in items:
             for u in [e] + extra:

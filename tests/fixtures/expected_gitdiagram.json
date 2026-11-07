@@ -57,7 +57,8 @@
       {"id": "A6", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ PUT", "status": "confirmed"},
       {"id": "A7", "src": "grp:MQ gateway", "dst": "out:claims-online", "label_family": "MQ GET", "status": "confirmed"},
       {"id": "A8", "src": "grp:MQ gateway", "dst": "out:missing", "label_family": "no consumer found", "status": "partial"},
-      {"id": "A9", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "partial"},
+      {"id": "A9", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "confirmed"},
+      {"id": "A9b", "src": "grp:Data access", "dst": "out:claims-db", "label_family": "SQL", "status": "partial"},
       {"id": "A10", "src": "grp:z/OS Connect client", "dst": "out:claims-online", "label_family": "REST", "status": "partial"},
       {"id": "A11", "src": "grp:Outbound clients", "dst": "out:external", "label_family": "REST", "status": "loose"},
       {"id": "A12", "src": "grp:REST controllers", "dst": "grp:Data access", "label_family": "looks up claims in", "status": "partial", "suggested": true}

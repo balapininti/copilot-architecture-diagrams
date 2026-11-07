@@ -219,19 +219,27 @@ def test_outside_stubs_collapse_per_repo():
     assert ext and all(e.status == PARTIAL for e in ext)  # the transfer is partly known
 
 
-def test_outside_stub_line_takes_the_least_certain_edge():
+def test_outside_stub_lines_split_per_status():
+    """Ruling 7: a line to an outside stub is split per status like the landscape's C3 fix:
+    a solid line for the confirmed target, a dotted one for the partly known target, and a
+    target reached both ways rides on the line of its most certain edge."""
     p = prog("P", "cobol/P.cbl")
+    q = prog("Q", "cobol/Q.cbl")
     t1 = Node("table:S.T1", "table", "S.T1", "db", [_ev("db", "ddl/T1.sql")], {"name": "T1"})
     t2 = Node("table:S.T2", "table", "S.T2", "db", [_ev("db", "ddl/T2.sql")], {"name": "T2"})
     edges = [Edge(p.id, "select", t1.id, CONFIRMED, None, [_ev("r1", "cobol/P.cbl", 3)]),
-             Edge(p.id, "select", t2.id, PARTIAL, "schema", [_ev("r1", "cobol/P.cbl", 4)])]
-    r = synthetic([p, t1, t2], edges, [("cobol/P.cbl", "cobol")])
+             Edge(p.id, "select", t2.id, PARTIAL, "schema", [_ev("r1", "cobol/P.cbl", 4)]),
+             Edge(q.id, "select", t1.id, PARTIAL, "schema", [_ev("r1", "cobol/Q.cbl", 3)])]
+    r = synthetic([p, q, t1, t2], edges, [("cobol/P.cbl", "cobol"), ("cobol/Q.cbl", "cobol")])
     r.inventory.repos.append(Repo("db", "db"))
     gd = GitDiagram("r1", "", [GitGroup("P", "", ["cobol/"])], [], [], True)
     v = view_of(gd, r)
-    ln, = lines(v, "grp:P", "out:db")
-    assert ln.status == PARTIAL and ln.label == "SQL · T1, T2"
+    got = sorted((e.label, e.status) for e in lines(v, "grp:P", "out:db"))
+    assert got == [("SQL · T1", CONFIRMED), ("SQL · T2", PARTIAL)]
+    solid, = [e for e in lines(v, "grp:P", "out:db") if e.status == CONFIRMED]
+    assert len(solid.underlying) == 2  # Q's partial use of T1 is kept under T1's line
     assert node(v, "out:db").label == "db (2 tables)"
+    assert node(v, "out:db").status == PARTIAL  # the stub box: its least certain line
 
 
 def _jobs_estate(submitted):
