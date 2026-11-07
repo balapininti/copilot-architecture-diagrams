@@ -6,7 +6,9 @@ parts. **Run here (results)** holds checks that were actually run, with real out
 **To run on Windows (checklist)** holds everything else, with a blank result column. Nothing in
 the second part has been run, and none of it is marked as passed.
 
-Date of the run here: 2026-11-07. Commit under test: branch `build/v1`, HEAD `f69d1de` (the first version of this file; product code unchanged since release 0.2.0 commit `9c68564`). `.venv` runs Python 3.14.4 (`.venv/bin/python --version`), so the pytest run here is **not** a 3.9 run.
+Date of the run here: 2026-11-07. Commit under test: branch `build/v1`, HEAD `f69d1de` (the first version of this file), archdiag 0.1.0. `.venv` runs Python 3.14.4 (`.venv/bin/python --version`), so the pytest run here is **not** a 3.9 run.
+
+Release under acceptance: archdiag **0.1.1** (`archdiag/__init__.py`, `pyproject.toml`), the final fix wave on `build/v1`; its product code is as of commit `86477c5` (later commits on the branch change tests and docs only). The table below was recorded at `f69d1de`. For 0.1.1 only checks 1 and 2a were re-run here: 1 gave **PASS** (full suite green, see `.superpowers/sdd/2026-11-06-architecture-diagram-skill/final-fix-report.md`), 2a parsed all 43 files as Python 3.9. Run the rest of this file, and the Windows checklist, on the 0.1.1 HEAD.
 
 ## Run here (results)
 
