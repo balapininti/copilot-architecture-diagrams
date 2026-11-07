@@ -444,3 +444,103 @@ def test_b2_arrow_expression_body_ends_at_the_statement(tmp_path):
     got = {(r.src, r.target_name) for r in inv.refs if r.op == "http"}
     assert got == {("component:r/one", "GET /api/one/${id}"),
                    ("component:r/a", "POST /api/two")}
+
+
+# ------------------------------------------------------------------ B3: lazy and redirect routes
+
+_COMP = ("import { Component } from '@angular/core';\n"
+         "@Component({ selector: 'x', template: '' })\nexport class %s {}\n")
+
+
+def test_b3_lazy_children_routes_get_the_parent_path(tmp_path):
+    inv = ws(tmp_path, {
+        "src/app/app.routes.ts": (
+            "import { Routes } from '@angular/router';\n"
+            "export const routes: Routes = [\n"
+            "  { path: 'claims', loadChildren: () => import('./claims/claims.routes')"
+            ".then(m => m.CLAIM_ROUTES) },\n"
+            "];\n"),
+        "src/app/claims/claims.routes.ts": (
+            "import { Routes } from '@angular/router';\n"
+            "import { ListComponent } from './list.component';\n"
+            "export const CLAIM_ROUTES: Routes = [\n"
+            "  { path: ':id', component: ListComponent },\n"
+            "];\n"),
+        "src/app/claims/list.component.ts": _COMP % "ListComponent"})
+    pages = sorted(n for n in inv.nodes if n.startswith("page:"))
+    assert pages == ["page:r/claims/:id"]
+    (u,) = refs_of(inv, "page:r/claims/:id", "uses")
+    assert u.target_name == "r/ListComponent"
+    assert u.evidence.path == "src/app/claims/claims.routes.ts" and u.evidence.line == 4
+
+
+def test_b3_lazy_module_follows_its_routing_module(tmp_path):
+    inv = ws(tmp_path, {
+        "src/app/app-routing.module.ts": (
+            "const routes: Routes = [\n"
+            "  { path: 'admin', loadChildren: './admin/admin.module#AdminModule' },\n"
+            "];\n"
+            "@NgModule({ imports: [RouterModule.forRoot(routes)] })\n"
+            "export class AppRoutingModule {}\n"),
+        "src/app/admin/admin.module.ts": (
+            "import { AdminRoutingModule } from './admin-routing.module';\n"
+            "@NgModule({ imports: [AdminRoutingModule] })\nexport class AdminModule {}\n"),
+        "src/app/admin/admin-routing.module.ts": (
+            "import { HomeComponent } from './home.component';\n"
+            "const routes: Routes = [{ path: '', component: HomeComponent }];\n"
+            "@NgModule({ imports: [RouterModule.forChild(routes)] })\n"
+            "export class AdminRoutingModule {}\n"),
+        "src/app/admin/home.component.ts": _COMP % "HomeComponent"})
+    assert "page:r/admin" in inv.nodes
+    assert "page:r/" not in inv.nodes
+
+
+def test_b3_lazy_target_not_found_is_reported(tmp_path):
+    inv = ws(tmp_path, {"src/app/app.routes.ts": (
+        "export const routes: Routes = [\n"
+        "  { path: 'gone', loadChildren: () => import('./gone/gone.routes')"
+        ".then(m => m.R) },\n];\n")})
+    (u,) = refs_of(inv, "page:r/gone", "uses")
+    assert u.target_name is None and "loadChildren" in u.reason and u.evidence.line == 2
+
+
+def test_b3_redirect_route_links_to_its_target_page(tmp_path):
+    inv = ws(tmp_path, {
+        "src/app/app.routes.ts": (
+            "import { ListComponent } from './list.component';\n"
+            "export const routes: Routes = [\n"
+            "  { path: '', redirectTo: 'claims', pathMatch: 'full' },\n"
+            "  { path: 'claims', component: ListComponent },\n"
+            "  { path: 'old', children: [\n"
+            "    { path: 'x', redirectTo: '/claims' },\n"
+            "    { path: 'y', redirectTo: 'z' },\n"
+            "  ] },\n"
+            "];\n"),
+        "src/app/list.component.ts": _COMP % "ListComponent"})
+    got = {(r.src, r.target_kind, r.target_name, r.evidence.line)
+           for r in inv.refs if r.op == "uses" and r.src.startswith("page:")}
+    assert got == {("page:r/", "page", "r/claims", 3),
+                   ("page:r/claims", "component", "r/ListComponent", 4),
+                   ("page:r/old/x", "page", "r/claims", 6),
+                   ("page:r/old/y", "page", "r/old/z", 7)}
+    from archdiag.resolve import resolve
+    res = resolve(inv, Config())
+    (e,) = [e for e in res.edges if e.src == "page:r/"]
+    assert e.dst == "page:r/claims" and e.status == "confirmed"
+    (e,) = [e for e in res.edges if e.src == "page:r/old/y"]
+    assert e.status == "loose"
+
+
+def test_b3_repeated_route_items_keep_their_own_lines(tmp_path):
+    inv = ws(tmp_path, {
+        "src/app/app.routes.ts": (
+            "import { B } from './b.component';\n"
+            "export const routes: Routes = [\n"
+            "  { path: 'a', children: [{ path: 'b', component: B }] },\n"
+            "  { path: 'b', component: B },\n"
+            "  {path:'b', component:B},\n"
+            "];\n"),
+        "src/app/b.component.ts": _COMP % "B"})
+    lines = sorted(r.evidence.line for r in inv.refs
+                   if r.op == "uses" and r.src in ("page:r/a/b", "page:r/b"))
+    assert lines == [3, 4, 5]

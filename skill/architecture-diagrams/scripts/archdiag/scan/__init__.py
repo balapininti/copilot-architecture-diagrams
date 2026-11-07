@@ -30,6 +30,11 @@ class ScanContext:
     java_consts: Dict[str, Dict[str, str]] = field(default_factory=dict)
     # ts_classes[repo][Name] = file stems that declare a component / injectable of that name
     ts_classes: Dict[str, Dict[str, Set[str]]] = field(default_factory=dict)
+    # Angular routes (pass 1, B3): per repo, file stem -> stems it imports by relative path;
+    # stems that declare a route array; lazy routes (parent stem, path, loaded stem or None)
+    ts_imports: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    ts_route_files: Dict[str, Set[str]] = field(default_factory=dict)
+    ts_lazy: Dict[str, List[Tuple[str, str, Optional[str]]]] = field(default_factory=dict)
     # config keys: where each base value came from, and keys whose base files disagree
     props_src: Dict[str, Dict[str, Tuple[str, str]]] = field(default_factory=dict)
     props_conflicts: Dict[str, Dict[str, str]] = field(default_factory=dict)

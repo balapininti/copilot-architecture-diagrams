@@ -600,7 +600,7 @@ class _Data:
                 self.queue(ref)
             elif kind == "endpoint" and op == "http":
                 self.http(ref)
-            elif op == "uses" and kind in ("class", "component"):
+            elif op == "uses" and kind in ("class", "component", "page"):
                 self.uses(ref)
         self.undefined_tables()
         self.handlers()

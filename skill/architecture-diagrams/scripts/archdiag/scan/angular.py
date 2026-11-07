@@ -41,12 +41,81 @@ def _decorated_classes(masked: str) -> List[Tuple[str, str, int]]:
     return out
 
 
+_ROUTE_ARRAY = re.compile(r"\bRoutes\s*=\s*\[|\b(?:forRoot|forChild|provideRouter)\s*\(\s*\[")
+_LAZY_SPEC = re.compile(r"\bimport\s*\(\s*(['\"`])([^'\"`]+)\1\s*\)")
+
+
+def _rel_stem(rel: str, spec: str) -> Optional[str]:
+    """The file stem a relative import ``spec`` written in ``rel`` names (None if not relative)."""
+    if not spec.startswith("."):
+        return None
+    segs = rel.split("/")[:-1]
+    for seg in spec.split("/"):
+        if seg == "..":
+            if segs:
+                segs.pop()
+        elif seg not in (".", ""):
+            segs.append(seg)
+    return _stem("/".join(segs))
+
+
 def collect_angular(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
-    _, masked = strip_code(text, ts=True)
+    clean, masked = strip_code(text, ts=True)
     known = ctx.ts_classes.setdefault(repo, {})
     stem = _stem(rel)
     for _, name, _ in _decorated_classes(masked):
         known.setdefault(name, set()).add(stem)
+    imports = ctx.ts_imports.setdefault(repo, {}).setdefault(stem, [])
+    for im in re.finditer(r"\bimport\b[^;'\"]*?\bfrom\s*['\"]([^'\"]+)['\"]", clean):
+        target = _rel_stem(rel, im.group(1))
+        if target is not None:
+            imports.append(target)
+    if _ROUTE_ARRAY.search(masked):
+        ctx.ts_route_files.setdefault(repo, set()).add(stem)
+        if "loadChildren" in masked:
+            # lazy routes: recorded now, matched to the loaded file once every file is known
+            s = _Src(repo, rel, text, ctx)
+            for o in _route_arrays(s):
+                _routes(s, o, "", repo, [], [], ctx.ts_lazy.setdefault(repo, []))
+
+
+def _route_arrays(s: "_Src") -> List[int]:
+    out: List[int] = []
+    for m in _ROUTE_ARRAY.finditer(s.masked):
+        if m.end() - 1 not in out:
+            out.append(m.end() - 1)
+    return out
+
+
+def _lazy_target(ctx: ScanContext, repo: str, stem: Optional[str]) -> Optional[str]:
+    """The file whose routes a lazy route loads: the named file if it declares routes, else
+    the one file among its own relative imports that does (a module and its routing
+    module); None when that is not worked out."""
+    if stem is None:
+        return None
+    routes = ctx.ts_route_files.get(repo, set())
+    imports = ctx.ts_imports.get(repo, {})
+    for cand in (stem, stem + "/index"):
+        if cand in routes:
+            return cand
+        if cand in imports:
+            hit = sorted(set(x for x in imports[cand] if x in routes))
+            return hit[0] if len(hit) == 1 else None
+    return None
+
+
+def _route_prefixes(ctx: ScanContext, repo: str, stem: str,
+                    seen: Optional[Set[str]] = None) -> List[str]:
+    """Path prefixes the routes of ``stem`` sit under: one per lazy route that loads it
+    (through every level of lazy loading); [""] when nothing loads it lazily."""
+    seen = set(seen or ()) | {stem}
+    out: List[str] = []
+    for parent, path, loaded in ctx.ts_lazy.get(repo, []):
+        if parent in seen or _lazy_target(ctx, repo, loaded) != stem:
+            continue
+        for pre in _route_prefixes(ctx, repo, parent, seen):
+            out.append("/".join(x for x in (pre + "/" + path).split("/") if x))
+    return sorted(set(out)) or [""]
 
 
 def _read_ts_expr(clean: str, i: int) -> str:
@@ -278,32 +347,91 @@ def _unquote(v: str) -> Optional[str]:
     return None
 
 
+def _items(clean: str, open_idx: int) -> List[Tuple[str, int]]:
+    """Top-level items of the array or object whose bracket is at ``open_idx``, each with
+    the offset where its text starts (B3: per-item offsets, not a text search)."""
+    out: List[Tuple[str, int]] = []
+    depth = 0
+    start = open_idx + 1
+    i = open_idx
+    n = len(clean)
+    while i < n:
+        ch = clean[i]
+        if ch in "\"'`":
+            j = i + 1
+            while j < n and clean[j] != ch:
+                j += 2 if clean[j] == "\\" else 1
+            i = j + 1
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth == 1 and ch == ",":
+            out.append((clean[start:i], start))
+            start = i + 1
+        i += 1
+    out.append((clean[start:i], start))
+    res = []
+    for text, off in out:
+        lead = len(text) - len(text.lstrip())
+        if text.strip():
+            res.append((text.strip(), off + lead))
+    return res
+
+
+def _join(prefix: str, path: str) -> str:
+    return "/".join(x for x in (prefix + "/" + path).split("/") if x)
+
+
 def _routes(s: _Src, open_idx: int, prefix: str, repo: str, nodes: List[Node],
-            refs: List[Ref], cursor: List[int]) -> None:
-    items, _ = args_at(s.clean, open_idx)
-    for item in items:
-        pos = s.clean.find(item, max(cursor[0], open_idx))
-        if pos < 0:
-            pos = open_idx
-        cursor[0] = pos
+            refs: List[Ref], lazy: Optional[List[Tuple[str, str, Optional[str]]]] = None
+            ) -> None:
+    """Pages of the route array at ``open_idx``. With ``lazy`` (pass 1) only the lazy
+    routes are recorded, as (this file's stem, path, loaded file stem or None)."""
+    for item, pos in _items(s.clean, open_idx):
         if not (item.startswith("{") and item.endswith("}")):
             continue
-        props = {}
-        for part in split_top(item[1:-1], ","):
+        props: Dict[str, Tuple[str, int]] = {}
+        for part, poff in _items(s.clean, pos):
             k, _, v = part.partition(":")
-            props[k.strip().strip("'\"")] = v.strip()
-        path = _unquote(props.get("path", "")) if "path" in props else None
+            props[k.strip().strip("'\"")] = (v.strip(),
+                                             poff + len(k) + 1 + len(v) - len(v.lstrip()))
+        path = _unquote(props["path"][0]) if "path" in props else None
         if path is None:
             continue
-        full = "/".join(x for x in (prefix + "/" + path).split("/") if x)
+        full = _join(prefix, path)
+        pid = "page:%s/%s" % (repo, full)
+        if "loadChildren" in props:
+            raw = props["loadChildren"][0]
+            m = _LAZY_SPEC.search(raw)
+            spec = m.group(2) if m else (_unquote(raw) or "").split("#")[0] or None
+            loaded = _rel_stem(s.rel, spec) if spec else None
+            if lazy is not None:
+                lazy.append((_stem(s.rel), full, loaded))
+            elif _lazy_target(s.ctx, repo, loaded) is None:
+                # the routes it loads are not found: say so on a page of its own
+                nodes.append(Node(pid, "page", full or "/", repo, [s.ev(pos)], {"path": full}))
+                refs.append(Ref(pid, "uses", "component", None, s.ev(pos),
+                                "routes loaded by loadChildren %s not found in this repo"
+                                % (spec or raw)))
+            continue
+        if lazy is not None:
+            ch = props.get("children")
+            if ch and ch[0].startswith("["):
+                _routes(s, ch[1], full, repo, nodes, refs, lazy)
+            continue
         comp = None
-        if re.fullmatch(r"[A-Za-z_$][\w$]*", props.get("component", "")):
-            comp = props["component"]
+        cval = props.get("component", ("", 0))[0]
+        if re.fullmatch(r"[A-Za-z_$][\w$]*", cval):
+            comp = cval
         elif "loadComponent" in props:
-            lm = re.search(r"\.then\s*\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\1\.(\w+)", props["loadComponent"])
+            lm = re.search(r"\.then\s*\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*\1\.(\w+)",
+                           props["loadComponent"][0])
             comp = lm.group(2) if lm else None
         if comp:
-            pid = "page:%s/%s" % (repo, full)
             nodes.append(Node(pid, "page", full or "/", repo, [s.ev(pos)], {"path": full}))
             got = s.resolve_comp(comp)
             if got is None:
@@ -314,10 +442,19 @@ def _routes(s: _Src, open_idx: int, prefix: str, repo: str, nodes: List[Node],
             else:
                 refs.append(Ref(pid, "uses", "component", got[0][len("component:"):],
                                 s.ev(pos)))
-        ch = props.get("children", "")
-        if ch.startswith("["):
-            cpos = s.clean.find(ch, pos)
-            _routes(s, cpos, full, repo, nodes, refs, cursor)
+        elif "redirectTo" in props:
+            # a redirect page leads to the page it names (absolute, or a sibling path)
+            nodes.append(Node(pid, "page", full or "/", repo, [s.ev(pos)], {"path": full}))
+            target = _unquote(props["redirectTo"][0])
+            if target is None:
+                refs.append(Ref(pid, "uses", "page", None, s.ev(pos),
+                                "redirect target worked out at run time"))
+            else:
+                dest = _join("", target) if target.startswith("/") else _join(prefix, target)
+                refs.append(Ref(pid, "uses", "page", "%s/%s" % (repo, dest), s.ev(pos)))
+        ch = props.get("children")
+        if ch and ch[0].startswith("["):
+            _routes(s, ch[1], full, repo, nodes, refs)
 
 
 _INJECT_CALL = re.compile(
@@ -454,14 +591,8 @@ def scan_angular(repo: str, rel: str, text: str,
         else:
             refs.append(Ref(cid(cls[3]), "http", "endpoint", "%s %s" % (meth, url), ev))
 
-    # routes
-    cursor = [0]
-    seen_arrays: Set[int] = set()
-    for m in re.finditer(r"\bRoutes\s*=\s*\[|\b(?:forRoot|forChild|provideRouter)\s*\(\s*\[",
-                         s.masked):
-        o = m.end() - 1
-        if o not in seen_arrays:
-            seen_arrays.add(o)
-            cursor[0] = o
-            _routes(s, o, "", repo, nodes, refs, cursor)
+    # routes, under the path of every lazy route that loads this file (B3)
+    for prefix in _route_prefixes(ctx, repo, own_stem):
+        for o in _route_arrays(s):
+            _routes(s, o, prefix, repo, nodes, refs)
     return nodes, refs
