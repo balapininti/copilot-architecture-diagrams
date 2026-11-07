@@ -163,15 +163,25 @@ def _base(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def _loc(path: str, line: int) -> str:
-    return "%s:%s" % (_base(path), line)
+def _with_folder(path: str) -> str:
+    """The base name with its parent folder (``batch/CLMREC.cpy``), for base names that
+    would otherwise read the same."""
+    base = _base(path)
+    head = path[:len(path) - len(base)].rstrip("/")
+    parent = head.rsplit("/", 1)[-1] if head else ""
+    return "%s/%s" % (parent, base) if parent else base
 
 
-def _side(items: list, limit: int = 2) -> str:
+def _loc(path: str, line: int, collide: Set[str] = frozenset()) -> str:
+    base = _base(path)
+    return "%s:%s" % (_with_folder(path) if base in collide else base, line)
+
+
+def _side(items: list, collide: Set[str], limit: int = 2) -> str:
     locs: List[str] = []
     for e in items:
-        if _loc(e.path, e.line) not in locs:
-            locs.append(_loc(e.path, e.line))
+        if _loc(e.path, e.line, collide) not in locs:
+            locs.append(_loc(e.path, e.line, collide))
     shown = locs[:limit]
     extra = len(locs) - limit
     return " \u00b7 ".join(shown) + (" \u00b7 + %d more" % extra if extra > 0 else "")
@@ -179,30 +189,36 @@ def _side(items: list, limit: int = 2) -> str:
 
 def evidence_strip(view: ViewGraph, max_chars: int) -> List[str]:
     """Up to STRIP_MAX lines ``<via>  <file>:<line> ↔ <file>:<line>``, the links tied
-    together by the most files first, then a count of the links left out."""
+    together by the most files first, then a count of the links left out. A file name
+    that two different paths in the strip share keeps its parent folder."""
     by_id = {n.id: n for n in view.nodes}
     ranked = [(i, e) for i, e in enumerate(view.edges) if e.evidence]
     ranked.sort(key=lambda ie: (-len(ie[1].evidence), ie[0]))
+    shown = [e for _, e in ranked[:STRIP_MAX]]
+    paths_of: Dict[str, Set[str]] = {}
+    for e in shown:
+        for x in e.evidence:
+            paths_of.setdefault(_base(x.path), set()).add(x.path)
+    collide = {b for b, ps in paths_of.items() if len(ps) > 1}
     lines = []
-    for _, e in ranked[:STRIP_MAX]:
+    for e in shown:
         src = by_id.get(e.src)
         src_repo = src.label if src is not None and src.kind == "repo" else None
         mine = [x for x in e.evidence if x.repo == src_repo] if src_repo else []
         other = [x for x in e.evidence if x not in mine]
         if not mine:
             mine, other = list(e.evidence), []
-        s = "%s  %s" % (e.label or "link", _side(mine))
+        s = "%s  %s" % (e.label or "link", _side(mine, collide))
         if other:
-            s += "  \u2194  " + _side(other)
+            s += "  \u2194  " + _side(other, collide)
         lines.append(s if len(s) <= max_chars else s[:max_chars - 1] + "\u2026")
     return lines
 
 
-def _svg(view: ViewGraph, L: Layout, interactive: bool = False) -> str:
+def _svg(view: ViewGraph, L: Layout, styles: List[str], pills: List[Pill],
+         interactive: bool = False) -> str:
     colors = _repo_colors(view)
-    styles = [line_style(e.status, e.kind) for e in view.edges]
     routes = [list(r) for r in L.routes]
-    pills = place_pills(view, L, styles, routes, lambda e: e.label, lambda g, gb: None)
     pill_of = {p.i: p for p in pills}
 
     min_x = min([p.x for p in pills] + [0.0])
@@ -338,7 +354,9 @@ var selected=-1;
 function el(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;
 if(txt!==undefined)e.textContent=txt;return e;}
 function matches(d,s){if(!s)return true;s=s.toLowerCase();
-return (d.label+' '+d.from+' '+d.to+' '+d.status+' '+d.kind).toLowerCase().indexOf(s)>=0;}
+var t=d.label+' '+d.from+' '+d.to+' '+d.status+' '+d.kind;
+d.evidence.forEach(function(x){t+=' '+x.repo+' '+x.path+':'+x.line+' '+x.text;});
+return t.toLowerCase().indexOf(s)>=0;}
 function tag(d){var t=el('span','tag '+d.style,d.style==='shared_code'?'shared code':d.status);return t;}
 function showList(){
 selected=-1;mark();
@@ -395,7 +413,7 @@ def _html(view: ViewGraph, svg: str) -> str:
         '<title>%s</title><style>%s</style></head><body>'
         '<div class="wrap"><div class="map">%s</div>'
         '<aside><h2>Links between repos</h2>'
-        '<input id="q" type="search" placeholder="Search links by name or repo" '
+        '<input id="q" type="search" placeholder="Search links by name, repo, file or code" '
         'aria-label="Search links">'
         '<div id="panel"></div></aside></div>'
         '<script type="application/json" id="edge-data">%s</script>'
@@ -408,4 +426,8 @@ def _html(view: ViewGraph, svg: str) -> str:
 def render(view: ViewGraph) -> Dict[str, str]:
     """The repo link map as an Office-safe SVG and as a self-contained HTML page."""
     L = layout_for(view, node_size)
-    return {"svg": _svg(view, L), "html": _html(view, _svg(view, L, interactive=True))}
+    styles = [line_style(e.status, e.kind) for e in view.edges]
+    pills = place_pills(view, L, styles, [list(r) for r in L.routes], lambda e: e.label,
+                        lambda g, gb: None)
+    return {"svg": _svg(view, L, styles, pills),
+            "html": _html(view, _svg(view, L, styles, pills, interactive=True))}

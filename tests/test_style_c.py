@@ -91,3 +91,45 @@ def test_visual_outputs():
         out = style_c.render(fixture_view(level, scope))
         (OUT / ("style_c-%s.svg" % name)).write_text(out["svg"], encoding="utf-8")
         (OUT / ("style_c-%s.html" % name)).write_text(out["html"], encoding="utf-8")
+
+
+# ------------------------------------------------------------------ Batch C (C9)
+
+def test_strip_adds_the_folder_when_base_names_collide():
+    n1 = VNode(id="repo:a", label="a", kind="repo", detail_lines=["x.cbl"], highlight=1)
+    n2 = VNode(id="repo:b", label="b", kind="repo", detail_lines=["y.cbl"], highlight=1)
+    ev = [Evidence(repo="a", path="src/online/CLMREC.cpy", line=3, text="COPY CLMREC"),
+          Evidence(repo="b", path="src/batch/CLMREC.cpy", line=9, text="01 CLM-REC"),
+          Evidence(repo="b", path="src/batch/OTHER.cbl", line=1, text="x")]
+    v = ViewGraph("t", "repomap", None, [n1, n2],
+                  [VEdge("repo:a", "repo:b", "COPY", kind="shared_code", evidence=ev)], [])
+    strip = " ".join(style_c.evidence_strip(v, 400))
+    assert "online/CLMREC.cpy:3" in strip and "batch/CLMREC.cpy:9" in strip
+    assert "OTHER.cbl:1" in strip and "batch/OTHER.cbl" not in strip
+
+
+def test_html_search_covers_evidence_paths_and_code():
+    html = style_c.render(fixture_view("repomap", None))["html"]
+    m = re.search(r"function matches\(d,s\)\{(.*?)\}\n", html, re.S)
+    assert m and "evidence" in m.group(1) and ".path" in m.group(1) and ".text" in m.group(1)
+
+
+def test_svg_built_once(monkeypatch):
+    import archdiag.render.style_c as sc
+    calls = {"layout": 0, "pills": 0}
+    real_layout, real_pills = sc.layout_for, sc.place_pills
+
+    def count_layout(*a, **k):
+        calls["layout"] += 1
+        return real_layout(*a, **k)
+
+    def count_pills(*a, **k):
+        calls["pills"] += 1
+        return real_pills(*a, **k)
+
+    monkeypatch.setattr(sc, "layout_for", count_layout)
+    monkeypatch.setattr(sc, "place_pills", count_pills)
+    out = sc.render(fixture_view("repomap", None))
+    assert calls == {"layout": 1, "pills": 1}
+    # the page shows the same picture, plus the wide click targets
+    assert out["svg"].count('<path id="edge-') == out["html"].count('<path id="edge-')
