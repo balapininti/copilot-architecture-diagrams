@@ -27,7 +27,7 @@ from archdiag.render.common import (FONT, LEGEND_SIZE, LINE_COLORS, LOOSE_COLOR,
                                     esc, legend, legend_width, line_style,
                                     loose_dot, note_lines, num, path_d, step_text, svg_doc, text,
                                     text_width, wrap)
-from archdiag.render.pills import KEY_LINE, KEY_R, Pill, _key_entries, key_svg, marker_svg, place_pills
+from archdiag.render.pills import KEY_LINE, KEY_R, Pill, key_entries, key_svg, marker_svg, place_pills
 from archdiag.views import VNode, ViewGraph
 
 D_FONT = "Segoe Print, Comic Sans MS, cursive"
@@ -584,13 +584,13 @@ def _excalidraw(S: _Scene, seed: int) -> str:
         a["strokeWidth"] = 2
         for nid in (node_el[e.src], node_el[e.dst]):
             X.by_id[nid]["boundElements"].append({"id": aid, "type": "arrow"})
-    entries = _key_entries(S.pills, S.width - 60)
+    entries = key_entries(S.pills, S.width - 60)
     if entries:  # the key, as in the SVG
         X.label("key-heading", 30, S.key_y + 1, "Line labels (marked on the lines)", 12,
                 "#475569")
-    for p, s, dx, row in entries:
+    for p, lines, dx, row in entries:
         X.label("key-%d" % p.key, 30 + dx, S.key_y + 18 + KEY_LINE * row + 3,
-                "%s %s" % (marker_text(p), s), 12, _PILL_INK[p.style])
+                "%s %s" % (marker_text(p), "\n".join(lines)), 12, _PILL_INK[p.style])
     for p in S.pills:
         if p.marker:  # just the number on the line; the label is in the key
             X.label("label-%d" % p.i, p.x + ox - 4, p.y + oy + 1, marker_text(p), 11,

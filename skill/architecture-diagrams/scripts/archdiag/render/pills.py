@@ -386,43 +386,57 @@ def _key_glyph(p: "Pill", cx: float, cy: float, ink: str, fill: str = "#ffffff")
     return _square(p.key, cx, cy, ink, fill, "key-%d" % p.key)
 
 
-def _key_entries(pills: List["Pill"], max_w: float
-                 ) -> List[Tuple["Pill", str, float, int]]:
-    """(pill, text, x offset, row) for each marker, in key order, wrapped to ``max_w``."""
+def key_entries(pills: List["Pill"], max_w: float
+                ) -> List[Tuple["Pill", List[str], float, int]]:
+    """(pill, text lines, x offset, first row) for each marker, in key order, packed into
+    rows ``max_w`` wide. A label too wide for a row by itself wraps onto more rows (E9);
+    the next entry starts below it."""
     out = []
     x, row = 0.0, 0
+    text_room = max_w - (2 * KEY_R + 8)
     for p in sorted((p for p in pills if p.marker), key=lambda q: q.key):
         s = " ".join(p.lines)
         w = 2 * KEY_R + 8 + text_width(s, KEY_SIZE) + 24
         if x > 0 and x + w > max_w:
             x, row = 0.0, row + 1
-        out.append((p, s, x, row))
+        if 2 * KEY_R + 8 + text_width(s, KEY_SIZE) > max_w:
+            lines = wrap(s, text_room, KEY_SIZE)
+            out.append((p, lines, 0.0, row))
+            x, row = 0.0, row + len(lines)
+            continue
+        out.append((p, [s], x, row))
         x += w
     return out
 
 
+def _rows_used(entries: List[Tuple["Pill", List[str], float, int]]) -> int:
+    return max([row + len(lines) for _, lines, _, row in entries] or [0])
+
+
 def key_height(pills: List["Pill"], max_w: float) -> float:
     """Height of the key under the picture (0 when no line has a marker)."""
-    entries = _key_entries(pills, max_w)
+    entries = key_entries(pills, max_w)
     if not entries:
         return 0.0
-    return 18 + KEY_LINE * (entries[-1][3] + 1)
+    return 18 + KEY_LINE * _rows_used(entries)
 
 
 def key_svg(pills: List["Pill"], x: float, y: float, max_w: float,
             inks: Optional[dict] = None) -> Tuple[str, float]:
     """The key: a ``Line labels`` heading, then each marker and its line's label; top at
     ``y``. Returns (svg, height); empty when no line has a marker."""
-    entries = _key_entries(pills, max_w)
+    entries = key_entries(pills, max_w)
     if not entries:
         return "", 0.0
     inks = inks or _PILL_TEXT
     parts = [text(x, y + 12, "Line labels (marked on the lines)", 11, "#475569",
                   weight="700")]
-    for p, s, dx, row in entries:
+    for p, lines, dx, row in entries:
         cy = y + 18 + KEY_LINE * row + KEY_LINE / 2
         parts.append(_key_glyph(p, x + dx + KEY_R, cy, inks[p.style]))
-        parts.append(text(x + dx + 2 * KEY_R + 8, cy + 4, s, KEY_SIZE, inks[p.style]))
+        for k, s in enumerate(lines):
+            parts.append(text(x + dx + 2 * KEY_R + 8, cy + 4 + KEY_LINE * k, s, KEY_SIZE,
+                              inks[p.style]))
     return "<g>%s</g>" % "".join(parts), key_height(pills, max_w)
 
 

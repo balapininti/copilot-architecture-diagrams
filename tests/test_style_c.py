@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from conftest import OUT, assert_office_safe, fixture_view
 from archdiag.render import style_c
 from archdiag.views import VEdge, VNode, ViewGraph
@@ -133,3 +135,55 @@ def test_svg_built_once(monkeypatch):
     assert calls == {"layout": 1, "pills": 1}
     # the page shows the same picture, plus the wide click targets
     assert out["svg"].count('<path id="edge-') == out["html"].count('<path id="edge-')
+
+
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def _chrome():
+    import os
+    import shutil
+    for c in (os.environ.get("ARCHDIAG_CHROME", ""), CHROME, shutil.which("google-chrome"),
+              shutil.which("chromium"), shutil.which("chrome")):
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+def test_html_search_and_click_run_in_a_browser(tmp_path):
+    """E9: the page's own script, run in headless Chrome (skipped when Chrome is not
+    installed): typing an evidence file name leaves only the lines with evidence in it
+    lit, and clicking a line shows its file:line table."""
+    import json
+    import subprocess
+    chrome = _chrome()
+    if chrome is None:
+        pytest.skip("Chrome not installed")
+    v = fixture_view("repomap", None)
+    html = style_c.render(v)["html"]
+    want = sorted(i for i, e in enumerate(v.edges)
+                  if any("MqClaimGateway.java" in x.path for x in e.evidence))
+    assert want and len(want) < len(v.edges)
+    probe = """<script>
+var q=document.getElementById('q');q.value='MqClaimGateway.java';
+q.dispatchEvent(new Event('input'));
+var lit=[];document.querySelectorAll('svg g[data-edge]').forEach(function(g){
+if(!g.classList.contains('dim'))lit.push(Number(g.getAttribute('data-edge')));});
+var shown=0;document.querySelectorAll('#panel button[data-pick]').forEach(function(b){
+if(b.parentNode.style.display!=='none')shown++;});
+document.querySelector('svg g[data-edge="%d"]').dispatchEvent(new MouseEvent('click',{bubbles:true}));
+var cells=[];document.querySelectorAll('#panel td').forEach(function(td){cells.push(td.textContent);});
+var out=document.createElement('pre');out.id='probe';
+out.textContent=JSON.stringify({lit:lit,shown:shown,cells:cells});document.body.appendChild(out);
+</script></body>""" % want[0]
+    page = tmp_path / "map.html"
+    page.write_text(html.replace("</body>", probe, 1), encoding="utf-8")
+    dom = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--dump-dom",
+                          page.as_uri()], capture_output=True, text=True, timeout=120).stdout
+    m = re.search(r'<pre id="probe">(.*?)</pre>', dom, re.S)
+    assert m, dom[-2000:]
+    got = json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&")
+                     .replace("&lt;", "<").replace("&gt;", ">"))
+    assert sorted(set(got["lit"])) == want
+    assert got["shown"] == len(want)
+    assert any("MqClaimGateway.java" in c for c in got["cells"]), got["cells"]

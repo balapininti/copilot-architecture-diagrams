@@ -216,3 +216,23 @@ def test_job_flow_pills_keep_off_crossings():
             for (x, y), j in _crossings_of(p.i, routes):
                 assert not (p.x - 8 < x < p.x + p.w + 8 and p.y - 8 < y < p.y + p.h + 8), \
                     (mod.__name__, v.edges[p.i].label, v.edges[j].label)
+
+
+def test_key_wraps_a_label_wider_than_the_key():
+    """E9: key_entries is public; one label wider than the key wraps onto more rows
+    (inside the width), and the next entry starts below it."""
+    long = P.Pill(0, "dataset " + "VERY.LONG.QUALIFIER." * 12 + "END", (0, 0), "confirmed")
+    long.as_marker((0, 0))
+    long.key = 1
+    short = P.Pill(1, "reads", (0, 0), "partial")
+    short.as_marker((0, 0))
+    short.key = 2
+    entries = P.key_entries([long, short], 400.0)
+    (p1, lines1, x1, row1), (p2, lines2, x2, row2) = entries
+    assert len(lines1) > 1 and "".join(lines1).replace(" ", "") == \
+        " ".join(long.lines).replace(" ", "")
+    from archdiag.render.common import text_width
+    assert all(2 * P.KEY_R + 8 + text_width(s, P.KEY_SIZE) <= 400.0 for s in lines1)
+    assert row2 >= row1 + len(lines1)
+    svg, h = P.key_svg([long, short], 30, 0, 400.0)
+    assert h >= 18 + P.KEY_LINE * (row2 + 1)
