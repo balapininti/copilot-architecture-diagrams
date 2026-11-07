@@ -8,7 +8,8 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from ..config import Config
 from ..model import Evidence, Inventory, Node, Ref
 from ..repos import discover_repos, iter_source_files
-from ..store import fingerprint
+from .. import __version__
+from ..store import SCHEMA_VERSION, fingerprint
 from ..textio import classify, needs_text, read_source
 
 
@@ -445,7 +446,7 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     refs = zosconnect.merge_built_copies(nodes, refs)
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
-                     _config_hosts(ctx), not_scanned)
+                     _config_hosts(ctx), not_scanned, __version__, SCHEMA_VERSION)
 
 
 _register_builtin_scanners()

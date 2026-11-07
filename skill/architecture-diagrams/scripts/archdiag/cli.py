@@ -18,7 +18,7 @@ from .groups import Groups, load_groups
 from .model import CONFIRMED, LOOSE, PARTIAL, Inventory, Resolved
 from .repos import discover_repos
 from .scan import scan_workspace
-from .store import fingerprint, load_inventory, load_resolved, save_json
+from .store import cache_is_current, fingerprint, load_inventory, load_resolved, save_json
 from .summary import _env_pairs, build_summary, count_unanalyzed, list_items
 
 OUT_DIR_NAME = "architecture-diagrams"
@@ -122,7 +122,9 @@ def _load_current(workspace: Path, out_dir: Path, config: Config) -> Resolved:
             cached = load_resolved(links_path)
         except (OSError, ValueError, KeyError, TypeError):
             cached = None
-    if cached is not None:
+    if cached is not None and not cache_is_current(cached.inventory):
+        _notice("Saved scan was made by another archdiag version; rescanned.")
+    elif cached is not None:
         repos = discover_repos(workspace)
         if fingerprint(workspace, repos, config) == cached.inventory.fingerprint:
             cfg_path = out_dir / CONFIG_NAME

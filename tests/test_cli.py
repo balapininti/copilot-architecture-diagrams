@@ -393,3 +393,34 @@ def test_ckbr_start_in_xml_or_json_marks_queue_bridged(tmp_path, fname):
     assert main(["scan", "--workspace", str(w)]) == 0
     inv = load_inventory(w / "architecture-diagrams" / "inventory.json")
     assert inv.nodes["queue:CLM.BRQ"].attrs["bridge"] is True
+
+
+def test_cache_from_another_archdiag_version_is_rescanned(tmp_path, capsys):
+    # final review I7: a cache written by another archdiag version (or schema) is never served
+    import archdiag
+    from archdiag.store import SCHEMA_VERSION
+    w = _estate(tmp_path)
+    args = ["draw", "--workspace", str(w), "--level", "flow", "--scope", "CLMD100"]
+    assert main(args) == 0
+    links = w / "architecture-diagrams" / "links.json"
+    d = json.loads(links.read_text(encoding="utf-8"))
+    assert d["inventory"]["archdiag_version"] == archdiag.__version__
+    assert d["inventory"]["schema_version"] == SCHEMA_VERSION
+    capsys.readouterr()
+    assert main(args) == 0
+    assert "rescanned" not in capsys.readouterr().out
+    d["inventory"]["archdiag_version"] = "0.0.1"
+    links.write_text(json.dumps(d), encoding="utf-8")
+    assert main(args) == 0
+    cap = capsys.readouterr()
+    assert "another archdiag version" in cap.out + cap.err
+    d = json.loads(links.read_text(encoding="utf-8"))
+    assert d["inventory"]["archdiag_version"] == archdiag.__version__
+
+
+def test_version_is_0_1_1():
+    import archdiag
+    assert archdiag.__version__ == "0.1.1"
+    from pathlib import Path
+    toml = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'version = "0.1.1"' in toml

@@ -70,6 +70,10 @@ class Inventory:
     # a workspace folder), "path", "reason"}: default-skipped folders holding source,
     # workspace folders that are not repos, untyped files that look like mainframe code
     not_scanned: List[Dict[str, str]] = field(default_factory=list)
+    # the archdiag version and cache schema that wrote this inventory: a cache from another
+    # version is rescanned, never served (final review I7)
+    archdiag_version: str = ""
+    schema_version: int = 0
 
 
 @dataclass

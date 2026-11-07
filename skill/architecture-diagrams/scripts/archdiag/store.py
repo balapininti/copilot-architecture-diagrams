@@ -7,15 +7,26 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import __version__
 from .config import Config
 from .model import Edge, Evidence, Inventory, Node, Ref, Repo, Resolved
 from .repos import iter_source_files, with_long_path
 
 
+# the shape of inventory.json / links.json; bump when a scanner or resolver change means
+# an old cache would give different links
+SCHEMA_VERSION = 2
+
+
+def cache_is_current(inv: Inventory) -> bool:
+    """Was this inventory written by this archdiag version and cache schema?"""
+    return inv.archdiag_version == __version__ and inv.schema_version == SCHEMA_VERSION
+
+
 def fingerprint(workspace: Path, repos: Iterable[Repo], config: Config = None) -> str:
     workspace = Path(workspace)
     exclude = config.exclude_dirs if config else ()
-    entries = []
+    entries = ["archdiag %s schema %d" % (__version__, SCHEMA_VERSION)]
     for repo in repos:
         root = workspace / repo.path
         for p in iter_source_files(root, exclude):
@@ -79,6 +90,8 @@ def _inventory(d: dict) -> Inventory:
         [dict(x) for x in d.get("skipped", [])],
         {k: list(v) for k, v in d.get("config_hosts", {}).items()},
         [dict(x) for x in d.get("not_scanned", [])],
+        str(d.get("archdiag_version", "")),
+        int(d.get("schema_version", 0) or 0),
     )
 
 
