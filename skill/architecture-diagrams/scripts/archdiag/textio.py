@@ -148,8 +148,9 @@ def classify(relpath: str, text: str) -> Optional[str]:
             return "pli"
         if _REXX.match(line):
             return "rexx"
-    if ext in COPY_EXTS and any(d in COPY_DIRS for d in parts[:-1]):
-        return "copybook"
+    if ext in COPY_EXTS and any(d in COPY_DIRS for d in parts[:-1]) and (
+            ext in ("", ".copy", ".cpybk") or _COBOL_TEXT.search(text)):
+        return "copybook"  # a .txt / .inc there must also read like COBOL
     return None
 
 
@@ -158,6 +159,10 @@ def classify(relpath: str, text: str) -> Optional[str]:
 COPY_DIRS = frozenset(["copy", "copys", "copybook", "copybooks", "copylib", "copylibs", "cpy",
                        "cpylib", "cpylibs"])
 COPY_EXTS = frozenset(["", ".copy", ".inc", ".txt", ".mem", ".cpybk"])
+# COBOL-looking text: a data item with a level number, or a procedure statement
+_COBOL_TEXT = re.compile(
+    r"(?im)^.{0,12}\b(?:0?[1-9]|[1-4]\d|66|77|88)\s+[A-Za-z][\w-]*(?:\s|\.)"
+    r"|\b(?:EXEC\s+(?:SQL|CICS)|PERFORM|MOVE\s+\S+\s+TO|CALL\s+['\"])")
 
 
 _SEQ = re.compile(r"\s*[A-Za-z0-9]+\s*")

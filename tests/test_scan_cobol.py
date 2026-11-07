@@ -396,3 +396,11 @@ def test_handle_abend_program_is_a_link():
                    "           EXEC CICS HANDLE ABEND PROGRAM('CLMABND') END-EXEC.\n"
                    "           EXEC CICS HANDLE ABEND LABEL(X-ERR) END-EXEC.\n")
     assert [(r.op, r.target_name) for r in refs] == [("link", "CLMABND")]
+
+
+def test_prose_in_a_copylib_folder_is_not_a_copybook(tmp_path):
+    i = _ws(tmp_path, {"copylib/README.txt": "How to use these members.\n",
+                       "copylib/NOTES.inc": "see wiki\n", "copylib/CLMREC": _REC,
+                       "copylib/PAYREC.txt": _REC})
+    got = sorted(n.id for n in i.nodes.values() if n.kind == "copybook")
+    assert got == ["copybook:CLMREC", "copybook:PAYREC"]
