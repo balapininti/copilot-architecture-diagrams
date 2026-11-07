@@ -364,3 +364,87 @@ def test_no_two_lines_share_a_horizontal_run():
         for size in _style_sizes():
             L = layout_for(v, size)
             assert not shared_runs(L.routes), (v.title, size.__module__)
+
+
+def _side_gaps(v, L):
+    """The least gap between two line ends on one side of one box."""
+    ends = {}
+    for e, r in zip(v.edges, L.routes):
+        if e.src == e.dst:
+            continue
+        for nid, p in ((e.src, r[0]), (e.dst, r[-1])):
+            b = L.boxes[nid]
+            side = ("l" if abs(p[0] - b.x) < .5 else "r" if abs(p[0] - b.x - b.w) < .5
+                    else "t" if abs(p[1] - b.y) < .5 else "b")
+            ends.setdefault((nid, side), []).append(p[1] if side in "lr" else p[0])
+    least = float("inf")
+    for xs in ends.values():
+        xs.sort()
+        least = min([least] + [b - a for a, b in zip(xs, xs[1:])])
+    return least
+
+
+def test_layered_fan_out_spreads_ports_and_gaps():
+    """C5: in layered views a busy box side sends lines out of its top and bottom too, and
+    column gaps widen, so line ends stay apart and no two lines run down one gap within
+    8px of each other for more than 200px."""
+    from conftest import fixture_view
+    for lv, sc in (("landscape", None), ("flow_tx", "claims/:id"), ("flow_tx", "CLMI")):
+        v = fixture_view(lv, sc)
+        for size in _style_sizes():
+            L = layout_for(v, size)
+            assert _side_gaps(v, L) >= 8.0, (lv, sc, size.__module__, _side_gaps(v, L))
+            assert not shared_runs(L.routes, horizontal=False), (lv, sc, size.__module__)
+
+
+def test_wide_flow_wraps_into_bands():
+    """C3: a layered view wider than 2000px wraps its layers into bands; the claims/:id
+    page flow fits in 2200px in every style, with every line still border to border."""
+    import re
+    from conftest import fixture_view
+    from archdiag.render import style_a, style_b, style_c, style_d
+    v = fixture_view("flow_tx", "claims/:id")
+    for mod in (style_a, style_b, style_c, style_d):
+        svg = mod.render(v)["svg"]
+        w = float(re.search(r'width="([\d.]+)"', svg).group(1))
+        assert w <= 2200, (mod.__name__, w)
+        L = layout_for(v, mod.node_size)
+        _routes_on_borders(v, L)
+        _inside_canvas(L)
+        assert no_box_overlaps(L.boxes, 10)
+        for n in v.nodes:
+            if n.group:
+                assert contains(L.groups[n.group], L.boxes[n.id])
+        assert not foreign_box_in_group(v, L)
+
+
+def test_bands_never_split_a_group():
+    """C3: bands are cut only between layers no group spans."""
+    from archdiag.layout import _bands
+    ids = ["a", "b", "c", "d"]
+    layer = {"a": 0, "b": 1, "c": 2, "d": 3}
+    dag = [("a", "b", 0), ("b", "c", 1), ("c", "d", 2)]
+    out = _bands(dag, layer, {"a": None, "b": "g", "c": "g", "d": None}, ids, 900.0, 4)
+    assert out[1] == out[2] and out != [0, 0, 0, 0]
+
+
+def test_line_skipping_a_band_runs_down_the_left():
+    """C3: a line from the first band to the third goes down a spine left of the bands,
+    clear of every box, and still ends on both borders."""
+    names = ["n%d" % i for i in range(26)]
+    nodes = [VNode(n, n) for n in names]
+    edges = [VEdge(a, b) for a, b in zip(names, names[1:])] + [VEdge("n0", "n25", "far")]
+    v = ViewGraph("chain", "flow_tx", None, nodes, edges, [])
+    L = layout_for(v, lambda n: (150, 60))
+    assert L.width <= 2000 + 1
+    _routes_on_borders(v, L)
+    _inside_canvas(L)
+    far = L.routes[-1]
+    assert min(x for x, _ in far) < min(b.x for b in L.boxes.values())
+    for nid, b in L.boxes.items():
+        if nid not in ("n0", "n25"):
+            assert not _crosses_box(far, b), nid
+    for k, e in enumerate(v.edges):
+        for nid, b in L.boxes.items():
+            if nid not in (e.src, e.dst):
+                assert not _crosses_box(L.routes[k], b), (k, nid)

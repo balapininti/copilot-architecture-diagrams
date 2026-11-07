@@ -54,6 +54,16 @@ DETOUR_GAIN = 0.75     # ...and rerouted when that is at most this share of its 
 MAZE_LANE = 4.0        # layered: extra cost per px of running along a line already drawn
 MAZE_NEAR = 8.5        # ...within this many px of it, across or along
 MAZE_LIMIT = 40        # layered: most lines rerouted in one picture
+BAND_WIDTH = 1940.0    # layered: a picture wider than this (plus margins: 2000px) wraps its
+                       # layers into bands stacked top to bottom
+BEND_GAP = 12.0        # layered: least gap between two lines bending in one column gap
+CHANNEL_PAD = 16.0     # layered: room above and below the lines in a channel between bands
+SPINE_GAP = 14.0       # layered: gap between lines going down the left of the picture
+FAN_OUT = 4            # layered: most lines on one box side before some use the top/bottom
+FAN_ROOM = 60.0        # layered: room above/below a box with nothing over/under it
+FAN_CLEAR = 10.0       # layered: a turn above/below a box keeps this far from the next thing
+FAN_MAX = 6            # layered: most lines turning above (or below) one box
+TURN_GAP = 10.0        # layered: gap between two lines turning above (or below) a box
 CONTEXT_COLS = 5       # context: most columns for the application's own boxes
 CONTEXT_GAP = 110.0    # context: gap between the members and an outside column
 CONTEXT_ROW_GAP = 30.0 # context: least gap between two boxes in an outside column
@@ -126,7 +136,7 @@ def layout_for(view: ViewGraph, node_size: SizeFn) -> Layout:
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
     else:
-        boxes, routes = layered(view, sizes)
+        boxes, routes = layered(view, sizes, wrap=True)
         groups = _group_boxes(view, boxes)
         routes = _avoid_groups(view, boxes, groups, routes)
     return _finish(boxes, groups, routes)
@@ -440,11 +450,19 @@ def _finish(boxes: Dict[str, Box], groups: Dict[str, Box],
 # ------------------------------------------------------------------ layered
 
 def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
-            cap: int = 0, reach: int = 0) -> Tuple[Dict[str, Box], List[List[Point]]]:
+            cap: int = 0, reach: int = 0, wrap: bool = False, fan: bool = True
+            ) -> Tuple[Dict[str, Box], List[List[Point]]]:
+    """Left-to-right layers. With ``wrap``, a picture that would be wider than BAND_WIDTH
+    puts its layers in bands stacked top to bottom (cut only where no group spans the cut);
+    a line from one band to a later one runs down a column gap, along a channel between
+    the bands (and down a spine on the left when it skips a band) and in from the left.
+    ``fan=False`` keeps every line on the left and right sides (the context layout puts its
+    own lines on the top and bottom of these boxes)."""
     ids = [n.id for n in view.nodes]
     if not ids:
         return {}, []
     group_of: Dict[str, Optional[str]] = {n.id: n.group for n in view.nodes}
+    real = set(ids)
 
     # 1. Break cycles: reverse the back edges of a depth-first search.
     out_adj: Dict[str, List[int]] = {i: [] for i in ids}
@@ -498,21 +516,30 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
         if not preds[u] and succs[u]:
             layer[u] = min(layer[v] for v in succs[u]) - 1
     _balance_sinks(view, ids, preds, succs, layer, cap, reach)
+    maxw = max(w for w, _ in sizes.values())
+    nlayers = max(layer.values()) + 1
 
-    # 3. Dummy nodes so long edges get their own slot in every layer they cross.
+    # 2b. Bands, and the lines that go from one band to a later one.
+    band_of = _bands(dag, layer, group_of, ids, maxw, nlayers) if wrap else [0] * nlayers
+    nbands = max(band_of) + 1
+    cross = {k for u, v, k in dag if band_of[layer[u]] != band_of[layer[v]]}
+
+    # 3. Dummy nodes so long edges get their own slot in every layer they cross (a line
+    #    to a later band gets none: it runs round the outside of the band).
     chains: Dict[int, List[str]] = {}
     seg_pred: Dict[str, List[str]] = {i: [] for i in ids}
     seg_succ: Dict[str, List[str]] = {i: [] for i in ids}
     dummy_layer: Dict[str, int] = {}
     for u, v, k in dag:
         chain = [u]
-        for lay in range(layer[u] + 1, layer[v]):
-            d = "\x00dummy:%d:%d" % (k, lay)
-            dummy_layer[d] = lay
-            # a line between two members of one group stays inside that group
-            group_of[d] = group_of[u] if group_of[u] == group_of[v] else None
-            seg_pred[d], seg_succ[d] = [], []
-            chain.append(d)
+        if k not in cross:
+            for lay in range(layer[u] + 1, layer[v]):
+                d = "\x00dummy:%d:%d" % (k, lay)
+                dummy_layer[d] = lay
+                # a line between two members of one group stays inside that group
+                group_of[d] = group_of[u] if group_of[u] == group_of[v] else None
+                seg_pred[d], seg_succ[d] = [], []
+                chain.append(d)
         chain.append(v)
         chains[k] = chain
         for a, b in zip(chain, chain[1:]):
@@ -520,7 +547,6 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
             seg_pred[b].append(a)
     all_layer = dict(layer)
     all_layer.update(dummy_layer)
-    nlayers = max(all_layer.values()) + 1 if all_layer else 0
     layers: List[List[str]] = [[] for _ in range(nlayers)]
     for i in ids:  # input order first, dummies after
         layers[layer[i]].append(i)
@@ -535,93 +561,283 @@ def layered(view: ViewGraph, sizes: Dict[str, Tuple[float, float]],
                        [c[1:-1] for c in chains.values() if len(c) > 2])
     # Groups get their own band of rows, so no outside box sits inside a group.
     straight_layers = [list(l) for l in layers]
-    row = _band_rows(straight_layers, row, group_of, real=set(ids))
+    row = _band_rows(straight_layers, row, group_of, real=real)
     # Straight lines can stack a busy graph into a tall staircase. Then take rows by
     # rank in each layer instead (lines bend in the column gaps), when much shorter.
     compact_layers = [list(l) for l in layers]
-    compact = _band_rows(compact_layers, _rank_rows(layers, set(ids), group_of), group_of, real=set(ids))
+    compact = _band_rows(compact_layers, _rank_rows(layers, real, group_of), group_of, real=real)
     straight_h = _row_coords(straight_layers, row, ids, sizes, group_of)
     compact_h = _row_coords(compact_layers, compact, ids, sizes, group_of)
     if compact_h[0][-1] + compact_h[1][-1] < COMPACT_GAIN * (straight_h[0][-1] + straight_h[1][-1]):
-        row, layers, (row_y, row_h) = compact, compact_layers, compact_h
+        row, layers = compact, compact_layers
     else:
-        layers, (row_y, row_h) = straight_layers, straight_h
+        layers = straight_layers
 
-    # 6. Coordinates.
-    maxw = max(w for w, _ in sizes.values())
-    col_x = [lay * (maxw + COL_GAP) for lay in range(nlayers)]
-    boxes: Dict[str, Box] = {}
-    for i in ids:
-        w, h = sizes[i]
-        boxes[i] = Box(col_x[layer[i]] + (maxw - w) / 2,
-                       row_y[row[i]] + (row_h[row[i]] - h) / 2, w, h)
-    center_y = {d: row_y[row[d]] + row_h[row[d]] / 2 for d in dummy_layer}
-    for i in ids:
-        center_y[i] = boxes[i].cy
+    # 6. Heights, band by band; each band below the channel that ends the one above.
+    band_layers = [[g for g in range(nlayers) if band_of[g] == b] for b in range(nbands)]
+    first_of_band = [bl[0] for bl in band_layers]
+    # lines in each channel: (channel, edge); a line skipping bands uses two channels
+    chan_edges: List[List[int]] = [[] for _ in range(nbands)]
+    for u, v, k in sorted(dag, key=lambda t: (layer[t[0]], layer[t[1]], t[2])):
+        if k in cross:
+            bu, bv = band_of[layer[u]], band_of[layer[v]]
+            chan_edges[bu].append(k)
+            if bv - 1 != bu:
+                chan_edges[bv - 1].append(k)
+    center_y: Dict[str, float] = {}
+    box_y: Dict[str, float] = {}
+    band_top: List[float] = []
+    chan_top: List[float] = []
+    top = 0.0
+    for b in range(nbands):
+        band_top.append(top)
+        lays = [layers[g] for g in band_layers[b]]
+        members = [n for lay in lays for n in lay]
+        used = sorted({row[n] for n in members})
+        remap = {r: i for i, r in enumerate(used)}
+        brow = {n: remap[row[n]] for n in members}
+        ry, rh = _row_coords(lays, brow, [n for n in members if n in real], sizes, group_of) \
+            if members else ([0.0], [0.0])
+        for n in members:
+            center_y[n] = top + ry[brow[n]] + rh[brow[n]] / 2
+            if n in real:
+                box_y[n] = center_y[n] - sizes[n][1] / 2
+        bottom = top + ry[-1] + rh[-1]
+        chan_top.append(bottom + GROUP_PAD + CHANNEL_PAD)
+        top = (chan_top[-1] + BEND_GAP * (len(chan_edges[b]) + 1) + CHANNEL_PAD
+               + GROUP_PAD + GROUP_TITLE)
+    chan_y: Dict[Tuple[int, int], float] = {}
+    for b, ks in enumerate(chan_edges):
+        for idx, k in enumerate(ks):
+            chan_y[(b, k)] = chan_top[b] + BEND_GAP * (idx + 1)
+    spine = {k: idx for idx, k in enumerate(k for u, v, k in dag if k in cross
+                                            and band_of[layer[v]] - band_of[layer[u]] > 1)}
 
-    # 7. Ports: spread the lines on each box side, ordered by where they go.
+    # 7. Ports: spread the lines on each box side, ordered by where they go. A side with
+    #    more than FAN_OUT lines sends the ones heading furthest up out of the top and
+    #    the ones heading furthest down out of the bottom, each turning at its own height.
     out_ports: Dict[str, List[Tuple[float, int]]] = {i: [] for i in ids}
     in_ports: Dict[str, List[Tuple[float, int]]] = {i: [] for i in ids}
     for k, chain in chains.items():
         out_ports[chain[0]].append((center_y[chain[1]], k))
         in_ports[chain[-1]].append((center_y[chain[-2]], k))
+    fans = {i for i in ids if fan and (len(out_ports[i]) > FAN_OUT
+                                       or len(in_ports[i]) > FAN_OUT)}
+    # (edge, "out" or "in") -> (x along the box, border y, turn y)
+    fanned: Dict[Tuple[int, str], Tuple[float, float, float]] = {}
+    for i in sorted(fans, key=ids.index):
+        top_y, bot_y = box_y[i], box_y[i] + sizes[i][1]
+        w = sizes[i][0]
+        lay = layers[layer[i]]
+        above = [box_y[n] + sizes[n][1] if n in real else center_y[n] for n in lay
+                 if n != i and center_y[n] < center_y[i]]
+        below = [box_y[n] if n in real else center_y[n] for n in lay
+                 if n != i and center_y[n] > center_y[i]]
+        room = {}
+        for side, gap, nb in (("top", top_y - max(above) if above else FAN_ROOM, above),
+                              ("bottom", min(below) - bot_y if below else FAN_ROOM, below)):
+            near = [n for n in lay if n in fans and n != i
+                    and ((center_y[n] < center_y[i]) == (side == "top"))]
+            if near:
+                gap = gap / 2
+            room[side] = max(0, min(FAN_MAX, int((gap - FAN_CLEAR) / TURN_GAP)))
+        picked: Dict[str, Dict[str, List[Tuple[float, int]]]] = {
+            "top": {"in": [], "out": []}, "bottom": {"in": [], "out": []}}
+        for d, ports in (("out", out_ports[i]), ("in", in_ports[i])):
+            if len(ports) <= FAN_OUT:
+                continue
+            ups = sorted(p for p in ports if p[0] < top_y - 1)
+            downs = sorted((p for p in ports if p[0] > bot_y + 1), reverse=True)
+            want = len(ports) - FAN_OUT
+            while want > 0 and (ups or downs):
+                # the most extreme line first, where there is room for it
+                up_ok = ups and len(picked["top"][d]) < room["top"]
+                down_ok = downs and len(picked["bottom"][d]) < room["bottom"]
+                if not up_ok and not down_ok:
+                    break
+                if up_ok and (not down_ok or top_y - ups[0][0] >= downs[0][0] - bot_y):
+                    picked["top"][d].append(ups.pop(0))
+                else:
+                    picked["bottom"][d].append(downs.pop(0))
+                want -= 1
+            moved = {k for s in ("top", "bottom") for _, k in picked[s][d]}
+            ports[:] = [p for p in ports if p[1] not in moved]
+        for side in ("top", "bottom"):
+            ins, outs = picked[side]["in"], picked[side]["out"]
+            if not ins and not outs:
+                continue
+            xs = _spread(len(ins) + len(outs), 0.0, w)
+            sign, edge_y = (-1.0, top_y) if side == "top" else (1.0, bot_y)
+            # top: the out line to the highest target leaves leftmost and turns highest;
+            # the in line from the highest source enters rightmost and turns highest
+            # (bottom: mirrored). So none of them cross.
+            outs.sort(reverse=(side == "bottom"))
+            ins.sort(reverse=(side == "bottom"))
+            for j, (_, k) in enumerate(ins):
+                lv = len(ins) - 1 - j
+                fanned[(k, "in")] = (xs[len(ins) - 1 - j], edge_y, edge_y + sign * TURN_GAP * (lv + 1))
+            for j, (_, k) in enumerate(outs):
+                lv = len(outs) - 1 - j
+                fanned[(k, "out")] = (xs[len(ins) + j], edge_y, edge_y + sign * TURN_GAP * (lv + 1))
     port_out: Dict[int, float] = {}
     port_in: Dict[int, float] = {}
     for i in ids:
-        b = boxes[i]
         for ports, dest in ((out_ports[i], port_out), (in_ports[i], port_in)):
             ports.sort()
-            for (_, k), y in zip(ports, _ports(b.y, b.h, [t for t, _ in ports])):
+            for (_, k), y in zip(ports, _ports(box_y[i], sizes[i][1], [t for t, _ in ports])):
                 dest[k] = y
 
     # A lone port lines up with the line it meets when that keeps the line straight.
     for k, chain in chains.items():
-        if len(chain) != 2:
+        if len(chain) != 2 or k in cross or (k, "out") in fanned or (k, "in") in fanned:
             continue
-        a, b = boxes[chain[0]], boxes[chain[-1]]
-        if len(in_ports[chain[-1]]) == 1 and b.y < port_out[k] < b.bottom:
+        a, b = chain[0], chain[-1]
+        a_top, b_top = box_y[a], box_y[b]
+        if len(in_ports[b]) == 1 and b_top < port_out[k] < b_top + sizes[b][1]:
             port_in[k] = port_out[k]
-        elif len(out_ports[chain[0]]) == 1 and a.y < port_in[k] < a.bottom:
+        elif len(out_ports[a]) == 1 and a_top < port_in[k] < a_top + sizes[a][1]:
             port_out[k] = port_in[k]
 
-    # 8. Routes: border to border, with the bends in the gap between two columns.
-    hops: Dict[int, List[Tuple[float, float, int, int]]] = {}  # gap -> (y0, y1, edge, hop)
-    paths: Dict[int, List[Tuple[float, float, float, float, int]]] = {}
-    for k, chain in chains.items():
+    # 8. The vertical runs of the lines, gap by gap (a gap is after a layer, or before
+    #    the first layer of a band), and how wide each gap must be to keep them apart.
+    def start_y(k: int) -> float:
+        return fanned[(k, "out")][2] if (k, "out") in fanned else port_out[k]
+
+    def end_y(k: int) -> float:
+        return fanned[(k, "in")][2] if (k, "in") in fanned else port_in[k]
+
+    hops: Dict[Tuple[str, int], List[Tuple[float, float, int, int]]] = {}
+    paths: Dict[int, List[Tuple[str, str, float, float, Tuple[str, int]]]] = {}
+    for u, v, k in dag:
+        chain = chains[k]
         hop_list = []
-        for h_i, (a, b) in enumerate(zip(chain, chain[1:])):
-            y0 = port_out[k] if h_i == 0 else center_y[a]
-            y1 = port_in[k] if h_i == len(chain) - 2 else center_y[b]
-            x0 = boxes[a].right if a in boxes else col_x[all_layer[a]] + maxw
-            x1 = boxes[b].x if b in boxes else col_x[all_layer[b]]
-            gap = all_layer[a]
-            hop_list.append((x0, y0, x1, y1, gap))
+        if k in cross:
+            bu, bv = band_of[layer[u]], band_of[layer[v]]
+            gb = ("after", layer[v] - 1) if layer[v] != first_of_band[bv] else ("pre", bv)
+            hop_list = [(u, "", start_y(k), chan_y[(bu, k)], ("after", layer[u])),
+                        ("", v, chan_y[(bv - 1, k)], end_y(k), gb)]
+        else:
+            for h_i, (a, b) in enumerate(zip(chain, chain[1:])):
+                y0 = start_y(k) if h_i == 0 else center_y[a]
+                y1 = end_y(k) if h_i == len(chain) - 2 else center_y[b]
+                hop_list.append((a, b, y0, y1, ("after", all_layer[a])))
+        for h_i, (_, _, y0, y1, key) in enumerate(hop_list):
             if abs(y0 - y1) > 0.01:
-                hops.setdefault(gap, []).append((y0, y1, k, h_i))
+                hops.setdefault(key, []).append((y0, y1, k, h_i))
         paths[k] = hop_list
+    last_of_band = {bl[-1] for bl in band_layers}
+    gap_w: Dict[Tuple[str, int], float] = {}
+    for g in range(nlayers):
+        n = len(hops.get(("after", g), []))
+        gap_w[("after", g)] = (BEND_GAP * (n + 1) if n else 0.0) if g in last_of_band \
+            else max(COL_GAP, BEND_GAP * (n + 1))
+    for b in range(nbands):
+        n = len(hops.get(("pre", b), []))
+        gap_w[("pre", b)] = BEND_GAP * (n + 1) if n else 0.0
+
+    # 9. Columns, boxes, and the routes: border to border, bends in the gaps.
+    col_x = [0.0] * nlayers
+    gap_lo: Dict[Tuple[str, int], float] = {}
+    for b in range(nbands):
+        gap_lo[("pre", b)] = 0.0
+        x = gap_w[("pre", b)]
+        for g in band_layers[b]:
+            col_x[g] = x
+            gap_lo[("after", g)] = x + maxw
+            x += maxw + gap_w[("after", g)]
+    boxes: Dict[str, Box] = {}
+    for i in ids:
+        w, h = sizes[i]
+        boxes[i] = Box(col_x[layer[i]] + (maxw - w) / 2, box_y[i], w, h)
     bend_x: Dict[Tuple[int, int], float] = {}
-    for gap, items in hops.items():
-        lo = col_x[gap] + maxw
+    for key, items in hops.items():
         # So no two lines share a horizontal run: lines going down bend lowest start
         # first, lines going up bend highest start first.
         items.sort(key=lambda t: (t[1] < t[0], -t[0] if t[1] > t[0] else t[0], t[1]))
-        for (_, _, k, h_i), x in zip(items, _spread(len(items), lo, COL_GAP)):
+        for (_, _, k, h_i), x in zip(items, _spread(len(items), gap_lo[key], gap_w[key])):
             bend_x[(k, h_i)] = x
-    routes: List[List[Point]] = []
+    routes: List[List[Point]] = [[] for _ in view.edges]
     for k, e in enumerate(view.edges):
         if e.src == e.dst:
-            routes.append(_self_loop(boxes[e.src]))
-            continue
+            routes[k] = _self_loop(boxes[e.src])
+    for u, v, k in dag:
+        hop_list = paths[k]
         pts: List[Point] = []
-        for h_i, (x0, y0, x1, y1, _) in enumerate(paths[k]):
-            if not pts or pts[-1] != (x0, y0):
-                pts.append((x0, y0))
-            if (k, h_i) in bend_x:
-                xm = bend_x[(k, h_i)]
-                pts += [(xm, y0), (xm, y1)]
-            pts.append((x1, y1))
-        routes.append(_simplify(pts[::-1] if k in reversed_edges else pts))
+        if (k, "out") in fanned:
+            rx, by, ty = fanned[(k, "out")]
+            pts = [(boxes[u].x + rx, by), (boxes[u].x + rx, ty)]
+        else:
+            pts = [(boxes[u].right, port_out[k])]
+        if k in cross:
+            (_, _, y0, cy1, _), (_, _, cy2, y1, _) = hop_list
+            xa, xb = bend_x[(k, 0)], bend_x[(k, 1)]
+            pts += [(xa, y0), (xa, cy1)]
+            if k in spine:
+                xs_ = -SPINE_GAP * (spine[k] + 1)
+                pts += [(xs_, cy1), (xs_, cy2)]
+            pts += [(xb, cy2), (xb, y1)]
+        else:
+            for h_i, (a, b, y0, y1, _) in enumerate(hop_list):
+                if h_i > 0:
+                    x0 = boxes[a].right if a in boxes else col_x[all_layer[a]] + maxw
+                    if pts[-1] != (x0, y0):
+                        pts.append((x0, y0))
+                if (k, h_i) in bend_x:
+                    xm = bend_x[(k, h_i)]
+                    pts += [(xm, y0), (xm, y1)]
+                if h_i < len(hop_list) - 1:
+                    pts.append((col_x[all_layer[b]], y1))
+        if (k, "in") in fanned:
+            rx, by, ty = fanned[(k, "in")]
+            pts += [(boxes[v].x + rx, ty), (boxes[v].x + rx, by)]
+        else:
+            pts.append((boxes[v].x, port_in[k]))
+        routes[k] = _simplify(pts[::-1] if k in reversed_edges else pts)
     return boxes, routes
+
+
+def _bands(dag: List[Tuple[str, str, int]], layer: Dict[str, int],
+           group_of: Dict[str, Optional[str]], ids: List[str], maxw: float,
+           nlayers: int) -> List[int]:
+    """The band of each layer: all 0 when the layers fit in BAND_WIDTH (gaps as wide as
+    the lines through them may need); else as many layers per band as fit, cut only
+    between layers no group spans (a band grows past the width rather than split one)."""
+    span = [0] * max(nlayers - 1, 0)
+    for u, v, _ in dag:
+        for g in range(layer[u], layer[v]):
+            span[g] += 1
+    gap = [max(COL_GAP, BEND_GAP * (c + 1)) for c in span]
+    out = [0] * nlayers
+    if nlayers * maxw + sum(gap) <= BAND_WIDTH:
+        return out
+    glay: Dict[str, Tuple[int, int]] = {}
+    for i in ids:
+        g = group_of[i]
+        if g is not None:
+            lo, hi = glay.get(g, (layer[i], layer[i]))
+            glay[g] = (min(lo, layer[i]), max(hi, layer[i]))
+
+    def free(c: int) -> bool:  # may a band start at layer c?
+        return all(not (lo < c <= hi) for lo, hi in glay.values())
+
+    starts = [0]
+    g, width = 1, maxw
+    while g < nlayers:
+        width += gap[g - 1] + maxw
+        if width > BAND_WIDTH:
+            cut = next((c for c in range(g, starts[-1], -1) if free(c)), None)
+            if cut is None:
+                cut = next((c for c in range(g + 1, nlayers) if free(c)), None)
+                if cut is None:
+                    break
+            starts.append(cut)
+            g, width = cut + 1, maxw
+            continue
+        g += 1
+    for b, s in enumerate(starts):
+        for g in range(s, nlayers):
+            out[g] = b
+    return out
 
 
 def _rank_rows(layers: List[List[str]], real: set,
@@ -1020,7 +1236,7 @@ def context(view: ViewGraph, sizes: Dict[str, Tuple[float, float]]
                     [view.edges[k] for k in inner_edges], view.groups)
     cap = max(LAYER_CAP, int(math.ceil(len(members) / float(CONTEXT_COLS))))
     mboxes, mroutes = layered(sub, {i: sizes[i] for i in member_ids}, cap=cap,
-                              reach=CONTEXT_COLS)
+                              reach=CONTEXT_COLS, fan=False)
 
     # which column each outside box goes to
     ins: Dict[str, int] = {}
