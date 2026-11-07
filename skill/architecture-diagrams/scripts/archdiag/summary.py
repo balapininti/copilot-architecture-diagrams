@@ -283,6 +283,7 @@ def _describe(r: Resolved, n, by_src: Dict[str, List[Edge]],
 _README_LINES = 200
 _ENTRY_KINDS = ("job", "transaction", "endpoint", "page", "zosapi")
 _NAME_SKIP = ("step", "dataset", "missing", "external", "utility")
+_DATA_KINDS = ("dataset", "table", "queue")
 
 
 def _repo_readme(r: Resolved, repo: str) -> List[str]:
@@ -291,12 +292,13 @@ def _repo_readme(r: Resolved, repo: str) -> List[str]:
     base = next((x.path for x in r.inventory.repos if x.name == repo), repo)
     folder = Path(r.inventory.workspace) / base
     try:
-        names = sorted(p.name for p in folder.iterdir()
+        found = sorted(p.name for p in folder.iterdir()
                        if p.is_file() and p.name.lower().startswith("readme"))
-        if not names:
+        if not found:
             return []
-        text = read_source(folder / names[0])
-    except OSError:
+        exact = [n for n in found if n.lower() in ("readme", "readme.md")]
+        text = read_source(folder / (exact or found)[0])
+    except (OSError, UnicodeError, ValueError):
         return []
     lines = text.splitlines()
     out = lines[:_README_LINES]
@@ -312,8 +314,48 @@ def _clip(lines: List[str], room: int, what: str) -> List[str]:
     return lines[:room - 1] + ["... %d more %s not listed" % (len(lines) - room + 1, what)]
 
 
+def _data_target(n) -> Optional[Tuple[str, str]]:
+    """(kind, name) when ``n`` is a dataset, table or queue, real or not found in these repos."""
+    if n is None:
+        return None
+    if n.kind in _DATA_KINDS:
+        return (n.kind, n.name)
+    if n.kind in ("missing", "external"):
+        parts = n.id.split(":", 2)
+        if n.kind == "missing" and len(parts) == 3 and parts[1] in _DATA_KINDS:
+            return (parts[1], n.name)
+    return None
+
+
+def _ops(c: Counter) -> str:
+    return ", ".join("%s x%d" % (o, k) for o, k in sorted(c.items()))
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+def _folder_table(files: List[Dict[str, str]], limit: int) -> List[str]:
+    """One line per folder, as deep as ``limit`` lines allow (3 levels, then 2, then 1)."""
+    table: List[str] = []
+    for depth in (3, 2, 1):
+        folders: Dict[str, List[str]] = {}
+        for f in files:
+            parts = f["path"].split("/")[:-1][:depth]
+            folders.setdefault("/".join(parts) + "/" if parts else "(repo root)", []).append(f["kind"])
+        table = []
+        for fo, ks in sorted(folders.items()):
+            c = Counter(ks)
+            kinds = ", ".join("%s %d" % (k, v) for k, v in sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+            table.append("%s\t%s\t%s" % (fo, _plural(len(ks), "file", "files"), kinds))
+        if len(table) <= limit:
+            break
+    return _clip(table, limit, "folders")
+
+
 def gitdiagram_context(r: Resolved, repo: str, max_lines: int = 1500) -> str:
     from .gitdiagram import file_of, repo_files
+    max_lines = max(max_lines, 12)
     files = repo_files(r, repo)
     names: Dict[str, List[str]] = {}
     ends: Dict[str, Optional[Tuple[str, str]]] = {}
@@ -328,47 +370,68 @@ def gitdiagram_context(r: Resolved, repo: str, max_lines: int = 1500) -> str:
 
     rows = ["%s\t%s\t%s" % (f["path"], f["kind"], " ".join(names.get(f["path"], [])[:3]))
             for f in files]
-    links, leaving = set(), Counter()
+    links = set()
+    leaving: Dict[str, Counter] = {}
+    # data target -> {file: ops}; data may be an edge's source or its target
+    touches: Dict[Tuple[str, str, str], Dict[str, set]] = {}
     for e in r.edges:
         a, b = ends.get(e.src), ends.get(e.dst)
+        sn, dn = r.nodes.get(e.src), r.nodes.get(e.dst)
+        for data, other, otherf in ((dn, sn, a), (sn, dn, b)):
+            t = _data_target(data)
+            if t is None or not otherf or otherf[0] != repo:
+                continue
+            owner = ends.get(data.id)
+            if owner and owner[0] == repo:
+                continue  # defined here: an ordinary link between files
+            where = owner[0] if owner else ""
+            touches.setdefault((t[0], t[1], where), {}).setdefault(otherf[1], set()).add(e.op)
         if not a or a[0] != repo:
             continue
         if b and b[0] == repo:
             if a[1] != b[1]:
-                links.add("%s → %s  %s  %s" % (a[1], b[1], e.op, e.status))
+                links.add("%s \u2192 %s  %s  %s" % (a[1], b[1], e.op, e.status))
+        elif _data_target(dn) is None:
+            key = b[0] if b else "%s (no file)" % (dn.kind if dn else "unknown")
+            leaving.setdefault(key, Counter())[e.op] += 1
+    shared, single = [], {}
+    for (kind, name, where), fs in sorted(touches.items()):
+        if len(fs) >= 2:
+            who = ", ".join("%s %s" % (f, "/".join(sorted(ops))) for f, ops in sorted(fs.items()))
+            dst = "%s: %s %s" % (where, kind, name) if where else "%s %s" % (kind, name)
+            shared.append("%s \u2192 %s" % (who, dst))
         else:
-            dn = r.nodes.get(e.dst)
-            leaving[b[0] if b else "%s (%s)" % (dn.kind if dn else "unknown", "no file")] += 1
+            key = where or "%s (no file)" % kind
+            for ops in fs.values():
+                for o in ops:
+                    leaving.setdefault(key, Counter())[o] += 1
     link_rows = sorted(links)
-    leave_rows = ["%d links to %s" % (c, k) for k, c in sorted(leaving.items())]
+    leave_rows = ["%s to %s (%s)" % (_plural(sum(c.values()), "link", "links"), k, _ops(c))
+                  for k, c in sorted(leaving.items())]
     entries = sorted({"%s\t%s\t%s" % (n.kind, n.name, ends[n.id][1])
                       for n in r.nodes.values()
                       if n.kind in _ENTRY_KINDS and ends[n.id] and ends[n.id][0] == repo})
 
-    readme = _repo_readme(r, repo)
-    readme = readme if readme else ["(no README at the repo root)"]
-    other = len(readme) + len(link_rows) + len(leave_rows) + len(entries) + 14
-    summarised = len(rows) + other > max_lines
+    readme = _repo_readme(r, repo) or ["(no README at the repo root)"]
+    readme = _clip(readme, max_lines // 4, "README lines")
+    heads = 11
+    summarised = len(rows) + heads + len(readme) + len(link_rows) + len(shared) + \
+        len(leave_rows) + len(entries) > max_lines
     if summarised:
-        folders: Dict[str, List[str]] = {}
-        for f in files:
-            folders.setdefault(f["path"].split("/", 1)[0] if "/" in f["path"] else "(repo root)",
-                               []).append(f["kind"])
-        table = []
-        for fo, ks in sorted(folders.items()):
-            c = Counter(ks)
-            kinds = ", ".join("%s %d" % (k, v) for k, v in sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
-            table.append("%s/\t%d files\t%s" % (fo, len(ks), kinds) if fo != "(repo root)"
-                         else "(repo root)\t%d files\t%s" % (len(ks), kinds))
-        table = _clip(table, max_lines // 3, "folders")
+        table = _folder_table(files, max(max_lines // 3 - 1, 1))
         table.append("Too many files to list: summarised per folder.")
     else:
         table = rows
-    budget = max_lines - (len(table) + len(readme) + 14)
-    each = max(budget // 2, 3)
-    link_rows = _clip(link_rows, each, "links")
-    entries = _clip(entries, max(budget - len(link_rows) - len(leave_rows), 3), "entry points")
+    budget = max(max_lines - heads - len(table) - len(readme), 4)
+    quarter = max(budget // 4, 1)
+    link_rows = _clip(link_rows, max(budget // 3, 1), "links")
+    shared = _clip(shared, quarter, "shared data targets")
+    leave_rows = _clip(leave_rows, quarter, "outside targets")
+    entries = _clip(entries, max(budget - len(link_rows) - len(shared) - len(leave_rows), 1), "entry points")
     out = ["# Repo %s" % repo, "", "## Files"] + table + ["", "## README"] + readme + \
           ["", "## Code links between files"] + (link_rows or ["(none)"]) + \
-          leave_rows + ["", "## Entry points"] + (entries or ["(none)"])
+          ["", "### Shared data (no file)"] + (shared or ["(none)"]) + leave_rows + \
+          ["", "## Entry points"] + (entries or ["(none)"])
+    if len(out) > max_lines:
+        out = out[:max_lines - 1] + ["... cut to %d lines" % max_lines]
     return "\n".join(out) + "\n"
