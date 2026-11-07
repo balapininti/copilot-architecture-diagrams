@@ -6,6 +6,7 @@ Ask Copilot in plain words for a picture of your repos, and it draws one from th
 - "Show me batch job CLMD100."
 - "Draw the claim details transaction as a whiteboard sketch."
 - "Link map for claims-batch: what depends on it?"
+- "Create a gitdiagram for claims-batch."
 - "Draw everything in all four styles."
 
 The skill reads COBOL, JCL, CICS definitions and BMS maps, DB2 DDL, MQ definitions, Java
@@ -92,7 +93,7 @@ plus an editable copy and a links report (`*-links.md`):
 | c | Repo link map | `.html`: click a line to see its evidence (works offline) |
 | d | Whiteboard sketch | `.excalidraw` |
 
-The four zoom levels (landscape, one application, one flow, repo link map) are described
+The five zoom levels (landscape, one application, one flow, repo link map, one repo's gitdiagram) are described
 in `reference/levels-and-styles.md`.
 
 ## What the lines mean
@@ -105,7 +106,50 @@ in `reference/levels-and-styles.md`.
 | **Dashed brown** | Shared code (a copybook used by both sides). |
 
 Copilot may not add links. Anything it suspects is connected is recorded as a suggestion
-in `groups.json` and drawn dotted, never solid.
+in `groups.json` (or the gitdiagram file) and drawn dotted, never solid.
+
+## Diagram of one repo (gitdiagram)
+
+Ask "create a gitdiagram for claims-batch" (or "how is claims-batch put together?"). The
+diagram shows the repo as a few named groups of files, with arrows between them taken from
+the code. Entry points (jobs, CICS transactions, endpoints, pages) sit on the left.
+
+1. Copilot runs `gitdiagram-context --repo claims-batch`, reads it, and proposes 6 to 15
+   groups with a short overview. **It shows you the groups and waits for your changes.**
+2. It saves them to `architecture-diagrams\gitdiagram-claims-batch.json` and runs
+   `draw --level gitdiagram --scope claims-batch`.
+
+Later runs reuse that file. Edit it by hand or ask Copilot; your groups are kept, and
+files added since are listed in a "Not yet grouped" box until they are placed. Without the
+file, `draw` groups by top-level folder and says so.
+
+```json
+{
+  "repo": "claims-batch",
+  "overview": "Nightly claims batch. CLMD100 sorts the claim master, prices each claim and posts payments to DB2.",
+  "groups": [
+    {"name": "Nightly jobs", "tech": "JCL", "files": ["jcl/**", "proc/**"],
+     "description": "Job streams and the procs they call"},
+    {"name": "Claim pricing", "tech": "COBOL", "files": ["cobol/CLMB200.cbl", "cobol/CLMB210.cbl"],
+     "description": "Prices each claim"}
+  ],
+  "suggested_links": []
+}
+```
+
+Patterns are relative to the repo and not case-sensitive; a folder name matches everything
+under it. Each file goes to the first group that matches. The full format is in
+`reference/groups-format.md`.
+
+The lines mean the same as above, plus one: a thin **grey** line labelled **starts** only
+says a job exists; who schedules it isn't in these repos. Copilot's suggested links are
+always dotted and are never evidence.
+
+**Clicking a box** opens its file or folder. In the SVG, opened in a browser or VS Code,
+and in the draw.io file, it works. Mermaid links work in the VS Code preview but are off on
+GitHub and Azure DevOps. Excalidraw resolves relative links against the app, so they will
+probably not open. The links are relative, so keep the `architecture-diagrams` folder
+beside the cloned repos.
 
 ## Before you rely on the diagrams: the calibration step
 

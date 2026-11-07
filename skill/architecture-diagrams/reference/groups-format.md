@@ -1,4 +1,4 @@
-# groups.json and archdiag.config.json
+# groups.json, gitdiagram-<repo>.json and archdiag.config.json
 
 Both files live in `<workspace>/architecture-diagrams/`, next to `inventory.json` and
 `links.json`. Write them as UTF-8 JSON. Problems in either file are never fatal. The next
@@ -79,3 +79,53 @@ An end that names nothing is dropped with a `suggested link ... dropped: unknown
 | `exclude_dirs` | Folder names to skip when scanning, in addition to `.git`, `node_modules`, `target`, `bin` and the like. |
 
 After changing either field, run `scan` again.
+
+## gitdiagram-<repo>.json
+
+One file per repo, in `<workspace>/architecture-diagrams/`, written by Copilot or the user.
+The scripts never write it. UTF-8 JSON, at most 5 MB. A file that cannot be read is
+replaced by a grouping by top-level folder, and `draw` says so.
+
+```json
+{
+  "repo": "claims-batch",
+  "overview": "Nightly claims batch. CLMD100 sorts the claim master, prices each claim and posts payments to DB2.",
+  "groups": [
+    {"name": "Nightly jobs", "tech": "JCL", "files": ["jcl/**", "proc/**"],
+     "description": "Job streams and the procs they call"},
+    {"name": "Claim pricing", "tech": "COBOL", "files": ["cobol/CLMB200.cbl", "cobol/CLMB210.cbl"],
+     "description": "Prices each claim"}
+  ],
+  "suggested_links": [
+    {"from": "Claim pricing", "to": "Nightly jobs", "label": "rates file",
+     "note": "CLMB200 reads a rates file the JCL does not name"}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `repo` | The repo folder name. |
+| `overview` | A short paragraph, printed above the picture and at the top of the links report. |
+| `groups[].name` | Short, human, unique. Shown on the box. |
+| `groups[].tech` | Technology label, for example `COBOL`, `JCL`, `Java`, `Angular`, `DB2`. |
+| `groups[].description` | One line. |
+| `groups[].files` | Patterns (below). |
+| `suggested_links[]` | `from` and `to` (group names, or an entry box such as `Scheduler`, `CICS transactions`, `REST endpoints`, `Angular pages`, `z/OS Connect APIs`), `label`, and `note` (why). |
+
+Patterns: relative to the repo, case-insensitive, `\` read as `/`, a leading `./` dropped.
+A pattern with no glob matches that file, or everything under that folder. Globs use `*`,
+`?` and `[ABC]`; `*` also crosses `/`, so `**` works like `*`. A file belongs to the first
+group, in list order, with a matching pattern. A file no group claims goes into the box
+"Not yet grouped", so nothing disappears.
+
+Rules for Copilot:
+
+- Every file the scan found sits in exactly one group, or is left for "Not yet grouped" on
+  purpose. `gitdiagram-context` lists them.
+- Suggested links are always drawn dotted, as a suggestion, and are never evidence. Never
+  suggest one the scan already shows. Links the scan finds are never written here.
+- Never change groups the user changed unless asked. When files are added later, add
+  patterns for them and leave the rest.
+- Problems (a pattern that matches nothing, a bad field, a dropped suggested link) are
+  never fatal. `draw` prints them as `Problem in gitdiagram-<repo>.json: ...`. Fix them.

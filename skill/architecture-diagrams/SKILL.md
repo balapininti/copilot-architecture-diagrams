@@ -1,6 +1,6 @@
 ---
 name: architecture-diagrams
-description: Draws architecture diagrams (SVG, plus draw.io, Mermaid, HTML or Excalidraw and a links report) of mainframe COBOL, JCL, CICS, DB2, MQ, Java and Angular repos, from a scan of the code with file-and-line evidence for every link. Use when the user asks for an architecture diagram, to draw the landscape, to show a batch job or online transaction end to end, for an application diagram, a repo link map, what depends on this repo or what breaks if it changes, or a whiteboard or C4 picture of their repos.
+description: Draws architecture diagrams (SVG, plus draw.io, Mermaid, HTML or Excalidraw and a links report) of mainframe COBOL, JCL, CICS, DB2, MQ, Java and Angular repos, from a scan of the code with file-and-line evidence for every link. Use when the user asks for an architecture diagram, to draw the landscape, to show a batch job or online transaction end to end, for an application diagram, a repo link map, what depends on this repo or what breaks if it changes, a whiteboard or C4 picture of their repos, or a gitdiagram (a diagram of one repo, how a repo is put together, its structure).
 ---
 
 # Architecture diagrams
@@ -12,8 +12,8 @@ link yourself.** People plan modernization around these pictures, and a missing 
 made-up link is the worst failure.
 
 **Never edit, create or delete files in the user's repos.** The skill only reads them.
-Only write inside `<ws>/architecture-diagrams/`, and there only `groups.json` and
-`archdiag.config.json`. The scripts write everything else.
+Only write inside `<ws>/architecture-diagrams/`, and there only `groups.json`,
+`archdiag.config.json` and `gitdiagram-<repo>.json`. The scripts write everything else.
 The one exception is `<ws>/.vscode/tasks.json` (see below). Only when the user asks you to,
 copy `assets/tasks.json` there, and never overwrite a `tasks.json` that already exists
 (show them the entries to merge instead). Otherwise just tell them how to copy it.
@@ -116,6 +116,7 @@ Map the request using `reference/levels-and-styles.md`.
 | `--level application` | application name | `a` |
 | `--level flow` | job, transaction, page route or endpoint | `a` (`d` for walkthroughs) |
 | `--level repomap` | optional repo name | `c` |
+| `--level gitdiagram` | one repo name (required) | `b` |
 
 `--style` is `a`, `b`, `c`, `d` or `all`. To find a scope name, run:
 
@@ -178,3 +179,48 @@ Don't describe anything as connected unless the diagram or the links report show
 If a note says `Too big for one picture: try level application with scope X` (or
 `level flow with scope X`), offer to draw that level and scope next. If it says items are
 grouped as `… N more`, point the user to the links report, which lists every one.
+
+### 7. Diagram of one repo (gitdiagram)
+
+For "gitdiagram", "diagram of this repo", "how is <repo> put together", "repo structure".
+It draws one repo as named groups of files, with arrows from the scan. The grouping is a
+file you write: `architecture-diagrams/gitdiagram-<repo>.json` (format and rules in
+`reference/groups-format.md`). Check `<ws>/architecture-diagrams/` for it first.
+
+**No file yet:**
+
+1. Run `python "<skill>/scripts/run.py" gitdiagram-context --repo "<repo>" --workspace "<ws>"`
+   and read it (files with kind and main names, the README, links, entry points).
+2. Propose about 6-15 groups, each with a short human name, a tech label and a one-line
+   description, plus a short overview. For a repo with no README, group by job streams, the
+   programs they run, shared copybooks and online transactions.
+3. **Show them to the user and wait for changes** (rename, merge, split). Do not save yet.
+4. Write `gitdiagram-<repo>.json`, then run
+   `python "<skill>/scripts/run.py" draw --level gitdiagram --scope "<repo>" --workspace "<ws>"`.
+
+**File exists:** just draw. Never change groups the user edited unless they ask. Re-run
+`draw` after any edit.
+
+Put every file in exactly one group, or leave it on purpose for "Not yet grouped". Never
+add links. Links come from the scan. A suggested link goes only in `suggested_links`, with
+a `note`; it is always drawn dotted and is never evidence, so never suggest one the code
+already shows. Never write outside `architecture-diagrams/`.
+
+What `draw` prints, and what to do:
+
+- `Grouped by folder. Ask Copilot to name groups for this repo.` No file yet. Do steps 1-4.
+- `The gitdiagram file couldn't be used (...); folders were used instead.` Say so, fix the
+  file (or ask), draw again.
+- `Not yet grouped: N files (see ...)` Offer to place them. Add patterns to the right
+  groups, keep the rest as they were, draw again.
+- `Problem in gitdiagram-<repo>.json: ...` (a pattern that matches nothing, a dropped
+  suggested link). Fix the pattern it names, draw again.
+
+Report as in step 5: paths, the `Summary:` line and `Top issues:` verbatim, every `Note:`
+and `WARNING:`. Grey thin "starts" lines only say a job exists; who schedules it is not in
+the repos.
+
+Boxes are clickable, with relative links to the files: the SVG (browser or VS Code) and
+the draw.io file open them. Mermaid links work in the VS Code preview but are off on
+GitHub and Azure DevOps. Excalidraw resolves them against the app, so they will likely not
+open. The `architecture-diagrams` folder must stay beside the cloned repos.

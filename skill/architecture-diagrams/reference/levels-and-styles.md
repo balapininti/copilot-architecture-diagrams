@@ -2,7 +2,7 @@
 
 Use this page to turn a request into `draw --level <level> --scope <scope> --style <style>`.
 
-## The four levels
+## The five levels
 
 | Level (`--level`) | Shows | For | Scope (`--scope`) | Default style |
 |---|---|---|---|---|
@@ -10,6 +10,7 @@ Use this page to turn a request into `draw --level <level> --scope <scope> --sty
 | `application` | One application's jobs, transactions, programs and data stores, with what it exchanges with the rest shown as grey stubs | Planning one piece of work | an application name, from `list --what applications` | `a` (pictorial) |
 | `flow` | One batch job (steps, programs or utilities, data read above the steps, data written below, condition codes) **or** one online path (Angular page, Java, MQ or CICS, programs, DB2, including the 3270 route) | New developers | a job, transaction, page route or endpoint, from `list --what jobs`, `transactions`, `pages` or `endpoints` | `a`. Use `d` for walkthroughs. |
 | `repomap` | One card per repo with its key files, and every link between repos labelled by what connects them (queue, table, dataset, copybook, endpoint, CICS program) with the evidence lines | "What breaks if I change this?" | optional: a repo name from `list --what repos`. With a repo, the map is about that repo's links. Leave it out for all repos. | `c` (repo link map) |
+| `gitdiagram` | One repo as named groups of files (a short overview above), with scan-backed arrows between groups, entry points (jobs, transactions, endpoints, pages) on the left, and a "Not yet grouped" box for files no group claims | "How is this repo put together?" | a repo name from `list --what repos` (required) | `b` (C4 boxes) |
 
 The command takes one style at a time (`a`, `b`, `c` or `d`) or `all`. Leaving out
 `--style` gives the level's default. Any style works at any level.
@@ -37,6 +38,7 @@ status and the file and line for both ends, then every loose end and partly know
 | "Trace the claims page end to end." | `flow` | the page route from `list --what pages` | default (`a`) |
 | "Link map for claims-batch: what depends on it?" / "what breaks if I change this repo?" | `repomap` | `claims-batch` | default (`c`) |
 | "Repo link map" / "how do the repos link?" | `repomap` | none | default (`c`) |
+| "gitdiagram for claims-batch" / "diagram of this repo" / "how is claims-batch put together?" / "repo structure" | `gitdiagram` | the repo name | default (`b`). First needs a grouping file: see SKILL.md step 7. |
 | "Draw everything in all four styles." | `landscape` and `repomap` (whole estate) | none | `all` |
 | "Make it C4" / "pictorial" / "hand-drawn" / "for slides" | keep the level | keep the scope | `b` / `a` / `d` / `d` |
 

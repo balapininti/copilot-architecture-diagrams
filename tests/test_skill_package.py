@@ -180,3 +180,43 @@ def test_skill_md_copies_tasks_json_only_when_asked_and_never_overwrites():
     t = " ".join(_text(SKILL / "SKILL.md").split())
     assert "Only when the user asks you to" in t and "never overwrite" in t
     assert ".vscode/tasks.json" in t
+
+
+def test_skill_mentions_gitdiagram_commands():
+    text = _text(SKILL / "SKILL.md")
+    assert re.search(r'run\.py" gitdiagram-context --repo', text)
+    assert re.search(r'run\.py" draw --level gitdiagram --scope', text)
+    assert re.search(r"^\| `--level gitdiagram` \|[^\n]*\| `b`", text, re.M)
+    assert "gitdiagram-<repo>.json" in text
+    for phrase in ("diagram of this repo", "Not yet grouped", "Grouped by folder",
+                   "couldn't be used", "Problem in gitdiagram"):
+        assert phrase in text, phrase
+    levels = _text(SKILL / "reference" / "levels-and-styles.md")
+    assert re.search(r"^\| `gitdiagram` \|[^\n]*\| `b`", levels, re.M)
+
+
+def test_skill_says_show_groups_before_saving():
+    t = " ".join(_text(SKILL / "SKILL.md").split())
+    assert "Show them to the user and wait for changes" in t
+    assert t.index("wait for changes") < t.index("Write `gitdiagram-<repo>.json`")
+
+
+def test_skill_forbids_solid_links_from_copilot():
+    t = " ".join(_text(SKILL / "SKILL.md").split())
+    assert "never add links" in t.lower()
+    section = t[t.index("### 7."):]
+    assert "Never add links" in section and "`suggested_links`" in section
+    assert "dotted" in section and "never evidence" in section
+    assert "Never write outside `architecture-diagrams/`" in section
+
+
+def test_reference_documents_gitdiagram_file_fields():
+    t = _text(SKILL / "reference" / "groups-format.md")
+    for word in ("gitdiagram-<repo>.json", "overview", "groups[].name", "groups[].tech",
+                 "groups[].description", "groups[].files", "suggested_links", "5 MB",
+                 "Not yet grouped", "case-insensitive"):
+        assert word in t, word
+    readme = _text(SKILL / "README.md")
+    for word in ("gitdiagram-context", "--level gitdiagram", "starts", "GitHub and Azure DevOps",
+                 "Excalidraw", "beside the cloned repos"):
+        assert word in readme, word
