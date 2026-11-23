@@ -2,11 +2,17 @@
 
 build_view() cuts the resolved link graph into one of five views (spec section 5):
 
-* ``landscape``   - one box per application, the data stores and queues shared by two or
-  more of them, outside systems and the far sides of exchanges; each application's own
-  loose ends folded into one ``N loose ends`` box. Lines combined per pair and kind of link.
-* ``application`` - one application's members, with what it talks to outside as grey stubs.
-* ``flow_job``    - one batch job: its steps in a lane, data read above, data written below.
+* ``landscape``   - one box per system, the resources no application owns that two or more
+  use, and outside systems. One line per pair, protocol and certainty, labelled with the
+  protocol and its targets (``MQ CLM.REQ.LQ``, ``SQL CLAIM, POLICY``). Loose ends are a
+  count line on the box they hang off, shared code (COPY, copybook-only applications) is
+  left out; both are counted in ``notes`` and kept on ``VNode.underlying``.
+* ``application`` - one application's members ordered entry points, logic, gateways,
+  resources (``VNode.rank``), with what it talks to outside drawn as what it is; lines say
+  verb and object (``MQ PUT CLM.REQ.LQ``).
+* ``flow_job``    - one batch job: its numbered steps in a lane, inputs above, outputs below
+  (a dataset or table is placed by what the job does to it first); data lines carry the DD
+  name and DISP; "no reader found" is a marker on the dataset.
 * ``flow_tx``     - one online path from a transaction, page or endpoint, numbered in order.
 * ``repomap``     - one card per repo, one line per link between two repos.
 * ``gitdiagram``  - one repo as the named groups of files of its gitdiagram file, with its
@@ -16,7 +22,7 @@ A line is never drawn more certain than the resolver decided. A combined line is
 confirmed only if a confirmed edge is under it, otherwise partial if a partial one is,
 otherwise loose; folding (``… N more``, ``N loose ends``) keeps lines of different status
 apart or takes the least certain. Every loose end and partly known link reaching the view
-is drawn, or named in ``notes``. Copilot's suggested links are added here only, as partial;
+is drawn, counted on a box (which then holds the edge) or named in ``notes``. Copilot's suggested links are added here only, as partial;
 one a view cannot draw is named in ``notes``.
 
 Fields for the renderers and the links report (Tasks 12-16):

@@ -19,7 +19,7 @@ from .repos import discover_repos
 from .scan import scan_workspace
 from .store import cache_is_current, fingerprint, load_inventory, load_resolved, save_json
 from .summary import _env_pairs, build_summary, count_unanalyzed, list_items
-from .views.common import STRUCTURAL
+from .views.common import STRUCTURAL, _missing_label, links_on_boxes
 
 OUT_DIR_NAME = "architecture-diagrams"
 CLI_LEVELS = ("landscape", "application", "flow", "repomap", "gitdiagram")
@@ -263,20 +263,44 @@ def _is_job(r: Resolved, scope: str) -> bool:
                for n in r.nodes.values())
 
 
+def _on_boxes(view) -> List:
+    """Links a landscape or job flow counts on a box instead of drawing (loose ends, shared
+    code): never confirmed runtime links, which a box only stands for (a step's program)."""
+    if view.level not in ("landscape", "flow_job"):
+        return []
+    return [e for e in links_on_boxes(view) if e.status != CONFIRMED or e.op == "copy"]
+
+
 def _top_issues(view, r: Resolved) -> List[str]:
     names = {n.id: n.label for n in view.nodes}
-    out = []
+    found = []
     # the Scheduler's grey "starts" line is structure, not an issue (Ruling 2)
-    for e in sorted((e for e in view.edges if e.status not in (CONFIRMED, STRUCTURAL)),
-                    key=lambda e: (e.status != LOOSE, e.src, e.dst)):
+    for e in view.edges:
+        if e.status in (CONFIRMED, STRUCTURAL):
+            continue
         reason = next((u.reason for u in e.underlying if u.reason), None) or (
             "link is not confirmed" if e.status == PARTIAL else "nothing found at the other end")
         src, dst = names.get(e.src, e.src), names.get(e.dst, e.dst)
         label = " (%s)" % e.label if e.label and e.label not in (src, dst) else ""
-        out.append("- %s -> %s%s [%s]: %s" % (src, dst, label, e.status, reason))
-        if len(out) == 3:
-            break
-    return out
+        found.append((e.status != LOOSE, e.src, e.dst,
+                      "- %s -> %s%s [%s]: %s" % (src, dst, label, e.status, reason)))
+
+    def name(nid: str) -> str:
+        n = r.nodes.get(nid)
+        if n is not None and n.kind == "missing":
+            return _missing_label(n)[0]  # "no reader found", "which program?"
+        return n.name if n is not None else nid.split(":", 1)[-1]
+
+    for e in _on_boxes(view):  # a loose end counted on a box is still an issue
+        if e.status == CONFIRMED:
+            continue
+        n = r.nodes.get(e.dst)
+        reason = e.reason or (n.attrs.get("reason") if n is not None else None) or (
+            "link is not confirmed" if e.status == PARTIAL else "nothing found at the other end")
+        op = "" if e.op in (LOOSE, PARTIAL) else " (%s)" % e.op
+        found.append((e.status != LOOSE, e.src, e.dst,
+                      "- %s -> %s%s [%s]: %s" % (name(e.src), name(e.dst), op, e.status, reason)))
+    return [x[-1] for x in sorted(found)[:3]]
 
 
 def _gitdiagram_lines(view, gd, links: Path) -> None:
@@ -395,6 +419,13 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     if struct:
         summary += "; %d job-structure line%s" % (struct, "" if struct == 1 else "s")
     print(summary)
+    on = _on_boxes(view)
+    if on:  # nothing leaves a picture without being counted
+        parts = [("partly known", sum(1 for e in on if e.status == PARTIAL)),
+                 ("loose ends", sum(1 for e in on if e.status == LOOSE)),
+                 ("shared code", sum(1 for e in on if e.status == CONFIRMED))]
+        print("Counted on boxes, not drawn as lines: %s (see %s)"
+              % (", ".join("%d %s" % (c, t) for t, c in parts if c), links))
     print("Top issues:")
     issues = _top_issues(view, r)
     for line in issues or ["- none"]:

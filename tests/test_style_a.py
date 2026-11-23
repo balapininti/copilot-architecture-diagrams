@@ -110,13 +110,14 @@ def test_drawio_parses_and_has_cells():
 
 
 def test_drawio_line_styles():
-    v = fixture_view("flow_job", "CLMD100")
+    v = fixture_view("application", "claims-online")  # has lines of every certainty
     root = ET.fromstring(style_a.render(v)["drawio"])
     styles = [c.get("style") for c in root.iter("mxCell")
               if c.get("edge") == "1" and not c.get("id").startswith("lg-")]
     by = {}
     for e, s in zip(v.edges, styles):
-        by.setdefault(e.status, []).append(s)
+        if e.kind != "shared_code":  # COPY lines have their own dashed style
+            by.setdefault(e.status, []).append(s)
     assert all("dashed=1;dashPattern=3 4;strokeColor=#d97706" in s for s in by["partial"])
     assert all("strokeColor=#dc2626" in s for s in by["loose"])
     assert all("dashed=1" not in s and "strokeColor=#334155" in s for s in by["confirmed"])
@@ -129,9 +130,15 @@ def test_legend_lists_only_present_statuses():
     text = svg_text(style_a.render(fixture_view("flow_job", "CLMD100"))["svg"])
     assert "confirmed (both ends found in code)" in text
     assert "partly known / suggested" in text
-    assert "loose end (only one side found)" in text
+    # the job's two loose ends are markers on their datasets, not lines
+    assert "loose end (only one side found)" not in text
+    assert "no reader found" in text and "no writer found" in text
     assert "shared code" not in text
     text = svg_text(style_a.render(fixture_view("landscape"))["svg"])
+    assert "loose end (only one side found)" in text  # the call to rates.example.com
+    assert "shared code (copybook, package)" not in text  # left off the landscape, in a note
+    assert "Shared code is not drawn: 6 COPY links" in text
+    text = svg_text(style_a.render(fixture_view("application", "claims-online"))["svg"])
     assert "shared code (copybook, package)" in text
 
 

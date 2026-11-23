@@ -524,3 +524,26 @@ def test_summary_line_adds_up_and_keeps_its_format(tmp_path, capsys, args):
     total, c, p, lo = (int(x) for x in m.groups())
     assert total == c + p + lo
     assert "job-structure" not in out
+
+
+def test_draw_counts_what_a_picture_folds_into_its_boxes(tmp_path, capsys):
+    """Loose ends counted on a box and shared code left off the landscape are still counted in
+    the output and still top issues; the Summary line keeps its wording."""
+    w = _estate(tmp_path)
+    assert main(["draw", "--workspace", str(w), "--style", "b", "--level", "landscape"]) == 0
+    out = capsys.readouterr().out
+    assert "Summary: 11 nodes, 17 links: 11 confirmed, 5 partly known, 1 loose ends\n" in out
+    assert ("Counted on boxes, not drawn as lines: 4 partly known, 9 loose ends, 6 shared code "
+            "(see ") in out
+    assert "- ClaimService -> DELETE /api/claims/{} (http) [loose]" in out
+    assert "Note: Shared code is not drawn: 6 COPY links to 4 copybooks" in out
+    report = (w / "architecture-diagrams" / "landscape-links.md").read_text(encoding="utf-8")
+    assert "copybook CLMREC" in report and "DELETE /api/claims/{}" in report
+    assert main(["draw", "--workspace", str(w), "--style", "b", "--level", "flow",
+                 "--scope", "CLMD100"]) == 0
+    out = capsys.readouterr().out
+    assert "Counted on boxes, not drawn as lines: 2 loose ends (see " in out
+    assert "- CLAIMS.AUDIT -> no reader found [loose]: written but never read" in out
+    assert main(["draw", "--workspace", str(w), "--style", "b", "--level", "application",
+                 "--scope", "claims-api"]) == 0
+    assert "Counted on boxes" not in capsys.readouterr().out
