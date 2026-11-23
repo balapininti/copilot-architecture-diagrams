@@ -69,7 +69,8 @@ An end that names nothing is dropped with a `suggested link ... dropped: unknown
 ```json
 {
   "environment_qualifiers": ["PROD", "TEST"],
-  "exclude_dirs": ["archive", "old-copies"]
+  "exclude_dirs": ["archive", "old-copies"],
+  "service_hosts": {"billing.acme.example": "billing-service"}
 }
 ```
 
@@ -78,7 +79,22 @@ An end that names nothing is dropped with a `suggested link ... dropped: unknown
 | `environment_qualifiers` | First qualifiers of dataset names, or DB2 schemas, that are environment names. Names that differ only by one of these count as the same thing, so their links can be solid. Only list names the user confirmed are environments. A wrong entry joins things that are really different. `init-config` fills this from the candidates in the summary. Empty means none. |
 | `exclude_dirs` | Folder names to skip when scanning, in addition to `.git`, `node_modules`, `target`, `bin` and the like. |
 
-After changing either field, run `scan` again.
+| `service_hosts` | Host name (no scheme, port or path) to the repo that serves it. A REST call to that host is then tied to that repo: a path match becomes a solid line, and when two repos serve the same path the host picks one. Only list pairs the user confirmed, with a repo name from `list --what repos`. A pair naming an unknown repo is ignored. Not needed when the host's first label is already the repo's folder name or `spring.application.name`, or when the repo's own config names the host (`server.*`, OpenAPI `servers`). |
+
+After changing `environment_qualifiers` or `exclude_dirs`, run `scan` again. A change to
+`service_hosts` is picked up by the next command.
+
+### Config projects
+
+No setting is needed. When a repo in the workspace holds settings for other services in
+the Spring Cloud Config layout (`<service>.yml`, `<service>-<profile>.yml|properties`, or
+`<service>/application*.yml`, where `<service>` is another repo's folder name or
+`spring.application.name`), those values are used to resolve that service's `${...}`
+placeholders. The service's own `application*.yml` wins. Among the config project's files
+the default file beats a `prod` profile, which beats other profiles. Profiles that give the
+same URL on different hosts are treated as one value; any other disagreement leaves the
+property unresolved, and the links report says which files disagree. The summary names each
+config project found.
 
 ## gitdiagram-<repo>.json
 

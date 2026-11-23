@@ -1,6 +1,7 @@
 """The short Markdown summary Copilot reads, and plain listings of things in the estate."""
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
@@ -121,6 +122,39 @@ def _fit(sections: List[Tuple[List[str], int]], avail: int) -> List[List[str]]:
     return out
 
 
+def _rest_services(r: Resolved) -> List[str]:
+    """Config projects found, and the hosts REST calls go to that no scanned repo is tied
+    to (at most 8): each is either a repo that isn't cloned here, a repo that is here under
+    a host name the scan can't tie to it, or a system outside the estate."""
+    inv = r.inventory
+    out: List[str] = []
+    for crepo, targets in sorted((inv.config_projects or {}).items()):
+        out.append("- Config project %s supplies settings for: %s" % (crepo, ", ".join(targets)))
+    hosts: Dict[str, set] = {}
+    for e in r.edges:
+        if e.op != "http":
+            continue
+        host = None
+        if e.dst.startswith("external:"):
+            host = e.dst.split(":", 1)[1]
+        else:
+            m = re.search(r"host (\S+) isn't tied to a scanned repo", e.reason or "")
+            host = m.group(1) if m else None
+        if host:
+            src = r.nodes.get(e.src)
+            hosts.setdefault(host, set()).add((src.repo if src and src.repo else None) or e.src)
+    rows = ["- Host %s (called by %s): not tied to a scanned repo" % (h, ", ".join(sorted(c)))
+            for h, c in sorted(hosts.items())]
+    out += rows[:8]
+    if len(rows) > 8:
+        out.append("- ... and %d more hosts (see the links reports)" % (len(rows) - 8))
+    if rows:
+        out.append("If one of these is a service whose repo is (or should be) in this folder, "
+                   "ask the user which repo serves it. Only a confirmed pair goes in "
+                   "service_hosts in archdiag.config.json.")
+    return out or ["- none found"]
+
+
 def build_summary(r: Resolved, g: Groups, cfg: Config) -> str:
     inv = r.inventory
     # fixed tail first: it always survives
@@ -133,6 +167,7 @@ def build_summary(r: Resolved, g: Groups, cfg: Config) -> str:
         items.sort(key=lambda e: (not _cross(r, e, touch), _where(e), e.src, e.dst))
         tail += ["", "## Top %s links (%d of %d)" % (label.lower(), min(10, len(items)), len(items))]
         tail += [_edge_line(e) for e in items[:10]] or ["- none"]
+    tail += ["", "## REST services"] + _rest_services(r)
     tail += ["", "## Not analyzed"]
     na = inv.languages_not_analyzed
     tail.append("- " + (", ".join("%s: %d files" % (k, v) for k, v in sorted(na.items())) if na else "none"))

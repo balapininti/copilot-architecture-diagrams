@@ -231,7 +231,8 @@ def _cmd_init_config(args, workspace: Path, out_dir: Path, notice: Callable[[str
             quals.append(q)
     path = out_dir / CONFIG_NAME
     _write(path, json.dumps({"environment_qualifiers": quals,
-                             "exclude_dirs": list(config.exclude_dirs)}, indent=2) + "\n")
+                             "exclude_dirs": list(config.exclude_dirs),
+                             "service_hosts": dict(config.service_hosts)}, indent=2) + "\n")
     print("Wrote %s with environment_qualifiers: %s" % (path, ", ".join(quals) or "(none found)"))
     print("Please confirm these are real environment names (for example PROD and TEST) "
           "and delete any that are not, then run scan again.")

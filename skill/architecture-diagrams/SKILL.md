@@ -88,6 +88,36 @@ Never add a qualifier the user did not confirm. A wrong one turns different data
 tables into one, which makes false solid links. The config format is in
 `reference/groups-format.md`.
 
+### 2b. REST services: tie each call to the repo that serves it
+
+The summary has a **REST services** section. The scan already does the lookups itself:
+
+- `Config project <repo> supplies settings for: ...` means a repo in the workspace holds
+  other services' settings (files named `<service>.yml`, `<service>-<profile>.yml` or
+  `<service>/application*.yml`), and the scan used them to work out the URLs those services
+  call. Tell the user it was found. Nothing to do.
+- A call to a host whose first label is a repo's folder name or its
+  `spring.application.name` (for example `http://billing-service:8080`) is tied to that
+  repo, and the flow carries on into that repo's endpoint and what it calls.
+
+Act only on lines of the form `Host <host> (called by <repo>): not tied to a scanned repo`.
+Ask the user **once**, listing every such host, which of three cases each one is:
+
+1. **A service whose repo is in this folder.** Add the pair to `service_hosts` in
+   `archdiag.config.json` (`{"service_hosts": {"<host>": "<repo>"}}`, keeping the other
+   fields), then run `summary` again. The repo name must be one from `list --what repos`.
+2. **A service whose repo is not cloned here.** Tell them to clone it (and the config
+   project, if settings live in one) into the workspace folder, then run `scan`. Until
+   then the call stays a loose end.
+3. **A system outside the estate** (a partner, a SaaS API). Leave it. It is drawn as an
+   outside system.
+
+To help the user answer, you may read the config project's file for the calling service
+and the calling class named in the links report, and say what you found (for example "the
+URL comes from `billing.url` in `config-repo/orders-api-prod.yml`"). Only read. **Never add
+a `service_hosts` pair the user did not confirm**, and never work out a link yourself from
+what you read: a wrong pair draws a solid line to the wrong service.
+
 ### 3. Group the code into applications (first use)
 
 If `<ws>/architecture-diagrams/groups.json` does not exist, propose application groups.
