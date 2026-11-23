@@ -6,19 +6,21 @@ grey line under it, groups as dashed rounded rectangles in the group color, numb
 on the lines. Labels sit on opaque pills and the canvas grows to hold them; the legend
 (only the line types drawn) and the notes go at the bottom.
 
-render(view) -> {"svg": ..., "drawio": ...}. Both come from the same Layout.
+render(view) -> {"svg": ..., "drawio": ...}. Both come from the same Layout; the ``.drawio``
+file is written by ``render.drawio``, as for every style.
 """
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set, Tuple
 
 from archdiag.layout import Box, Layout, layout_for
-from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS, LEGEND_SIZE, LOOSE_COLOR, _LEGEND,
-                                    PARTIAL_COLOR, REPO_COLORS, actor_icon, esc, gd_details,
-                                    group_colors,
-                                    group_icon, legend, legend_width, line_attrs, line_style,
-                                    link_wrap, node_href, notes_block, notes_height, num, overview_block,
-                                    path_d, step_text, svg_doc, text, text_width, tint, wrap)
+from archdiag.render import drawio
+from archdiag.render.common import (_DEFAULT, FIXED_COLOR_KINDS, ICON_H, ICON_W, ICONS,
+                                    LOOSE_COLOR, PARTIAL_COLOR, REPO_COLORS, actor_icon,
+                                    gd_details, group_colors, group_icon, legend, legend_width,
+                                    line_attrs, line_style, link_wrap, notes_block,
+                                    notes_height, num, overview_block, path_d, svg_doc, text,
+                                    text_width, tint, wrap)
 from archdiag.render.pills import Pill, edge_svg, key_svg, place_pills as _place_pills
 from archdiag.views import VNode, ViewGraph
 
@@ -116,12 +118,6 @@ def group_title(gid: str, label: str) -> str:
 def _edge_text(e) -> str:
     """The pill text (the pill draws the step number itself)."""
     return e.label
-
-
-def _plain_edge_text(e) -> str:
-    """The label in the text-only draw.io copy: ``(3) LINK``."""
-    num_s = step_text(e.number)
-    return "%s %s" % (num_s, e.label) if num_s and e.label else num_s or e.label
 
 
 def draw_routes(view: ViewGraph, L: Layout) -> List[List[Tuple[float, float]]]:
@@ -273,152 +269,20 @@ def _svg(view: ViewGraph, L: Layout) -> str:
 
 # ------------------------------------------------------------------ draw.io
 
-_SHAPE = {
-    "table": "shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=8;",
-    "dataset": "shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=8;",
-    "vsam": "shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=8;",
-    "gdg": "shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=8;",
-    "datastore": "shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=8;",
-    "person": "shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;",
-    "external": "ellipse;shape=cloud;",
-    "job": "shape=document;boundedLbl=1;",
-    "cicsfile": "shape=card;size=14;",
-    "endpoint": "shape=hexagon;perimeter=hexagonPerimeter2;size=0.12;",
-    "queue": "shape=process;size=0.08;rounded=1;",
-    "repo": "shape=folder;tabWidth=40;tabHeight=12;tabPosition=left;",
-    "missing": "rounded=1;dashed=1;",
-    "neighbor": "rounded=1;dashed=1;",
-    "notanalyzed": "rounded=1;dashed=1;",
-}
-
-_EDGE_STYLE = {
-    "confirmed": "strokeColor=#334155;strokeWidth=2;endArrow=block;endFill=1;",
-    "partial": ("dashed=1;dashPattern=3 4;strokeColor=#d97706;strokeWidth=2;endArrow=block;"
-                "endFill=1;fontColor=#b45309;"),
-    "loose": "strokeColor=#dc2626;strokeWidth=2;endArrow=oval;endFill=1;endSize=10;"
-             "fontColor=#dc2626;",
-    "shared_code": ("dashed=1;dashPattern=7 4;strokeColor=#a16207;strokeWidth=1.6;"
-                    "endArrow=block;endFill=1;fontColor=#a16207;"),
-    "structural": "strokeColor=#94a3b8;strokeWidth=1.4;endArrow=block;endFill=1;"
-                  "fontColor=#64748b;",
-}
-
-
-def _value(lines: List[str]) -> str:
-    return "&#xa;".join(esc(s) for s in lines if s)
-
-
-def _vertex_style(n: VNode, color: str) -> str:
-    shape = _SHAPE.get(n.kind, "rounded=1;")
-    if n.kind == "missing":
-        partial = n.status == "partial"
-        c = PARTIAL_COLOR if partial else LOOSE_COLOR
-        return shape + "whiteSpace=wrap;html=0;fillColor=%s;strokeColor=%s;fontColor=%s;" % (
-            "#fffbeb" if partial else "#fef2f2", c, c)
-    if n.kind in ("neighbor", "notanalyzed", "outside"):
-        return shape + "whiteSpace=wrap;html=0;fillColor=#f8fafc;strokeColor=#94a3b8;" \
-                       "fontColor=#64748b;"
-    c = color or "#64748b"
-    return shape + "whiteSpace=wrap;html=0;fillColor=%s;strokeColor=%s;fontColor=#0f172a;" % (
-        tint(c, 0.18), c)
-
-
-def _geom(x: float, y: float, w: float, h: float) -> str:
-    return '<mxGeometry x="%s" y="%s" width="%s" height="%s" as="geometry"/>' % (
-        num(x), num(y), num(w), num(h))
-
-
-def _drawio(view: ViewGraph, L: Layout) -> str:
+def _look(view: ViewGraph):
+    """A box's draw.io colours: its group's colour (or its kind's own), as the icon has."""
     colors = _group_colors(view)
-    cells = ['<mxCell id="0"/>', '<mxCell id="1" parent="0"/>']
-    ov = " ".join(str(view.overview or "").split())
-    dy = 0.0  # the picture moves down by the overview band's height
-    if ov:
-        wrapped = wrap(ov, max(200.0, L.width - 64), OVERVIEW_SIZE)
-        oh = 14 + OVERVIEW_LINE * len(wrapped)
-        dy = oh + 16
-        cells.append('<mxCell id="overview" value="%s" style="text;html=0;whiteSpace=wrap;'
-                     'align=left;verticalAlign=middle;fontSize=12;fontColor=#334155;'
-                     'fillColor=#f8fafc;strokeColor=#e2e8f0;spacingLeft=10;" vertex="1" '
-                     'parent="1">%s</mxCell>' % (esc(ov), _geom(0, 0, max(240.0, L.width), oh)))
-    group_cell: Dict[str, Tuple[str, Box]] = {}
-    for i, g in enumerate(view.groups):
-        gb = L.groups.get(g.id)
-        if gb is None:  # not drawn in the SVG either (no members, or a job/card level)
-            continue
-        c = colors[g.id]
-        cid = "g%d" % i
-        group_cell[g.id] = (cid, gb)
-        cells.append('<mxCell id="%s" value="%s" style="rounded=1;arcSize=6;dashed=1;'
-                     'dashPattern=6 4;container=1;collapsible=0;html=0;fillColor=%s;'
-                     'strokeColor=%s;fontColor=%s;fontStyle=1;align=left;verticalAlign=top;'
-                     'spacingLeft=10;spacingTop=2;" vertex="1" parent="1">%s</mxCell>'
-                     % (cid, esc(group_title(g.id, g.label)), tint(c, 0.08), c, shade(c),
-                        _geom(gb.x, gb.y + dy, gb.w, gb.h)))
-    node_cell: Dict[str, str] = {}
-    for i, n in enumerate(view.nodes):
-        b = L.boxes.get(n.id) or Box(0, 0, MIN_W, MIN_H)
-        cid = "n%d" % i
-        node_cell[n.id] = cid
-        parent, px, py = "1", 0.0, 0.0
-        if n.group in group_cell:
-            parent, gb = group_cell[n.group]
-            px, py = gb.x, gb.y
-        lines = [n.label, n.sublabel] + list(n.detail_lines)
-        url = node_href(view, n)
-        shift = dy if parent == "1" else 0.0
-        cell = ('<mxCell id="%s" value="%s" style="%s" vertex="1" parent="%s">%s</mxCell>'
-                % (cid, _value(lines), _vertex_style(n, _node_color(n, colors)), parent,
-                   _geom(b.x - px, b.y - py + shift, b.w, b.h)))
-        if url:  # draw.io reads a link from a UserObject wrapper, not from the mxCell
-            cell = ('<UserObject label="%s" link="%s" id="%s">%s</UserObject>'
-                    % (_value(lines), esc(url), cid,
-                       cell.replace(' id="%s" value="%s"' % (cid, _value(lines)), "", 1)))
-        cells.append(cell)
-    for i, e in enumerate(view.edges):
-        style = _EDGE_STYLE[line_style(e.status, e.kind)]
-        route = L.routes[i] if i < len(L.routes) else []
-        pts = ""
-        if len(route) > 2:
-            pts = '<Array as="points">%s</Array>' % "".join(
-                '<mxPoint x="%s" y="%s"/>' % (num(x), num(y + dy)) for x, y in route[1:-1])
-        ends = ""
-        if route:
-            ends = ('<mxPoint x="%s" y="%s" as="sourcePoint"/><mxPoint x="%s" y="%s" '
-                    'as="targetPoint"/>' % (num(route[0][0]), num(route[0][1] + dy),
-                                            num(route[-1][0]), num(route[-1][1] + dy)))
-        cells.append('<mxCell id="e%d" value="%s" style="edgeStyle=none;rounded=0;html=0;'
-                     'labelBackgroundColor=#ffffff;fontSize=10;%s" edge="1" parent="1" '
-                     'source="%s" target="%s"><mxGeometry relative="1" as="geometry">%s%s'
-                     '</mxGeometry></mxCell>'
-                     % (i, esc(_plain_edge_text(e)), style, node_cell[e.src], node_cell[e.dst], ends,
-                        pts))
-    present = {line_style(e.status, e.kind) for e in view.edges}  # the legend, as in the SVG
-    cx, cy = 20.0, L.height + 24 + dy
-    page_w, page_h = L.width, L.height + dy
-    for key, label in _LEGEND:
-        if key not in present:
-            continue
-        cells.append('<mxCell id="lg-line-%s" value="" style="edgeStyle=none;html=0;%s" edge="1" '
-                     'parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="%s" y="%s" '
-                     'as="sourcePoint"/><mxPoint x="%s" y="%s" as="targetPoint"/></mxGeometry>'
-                     '</mxCell>' % (key, _EDGE_STYLE[key], num(cx), num(cy), num(cx + 44), num(cy)))
-        w = text_width(label, LEGEND_SIZE) + 10
-        cells.append('<mxCell id="lg-text-%s" value="%s" style="text;html=0;align=left;'
-                     'verticalAlign=middle;fontSize=11;fontColor=#334155;" vertex="1" parent="1">%s'
-                     '</mxCell>' % (key, esc(label), _geom(cx + 52, cy - 9, w, 18)))
-        page_w, page_h = max(page_w, cx + 52 + w + 20), max(page_h, cy + 9 + 20)
-        cx += 52 + w + 24
-    return ('<mxfile host="archdiag" type="device"><diagram id="archdiag" name="%s">'
-            '<mxGraphModel dx="0" dy="0" grid="1" gridSize="10" guides="1" tooltips="1" '
-            'connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="%s" '
-            'pageHeight="%s" math="0" shadow="0"><root>%s</root></mxGraphModel></diagram>'
-            '</mxfile>\n' % (esc(view.title), num(page_w), num(page_h), "".join(cells)))
+
+    def look(n: VNode) -> drawio.Look:
+        return drawio.default_look(n, _node_color(n, colors) or _DEFAULT.get(_icon_kind(n), ""))
+    return look
 
 
 # ------------------------------------------------------------------ entry point
 
-def render(view: ViewGraph) -> Dict[str, str]:
-    """The pictorial SVG and its draw.io file, from one layout of ``view``."""
+def render(view: ViewGraph, nodes: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+    """The pictorial SVG and its draw.io file, from one layout of ``view``. ``nodes`` (the
+    resolver's nodes by id) adds where each thing was found to the draw.io file."""
     L = layout_for(view, node_size)
-    return {"svg": _svg(view, L), "drawio": _drawio(view, L)}
+    return {"svg": _svg(view, L),
+            "drawio": drawio.render(view, L, look=_look(view), nodes=nodes)}

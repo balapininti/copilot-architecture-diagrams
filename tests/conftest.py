@@ -85,15 +85,35 @@ def svg_edge_encodings(svg):
     return out
 
 
-def drawio_edge_encodings(xml):
-    """{edge index: (strokeColor, dashPattern)} of the diagram's own edges (``e<N>``)."""
+def drawio_cells(xml):
+    """Every cell of a ``.drawio`` file, in file order, as dicts: ``id``, ``label`` (the
+    ``<object>`` wrapper's label, or the cell's own value), ``data`` (the wrapper's other
+    attributes; {} for a bare cell), ``cell`` (the mxCell element) and ``style`` (its style
+    as a dict; a bare word like ``swimlane`` maps to "")."""
     import xml.etree.ElementTree as ET
 
+    out = []
+    for el in ET.fromstring(xml).find("diagram/mxGraphModel/root"):
+        cell = el if el.tag == "mxCell" else el.find("mxCell")
+        data = {} if el.tag == "mxCell" else {k: v for k, v in el.attrib.items()
+                                               if k not in ("id", "label")}
+        style = {}
+        for kv in (cell.get("style") or "").split(";"):
+            if kv:
+                k, _, v = kv.partition("=")
+                style[k] = v
+        out.append({"id": el.get("id"), "label": el.get("label", el.get("value", "")),
+                    "data": data, "cell": cell, "style": style, "wrapped": el.tag != "mxCell"})
+    return out
+
+
+def drawio_edge_encodings(xml):
+    """{edge index: (strokeColor, dashPattern)} of the diagram's own edges (``e<N>``)."""
     out = {}
-    for c in ET.fromstring(xml).iter("mxCell"):
-        cid = c.get("id", "")
-        if c.get("edge") == "1" and cid.startswith("e") and cid[1:].isdigit():
-            st = dict(kv.split("=", 1) for kv in c.get("style").split(";") if "=" in kv)
+    for c in drawio_cells(xml):
+        cid = c["id"] or ""
+        if c["cell"].get("edge") == "1" and cid.startswith("e") and cid[1:].isdigit():
+            st = c["style"]
             dash = st.get("dashPattern", "") if st.get("dashed") == "1" else ""
             out[int(cid[1:])] = (st["strokeColor"], dash)
     return out

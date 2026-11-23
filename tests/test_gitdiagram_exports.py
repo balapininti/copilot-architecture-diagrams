@@ -5,6 +5,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 
+from conftest import drawio_cells
 from test_gitdiagram_render import _hrefs
 from test_gitdiagram_view import batch_gd, view_of
 
@@ -27,23 +28,21 @@ def _linked(v):
 
 def test_drawio_cells_have_links():
     v = _view()
-    xml = style_a.render(v)["drawio"]
-    root = ET.fromstring(xml)
-    links = [u.get("link") for u in root.iter("UserObject")]
-    for u in root.iter("UserObject"):  # the wrapper holds the label and id; one vertex inside
-        cell = u.find("mxCell")
-        assert cell is not None and cell.get("vertex") == "1" and u.get("id") and u.get("label")
-    assert len(_linked(v)) >= 3
-    for n in _linked(v):
-        assert href(v.repo_path, n.link) in links
-    assert OVERVIEW in " ".join(c.get("value") or "" for c in root.iter("mxCell"))
-    cells = {c.get("id"): c for c in root.iter("mxCell")}
-    ov = cells["overview"].find("mxGeometry")
-    assert float(ov.get("y")) >= 0
-    for c in root.iter("mxCell"):  # edges still point at ids that exist (wrapper ids included)
-        for k in ("source", "target"):
-            if c.get(k):
-                assert c.get(k) in cells or c.get(k) in {u.get("id") for u in root.iter("UserObject")}
+    for mod in (style_a, style_b, style_c, style_d):
+        cells = drawio_cells(mod.render(v)["drawio"])
+        linked = [c for c in cells if c["data"].get("link")]
+        for c in linked:  # the <object> wrapper holds the label and id; one vertex inside
+            assert c["cell"].get("vertex") == "1" and c["id"] and c["label"]
+        assert len(_linked(v)) >= 3
+        links = [c["data"]["link"] for c in linked]
+        for n in _linked(v):
+            assert href(v.repo_path, n.link) in links
+        by_id = {c["id"]: c for c in cells}
+        assert by_id["overview"]["label"] == OVERVIEW
+        assert float(by_id["overview"]["cell"].find("mxGeometry").get("y")) >= 0
+        for c in cells:  # every reference is to an id that exists
+            for k in ("parent", "source", "target"):
+                assert c["cell"].get(k) is None or c["cell"].get(k) in by_id
 
 
 def test_mermaid_click_lines():
@@ -84,8 +83,8 @@ def test_special_characters_escaped_everywhere():
                     + base.groups[1:], [], [], True, "ok")
     gd.overview = 'Pays & "posts" [v2] | <A>'
     v = view_of(gd)
-    ET.fromstring(style_a.render(v)["drawio"])
     for mod in (style_a, style_b, style_c, style_d):
+        ET.fromstring(mod.render(v)["drawio"])
         ET.fromstring(mod.render(v)["svg"])
     json.loads(style_d.render(v)["excalidraw"])
     html = style_c.render(v)["html"]

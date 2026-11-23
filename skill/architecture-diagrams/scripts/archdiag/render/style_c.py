@@ -20,6 +20,7 @@ from archdiag.render.common import (LOOSE_COLOR, MONO, PARTIAL_COLOR, REPO_COLOR
                                     gd_details, group_colors, legend, legend_width, line_style, link_wrap,
                                     notes_block, notes_height, num, overview_block, svg_doc,
                                     text, text_width, tint, wrap)
+from archdiag.render import drawio
 from archdiag.render.pills import Pill, edge_svg, key_svg, marker_svg, place_pills
 from archdiag.views import VEdge, VNode, ViewGraph
 from archdiag.views.common import STRUCTURAL  # Ruling 10: not a link in any total
@@ -486,13 +487,34 @@ def _html(view: ViewGraph, svg: str) -> str:
            _json_for_script(edge_data(view)), js))
 
 
+# ------------------------------------------------------------------ draw.io
+
+def _look(view: ViewGraph):
+    """A box's draw.io colours: a card in its repo or group colour, a stub as the SVG's."""
+    colors = _repo_colors(view)
+    inside = view.level == "gitdiagram"
+
+    def look(n: VNode) -> drawio.Look:
+        if n.role == "ungrouped":
+            return drawio.Look("#f8fafc", "#94a3b8", "#334155", "#64748b", True)
+        if n.kind in CARD_KINDS:
+            return drawio.default_look(n, colors.get(n.id, ""))
+        if inside and n.kind not in ("outside", "external", "neighbor", "notanalyzed"):
+            return drawio.Look("#ffffff", "#64748b", "#1e293b", "#1e293b")
+        return drawio.Look("#f1f5f9", "#94a3b8", "#475569", "#475569", True)
+    return look
+
+
 # ------------------------------------------------------------------ entry point
 
-def render(view: ViewGraph) -> Dict[str, str]:
-    """The repo link map as an Office-safe SVG and as a self-contained HTML page."""
+def render(view: ViewGraph, nodes: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+    """The repo link map as an Office-safe SVG, a draw.io file and a self-contained HTML
+    page. ``nodes`` (the resolver's nodes by id) adds where each thing was found to the
+    draw.io file."""
     L = layout_for(view, node_size)
     styles = [line_style(e.status, e.kind) for e in view.edges]
     pills = place_pills(view, L, styles, [list(r) for r in L.routes], lambda e: e.label,
                         lambda g, gb: None)
     return {"svg": _svg(view, L, styles, pills),
+            "drawio": drawio.render(view, L, look=_look(view), nodes=nodes),
             "html": _html(view, _svg(view, L, styles, pills, interactive=True))}
