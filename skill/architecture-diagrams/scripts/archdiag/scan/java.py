@@ -76,6 +76,27 @@ def collect_java(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
         consts[m.group(1)] = m.group(2) if have is None or have == m.group(2) else _AMBIGUOUS
 
 
+_NOT_METHODS = frozenset(["if", "for", "while", "switch", "catch", "synchronized", "try"])
+_NOT_TYPES = frozenset(["return", "throw", "new", "else", "case", "assert", "yield", "goto",
+                        "instanceof", "package", "import"])
+# ``Type name =`` / ``Type name;`` / ``Type name :`` - a field or local variable declaration
+_DECL = re.compile(r"(?<![\w.$@])([A-Za-z_]\w*)(?:\s*<[^;=(){}]*>)?(?:\s*\[\s*\])*\s+(\w+)"
+                   r"\s*(?:=(?!=)|;|:(?!:))")
+# what follows a collaborator's name when it is called: ``.method(`` or ``::method``
+_CALL_TAIL = re.compile(r"\s*(?:\.\s*([A-Za-z_$][\w$]*)\s*\(|::\s*([A-Za-z_$][\w$]*))")
+_ASSIGNED = re.compile(r"\s*=(?!=)")
+
+
+class _Method:
+    """One method or constructor with a body: its name, where its header starts
+    (annotations included), its body braces and its parameter list's parentheses."""
+
+    def __init__(self, name: str, start: int, open_: int, close: int, popen: int, pclose: int,
+                 ctor: bool) -> None:
+        self.name, self.start, self.open, self.close = name, start, open_, close
+        self.popen, self.pclose, self.ctor = popen, pclose, ctor
+
+
 class _Src:
     """One cleaned Java file with its structure and variable table."""
 
@@ -121,6 +142,7 @@ class _Src:
             names = [x[3] for x in chain] + [c[3]]
             self.qual[c[0]] = (self.pkg + "." if self.pkg else "") + ".".join(names)
         self._params: Dict[Tuple[int, int], Set[str]] = {}
+        self._methods: Dict[int, List[_Method]] = {}
         self.vars: Dict[str, List[Tuple[Optional[Tuple[int, int]], str]]] = {}
         if not collecting:
             self._find_vars()
@@ -212,6 +234,138 @@ class _Src:
 
     def ev(self, off: int) -> Evidence:
         return make_ev(self.repo, self.rel, self.orig, self.lines.line_of(off))
+
+    # methods -------------------------------------------------------------------------
+    def methods(self, c: Tuple[int, int, int, str, int]) -> List["_Method"]:
+        """The methods and constructors of class c that have a body, in source order. A body
+        whose header is not ``name(...) [throws ...]`` (an initializer block, a nested class,
+        a lambda in a field initializer) is not a method: what sits in it stays class-level."""
+        if c[1] in self._methods:
+            return self._methods[c[1]]
+        masked = self.masked
+        depth = next((d for o, _, d in self.pairs if o == c[1]), 0)
+        out: List[_Method] = []
+        prev = c[1]
+        for o, cl, d in self.pairs:
+            if d != depth + 1 or not c[1] < o < c[2]:
+                continue
+            b = o - 1
+            while b > c[1] and masked[b].isspace():
+                b -= 1
+            if masked[b] in "(,=":  # an annotation's array value or an array initializer
+                continue
+            hs = max(prev, masked.rfind(";", 0, o)) + 1
+            prev = cl
+            tm = re.search(r"\)\s*(?:throws\b[\w\s,.]*)?$", masked[hs:o])
+            if not tm:
+                continue
+            pclose = hs + tm.start()
+            k, nest = pclose, 0
+            while k >= hs:
+                nest += (masked[k] == ")") - (masked[k] == "(")
+                if nest == 0:
+                    break
+                k -= 1
+            if k < hs:
+                continue
+            nm = re.search(r"([A-Za-z_$][\w$]*)\s*$", masked[hs:k])
+            if not nm or nm.group(1) in _NOT_METHODS or re.search(
+                    r"(?:\bnew\s+[\w.$<>?, ]*|\brecord\s+|[@.]\s*)$", masked[hs:hs + nm.start()]):
+                continue
+            out.append(_Method(nm.group(1), hs, o, cl, k, pclose, nm.group(1) == c[3]))
+        self._methods[c[1]] = out
+        return out
+
+    def method_at(self, off: int) -> Optional["_Method"]:
+        """The method of the innermost class whose header (annotations included) or body
+        holds off; None for class-level code."""
+        c = self.class_at(off)
+        if c is None:
+            return None
+        for m in self.methods(c):
+            if m.start <= off < m.close:
+                return m
+        return None
+
+    def method_table(self, c: Tuple[int, int, int, str, int]) -> Dict[str, Dict[str, object]]:
+        """Per method of class c (overloads together; constructors left out): its first
+        line, the calls it makes on the class's collaborators (fields typed as a class of
+        this repo) and the calls to the class's own methods, each with its line. ``""``
+        holds the calls in class-level code. A collaborator used in a way that is not a
+        plain ``name.method(...)`` call has ``method`` None: which method runs is not known."""
+        ms = self.methods(c)
+        if not ms:
+            return {}
+        masked = self.masked
+        mine = lambda off: (self.class_at(off) or c)[0] == c[0]  # noqa: E731
+        fields: Dict[str, str] = {}
+        for fm in _DECL.finditer(masked, c[1] + 1, c[2]):
+            if any(m.start <= fm.start() < m.close for m in ms) or not mine(fm.start()):
+                continue
+            got = self.resolve_type(fm.group(1), fm.start())
+            if got and got[0] and got[0] != self.cid(c):
+                fields.setdefault(fm.group(2), got[0])
+        own = {m.name for m in ms if not m.ctor}
+        declared = {dm.start(2) for dm in _DECL.finditer(masked, c[1] + 1, c[2])
+                    if dm.group(1) not in _NOT_TYPES}
+        table: Dict[str, Dict[str, object]] = {}
+
+        def sites(lo: int, hi: int, local: Dict[str, Optional[str]], keep) -> Tuple[list, list]:
+            calls: List[Dict[str, object]] = []
+            selfs: List[Dict[str, object]] = []
+            names = set(fields) | set(local)
+            if names:
+                pat = re.compile(r"(?<![\w.$])(this\s*\.\s*)?(%s)\b(?!\s*\()"
+                                 % "|".join(sorted(re.escape(x) for x in names)))
+                for cm in pat.finditer(masked, lo, hi):
+                    if not keep(cm.start()) or cm.start(2) in declared:
+                        continue
+                    name = cm.group(2)
+                    tid = fields.get(name) if cm.group(1) or name not in local else local[name]
+                    if tid is None:
+                        continue
+                    call = _CALL_TAIL.match(masked, cm.end())
+                    if call is None and _ASSIGNED.match(masked, cm.end()):
+                        continue  # assigned or declared, not used
+                    ev = self.ev(cm.start())
+                    calls.append({"class": tid,
+                                  "method": (call.group(1) or call.group(2)) if call else None,
+                                  "line": ev.line, "text": ev.text})
+            if own:
+                alt = "|".join(sorted(re.escape(x) for x in own))
+                pat = re.compile(r"(?<![\w.$])(?:this\s*\.\s*)?(%s)\s*\(|\bthis\s*::\s*(%s)\b"
+                                 % (alt, alt))
+                for sm in pat.finditer(masked, lo, hi):
+                    if keep(sm.start()) and not re.search(
+                            r"\bnew\s+$", masked[max(0, sm.start() - 8):sm.start()]):
+                        selfs.append({"method": sm.group(1) or sm.group(2),
+                                      "line": self.lines.line_of(sm.start())})
+            return calls, selfs
+
+        for m in ms:
+            if m.ctor:
+                continue
+            local: Dict[str, Optional[str]] = {}
+            for piece in split_generic(split_top(self.clean[m.popen + 1:m.pclose], ",")):
+                pn = re.search(r"(\w+)\s*$", piece)
+                pt = param_type(piece)
+                got = self.resolve_type(pt, m.popen) if pt else None
+                if pn:
+                    local[pn.group(1)] = got[0] if got else None
+            for lm in _DECL.finditer(masked, m.open + 1, m.close):
+                if lm.group(1) not in _NOT_TYPES:
+                    got = self.resolve_type(lm.group(1), lm.start())
+                    local[lm.group(2)] = got[0] if got else None
+            calls, selfs = sites(m.open + 1, m.close, local, lambda off: True)
+            entry = table.setdefault(m.name, {"line": self.lines.line_of(m.open), "calls": [],
+                                              "self": []})
+            entry["calls"] += calls  # type: ignore[operator]
+            entry["self"] += selfs  # type: ignore[operator]
+        calls, selfs = sites(c[1] + 1, c[2], {}, lambda off: not any(
+            m.start <= off < m.close for m in ms) and mine(off))
+        if calls or selfs:
+            table[""] = {"line": 0, "calls": calls, "self": selfs}
+        return table
 
     # variables -------------------------------------------------------------------
     def _find_vars(self) -> None:
@@ -412,6 +566,11 @@ class _Out:
             return
         self.seen.add(key)
         why = (reason or "unknown") if not name else (reason if keep_reason else None)
+        # the method the statement sits in (or is annotated on); a constructor's and
+        # class-level code's links stay class-level
+        meth = self.s.method_at(off) if op != "uses" else None
+        if meth is not None and not meth.ctor:
+            attrs = dict(attrs or {}, method=meth.name)
         self.refs.append(Ref(src, op, kind, name, ev, why, list(candidates or []),
                              attrs=attrs or {}))
 
@@ -586,8 +745,11 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
     nodes: List[Node] = []
     out = _Out(s)
     for c in s.classes:
-        nodes.append(Node(s.cid(c), "class", c[3], repo, [s.ev(c[0])],
-                          {"package": s.pkg or None}))
+        cattrs: Dict[str, object] = {"package": s.pkg or None}
+        table = s.method_table(c)
+        if table:
+            cattrs["methods"] = table
+        nodes.append(Node(s.cid(c), "class", c[3], repo, [s.ev(c[0])], cattrs))
 
     # endpoints (controllers) and REST calls declared by Feign interfaces --------------
     for c in s.classes:
@@ -629,6 +791,10 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
             if cls is None or cls[0] != decl:
                 continue
             paths, methods, why = _mapping(s, m)
+            hm = s.method_at(m.start())
+            # the method the mapping is written on, when it is read reliably
+            handled = {"handler_methods": {cid: hm.name}} if hm is not None and not hm.ctor \
+                else {}
             if not is_ctrl:
                 if base_why is not None or paths is None:
                     out.add(m.start(), "http", "endpoint", None, base_why or why)
@@ -645,7 +811,8 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
                 uid = "endpoint:?%s#%s" % (cid[len("class:"):], mname)
                 nodes.append(Node(uid, "endpoint", "?%s#%s" % (name, mname), repo,
                                   [s.ev(m.start())],
-                                  {"handler": cid, "unresolved": reason}))
+                                  dict({"handler": cid, "unresolved": reason},
+                                       **handled)))
                 continue
             for meth in methods:
                 for pre in prefixes:
@@ -653,7 +820,8 @@ def scan_java(repo: str, rel: str, text: str, ctx: ScanContext) -> Tuple[List[No
                         full = _join(pre, pth)
                         label = "%s %s" % (meth, norm_path(full))
                         nodes.append(Node("endpoint:" + label, "endpoint", label, repo,
-                                          [s.ev(m.start())], {"handler": cid, "path": full}))
+                                          [s.ev(m.start())],
+                                          dict({"handler": cid, "path": full}, **handled)))
 
     # uses: constructor parameters and injected fields of classes in this repo --------
     for c in s.classes:

@@ -32,7 +32,7 @@ def test_schema_5_rescans_schema_4_cache():
     from archdiag.store import SCHEMA_VERSION, cache_is_current
     import archdiag
     inv = fixture_resolved().inventory
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
     inv4 = _copy_with(inv, 4)
     assert not cache_is_current(inv4)
 

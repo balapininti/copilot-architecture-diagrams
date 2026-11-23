@@ -202,7 +202,7 @@ def test_access_queue_open_mode(tmp_path):
     a, b = sorted(refs_of(inv, "class:r/T"), key=lambda r: r.evidence.line)
     assert (a.op, a.target_name, a.reason) == ("open", "A.Q", "queue open mode not worked out")
     assert (b.op, b.target_name, b.reason) == ("put", "B.Q", None)
-    assert not any(r.attrs for r in inv.refs)
+    assert not any(set(r.attrs) - {"method"} for r in inv.refs)  # only the enclosing method
 
 
 def test_parameter_shadows_field_and_constants_are_qualified(tmp_path):

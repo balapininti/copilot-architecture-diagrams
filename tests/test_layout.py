@@ -506,7 +506,8 @@ def test_channel_lanes_nest_without_crossing():
     for size in _style_sizes():
         L = layout_for(v, size)
         cross, bad = _cross_band_pairs_that_cross(v, L)
-        assert len(cross) >= 3, (size.__module__, cross)
+        # two since the page and endpoint boxes stand for their component and handler
+        assert len(cross) >= 2, (size.__module__, cross)
         assert not bad, (size.__module__, bad)
 
 
