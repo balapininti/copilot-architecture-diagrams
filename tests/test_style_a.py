@@ -66,9 +66,9 @@ def test_numbered_edges_show_a_drawn_circle_for_every_step():
     """C4: every step number is a small circle with the number as text (the same for 1 and
     for 21), never a Unicode circled digit or a "(21)" fallback."""
     from archdiag.render import style_b, style_c, style_d
-    v = fixture_view("flow_tx", "claims/:id")
+    v = fixture_view("flow_tx", "POST /api/claims")
     numbers = sorted(e.number for e in v.edges if e.number is not None)
-    assert numbers and numbers[-1] > 20
+    assert numbers and numbers[-1] > 9  # two digits
     for mod in (style_a, style_b, style_d):
         svg = mod.render(v)["svg"]
         root = ET.fromstring(svg)
@@ -82,10 +82,10 @@ def test_numbered_edges_show_a_drawn_circle_for_every_step():
             assert kids[1].text == el.get("id")[5:]
         text = svg_text(svg)
         assert not any(chr(c) in text for c in range(0x2460, 0x2474)), mod.__name__
-        assert "(21)" not in text and "RETURN TRANSID" in text
+        assert "(12)" not in text and "RETURN TRANSID" in text
     # the text-only copies write every number the same way
     out = style_a.render(v)["drawio"] + style_b.render(v)["md"]
-    assert "(1) uses" in out and "(21) RETURN TRANSID" in out
+    assert "(1) calls submit()" in out and "(12) RETURN TRANSID" in out
     assert not any(chr(c) in out for c in range(0x2460, 0x2474))
 
 

@@ -377,23 +377,24 @@ def test_flow_tx_numbers_and_maps():
     ids = {n.id for n in v.nodes}
     assert {"program:CLMO100", "program:CLMO110", "map:CLMM01", "missing:program:?CLMO100:26",
             "missing:table:?POLICY"} <= ids
-    nums = [e.number for e in v.edges]
+    nums = [e.number for e in v.edges if e.number is not None]
     assert sorted(nums) == list(range(1, len(nums) + 1))
-    first = min(v.edges, key=lambda e: e.number)
+    first = min((e for e in v.edges if e.number), key=lambda e: e.number)
     assert (first.src, first.dst) == ("transaction:CLMI", "program:CLMO100")
     link, = edges(v, "program:CLMO100", "program:CLMO110")
     assert link.status == PARTIAL
     sel, = edges(v, "program:CLMO100", "table:CLMS.CLAIM")
-    assert sel.label == "SELECT" and len(sel.underlying) == 2
+    assert sel.label == "SELECT CLMS.CLAIM" and len(sel.underlying) == 2
 
 
 def test_flow_tx_page_reaches_java_and_mq():
     r, g = fixture()
     v = build_view(r, g, "flow_tx", "claims/:id")
     ids = {n.id for n in v.nodes}
-    # page → component → service → endpoint → controller → gateway
+    # page (its component) → service → endpoint (its handler method) → gateway
+    assert "class:claims-api/ClaimController" not in ids
     assert {"component:claims-portal/ClaimService", "endpoint:GET /api/claims/{}",
-            "class:claims-api/ClaimController", "class:claims-api/MqClaimGateway",
+            "class:claims-api/MqClaimGateway",
             "queue:CLM.RSP", "missing:endpoint:DELETE /api/claims/{}"} <= ids
     assert any(e.src == "class:claims-api/MqClaimGateway" and e.dst == "queue:CLM.RSP" for e in v.edges)
 
@@ -542,21 +543,21 @@ def test_undrawable_suggestions_are_noted(tmp_path):
     r, g = _with_suggestion(tmp_path, "program:CLMO100", "program:CLMO110")
     v = build_view(r, g, "flow_tx", "CLMI")
     e, = [e for e in v.edges if e.underlying and e.underlying[0].op == "suggested"]
-    assert e.status == PARTIAL and e.number == len(v.edges)
+    assert e.status == PARTIAL and e.number is None  # a suggestion is not a proven step
     assert any("inside one application" in n for n in build_view(r, g, "landscape", None).notes)
 
 
 def test_flow_tx_walkthrough_order():
     r, g = fixture()
-    v = build_view(r, g, "flow_tx", "claims/:id")
+    v = build_view(r, g, "flow_tx", "POST /api/claims")
     num = {(e.src, e.dst): e.number for e in v.edges}
     t = num[("queue:CLM.REQ.LQ", "transaction:CLMI")]
     assert num[("transaction:CLMI", "program:CLMO100")] == t + 1
-    assert num[("program:CLMO100", "queue:CLM.REQ.LQ")] == t + 2
-    # the handler hop follows the REST call that reached it
-    assert num[("endpoint:GET /api/claims/{}", "class:claims-api/ClaimController")] == \
-        num[("component:claims-portal/ClaimService", "endpoint:GET /api/claims/{}")] + 1
-    assert sorted(num.values()) == list(range(1, len(v.edges) + 1))
+    # the program's own steps follow in source order: its SELECT is first, not its MQ GET
+    assert num[("program:CLMO100", "table:CLMS.CLAIM")] == t + 2
+    assert num[("program:CLMO100", "queue:CLM.REQ.LQ")] > num[("program:CLMO100", "map:CLMM01")]
+    got = sorted(n for n in num.values() if n is not None)
+    assert got == list(range(1, len(got) + 1))
     # a link back to a box met earlier comes after the box it starts from
     assert num[("program:CLMO100", "queue:CLM.RSP")] > num[("transaction:CLMI", "program:CLMO100")]
 

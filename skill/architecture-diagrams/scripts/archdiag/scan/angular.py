@@ -145,6 +145,21 @@ def _read_ts_expr(clean: str, i: int) -> str:
     return clean[i:j].strip()
 
 
+_TS_MODS = (r"\s*(?:@[\w$.]+\s*(?:\([^)]*\))?\s*)*"
+            r"(?:(?:public|private|protected|static|async|override|readonly|abstract)\s+)*")
+# the header of a method or accessor up to its parameter list, and of an arrow-function
+# property up to its body
+_TS_METHOD = re.compile(_TS_MODS + r"(?:(?:get|set)\s+(?=[\w$]))?\*?\s*([A-Za-z_$][\w$]*)\s*"
+                        r"(?:<[^(]*>)?\s*[(]")
+_TS_ARROW = re.compile(_TS_MODS + r"([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*(?:async\s*)?"
+                       r"(?:\([^()]*\)|[\w$]+)\s*(?::[^=]*?)?=>\s*$")
+# what follows an injected class's name when one of its methods is called
+_TS_CALL_TAIL = re.compile(r"\s*[?!]?\s*\.\s*([A-Za-z_$][\w$]*)\s*(?:<[^()]*?>)?\s*\(")
+_TS_PARAM = re.compile(r"\s*(?:(?:private|public|protected|readonly|override)\s+)*"
+                       r"([A-Za-z_$][\w$]*)\s*\??\s*:")
+_TS_INJECTED = re.compile(r"([A-Za-z_$][\w$]*)\s*(?::[^=;]*)?=\s*inject\s*\(\s*([A-Za-z_$][\w$]*)")
+
+
 class _Src:
     def __init__(self, repo: str, rel: str, text: str, ctx: ScanContext) -> None:
         self.repo, self.rel, self.ctx = repo, rel, ctx
@@ -191,6 +206,7 @@ class _Src:
                 if nm:
                     self.imports[nm] = im.group(2)
         self.cands: List[str] = []
+        self._methods: Dict[int, List[Tuple[str, int, int, int]]] = {}
 
     def comp_id(self, name: str, stem: str) -> str:
         stems = self.ctx.ts_classes.get(self.repo, {}).get(name, set()) | {stem}
@@ -232,6 +248,97 @@ class _Src:
             if c[1] < off < c[2] and (best is None or c[1] > best[1]):
                 best = c
         return best
+
+    # methods -------------------------------------------------------------------------
+    def methods(self, cls: Tuple[int, int, int, str]) -> List[Tuple[str, int, int, int]]:
+        """(name, header start, body open, body close) of the methods, accessors,
+        arrow-function properties and the constructor of ``cls`` whose header is read
+        reliably. A body whose header is not a plain ``name(...)`` / ``name = (...) =>``
+        is left out: what sits in it stays class-level."""
+        if cls[1] in self._methods:
+            return self._methods[cls[1]]
+        masked = self.masked
+        depth = next((d for o, _, d in self.pairs if o == cls[1]), 0)
+        out: List[Tuple[str, int, int, int]] = []
+        prev = cls[1]
+        for o, cl, d in self.pairs:
+            if d != depth + 1 or not cls[1] < o < cls[2]:
+                continue
+            b = o - 1
+            while b > cls[1] and masked[b].isspace():
+                b -= 1
+            if masked[b] in "(,:=<|&?[":  # a type literal, an object literal, a destructuring
+                continue
+            hs = max(prev, masked.rfind(";", 0, o)) + 1
+            prev = cl
+            m = _TS_METHOD.match(masked, hs, o) or _TS_ARROW.match(masked, hs, o)
+            if m:
+                out.append((m.group(1), hs, o, cl))
+        self._methods[cls[1]] = out
+        return out
+
+    def method_at(self, off: int) -> Optional[str]:
+        """Name of the method of the innermost class whose header or body holds off; None
+        for the constructor and for class-level code."""
+        cls = self.class_at(off)
+        if cls is None:
+            return None
+        for name, hs, _, cl in self.methods(cls):
+            if hs <= off < cl:
+                return None if name == "constructor" else name
+        return None
+
+    def method_table(self, cls: Tuple[int, int, int, str],
+                     deps: Dict[str, str]) -> Dict[str, Dict[str, object]]:
+        """Per method of ``cls``: its first line, the calls it makes on the injected classes
+        ``deps`` (field name -> component id) as ``this.name.method(...)`` and the calls to
+        the class's own methods, each with its line. ``""`` holds the calls in the
+        constructor and in class-level code. An injected class used in another way has
+        ``method`` None: which method runs is not known."""
+        ms = [m for m in self.methods(cls)]
+        named = [m for m in ms if m[0] != "constructor"]
+        if not named:
+            return {}
+        masked = self.masked
+        own = {m[0] for m in named}
+        ctor = [(o, cl) for name, _, o, cl in ms if name == "constructor"]
+        dep_pat = re.compile(r"(?<![\w$.])(this\s*\.\s*)?(%s)(?![\w$])"
+                             % "|".join(sorted(re.escape(x) for x in deps))) if deps else None
+        own_pat = re.compile(r"(?<![\w$.])this\s*\.\s*(%s)\s*\("
+                             % "|".join(sorted(re.escape(x) for x in own)))
+
+        def sites(lo: int, hi: int, keep) -> Tuple[list, list]:
+            calls: List[Dict[str, object]] = []
+            selfs: List[Dict[str, object]] = []
+            for cm in (dep_pat.finditer(masked, lo, hi) if dep_pat else ()):
+                off = cm.start()
+                if not keep(off):
+                    continue
+                call = _TS_CALL_TAIL.match(masked, cm.end())
+                if not cm.group(1) and not (call and any(o < off < cl for o, cl in ctor)):
+                    continue  # a bare name is the injected class only in the constructor
+                if call is None and re.compile(r"\s*=(?!=)").match(masked, cm.end()):
+                    continue  # assigned, not used
+                ev = self.ev(off)
+                calls.append({"class": deps[cm.group(2)], "method": call.group(1) if call else None,
+                              "line": ev.line, "text": ev.text})
+            for sm in own_pat.finditer(masked, lo, hi):
+                if keep(sm.start()):
+                    selfs.append({"method": sm.group(1), "line": self.lines.line_of(sm.start())})
+            return calls, selfs
+
+        table: Dict[str, Dict[str, object]] = {}
+        for name, _, o, cl in named:
+            calls, selfs = sites(o + 1, cl, lambda off: True)
+            entry = table.setdefault(name, {"line": self.lines.line_of(o), "calls": [],
+                                            "self": []})
+            entry["calls"] += calls  # type: ignore[operator]
+            entry["self"] += selfs  # type: ignore[operator]
+        calls, selfs = sites(cls[1] + 1, cls[2], lambda off: not any(
+            hs <= off < cl for _, hs, _, cl in named) and (self.class_at(off) or cls)[1] == cls[1])
+        if calls or selfs:
+            table[""] = {"line": 0, "calls": calls, "self": selfs}
+        return table
 
     def scope(self, off: int) -> Optional[Tuple[int, int]]:
         cls = self.class_at(off)
@@ -557,11 +664,13 @@ def scan_angular(repo: str, rel: str, text: str,
         ensure(name, off, dec)
 
     # constructor / inject() dependencies
+    injected: Dict[str, Dict[str, str]] = {}  # class name -> field name -> component id
     for _, o, c, name in s.classes:
         if name not in known:
             continue
         seen: Set[str] = set()
         deps: List[Tuple[str, int]] = []
+        named: List[Tuple[str, str]] = []  # (field or parameter name, type)
         for m in re.finditer(r"\bconstructor\s*\(", s.masked[:c]):
             if m.start() < o:
                 continue
@@ -572,8 +681,18 @@ def scan_angular(repo: str, rel: str, text: str,
                                p, re.S)
                 if tm:
                     deps.append((tm.group(1), m.start()))
+                    pn = _TS_PARAM.match(p)
+                    if pn:
+                        named.append((pn.group(1), tm.group(1)))
         for m in re.finditer(r"\binject\s*\(\s*([A-Za-z_$][\w$]*)", s.masked[o:c]):
             deps.append((m.group(1), o + m.start()))
+        named += [(m.group(1), m.group(2)) for m in _TS_INJECTED.finditer(s.masked, o, c)]
+        by_name: Dict[str, str] = {}
+        for fname, t in named:
+            got = s.resolve_comp(t) if t in known else None
+            if got is not None and got[0] is not None and got[0] != cid(name):
+                by_name[fname] = got[0]
+        injected[name] = by_name
         for t, off in deps:
             got = s.resolve_comp(t) if t in known else None
             if got is None or got[0] == cid(name) or t in seen:
@@ -624,6 +743,18 @@ def scan_angular(repo: str, rel: str, text: str,
                             "URL not worked out: %s" % why, sorted(set(s.cands))))
         else:
             refs.append(Ref(cid(cls[3]), "http", "endpoint", "%s %s" % (meth, url), ev))
+        # the class method the call sits in, when its header is read reliably
+        in_method = s.method_at(m.start()) if cls[2] else None
+        if in_method:
+            refs[-1].attrs["method"] = in_method
+
+    # what each method calls on the injected classes
+    by_id = {n.id: n for n in nodes}
+    for cls in s.classes:
+        node = by_id.get(cid(cls[3]))
+        table = s.method_table(cls, injected.get(cls[3], {})) if node is not None else {}
+        if table:
+            node.attrs["methods"] = table
 
     # routes, under the path of every lazy route that loads this file (B3)
     for prefix in _route_prefixes(ctx, repo, own_stem):

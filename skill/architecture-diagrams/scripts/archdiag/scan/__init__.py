@@ -462,6 +462,12 @@ def _merge_handlers(have: Node, new: Node) -> None:
     both = sorted(set(mine) | set(theirs))
     if len(both) > 1:
         have.attrs["handlers"] = both
+    # the handler method per class; two methods of one class for one label: not known
+    known = dict(have.attrs.get("handler_methods") or {})
+    for h, meth in (new.attrs.get("handler_methods") or {}).items():
+        known[h] = meth if known.get(h, meth) == meth else ""
+    if known:
+        have.attrs["handler_methods"] = known
 
 
 def _merge_files(have: Node, new: Node) -> None:
