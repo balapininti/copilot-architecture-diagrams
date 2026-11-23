@@ -41,7 +41,8 @@ def test_mermaid_structure():
 
 
 def test_link_style_indexes_follow_link_order():
-    v = fixture_view("landscape", None)
+    # an application view: the landscape leaves shared code (COPY) off the picture
+    v = fixture_view("application", "claims-online")
     fence = _fence(style_b.render(v)["md"])
     links = [ln for ln in fence.splitlines() if re.search(r"-->|-\.->|--x", ln)]
     assert len(links) == len(v.edges)
@@ -102,6 +103,9 @@ def test_c4_boxes_and_three_lines():
         assert c in svg
     ts = _texts(svg)
     assert any(t.startswith("[Application: ") for t in ts)
+    # one box per system on the landscape: no repo boundary around a box of the same name
+    assert not any(t.endswith(" [repo]") for t in ts)
+    ts = _texts(style_b.render(fixture_view("application", "claims-online"))["svg"])
     assert any(t.endswith(" [repo]") for t in ts)
 
 
@@ -109,7 +113,9 @@ def test_lines_keep_certainty_types():
     svg = style_b.render(fixture_view("landscape", None))["svg"]
     assert 'stroke-dasharray="3 4"' in svg and "#d97706" in svg
     assert 'stroke="#dc2626"' in svg and "<circle" in svg
-    assert 'stroke-dasharray="7 4"' in svg
+    assert 'stroke-dasharray="7 4"' not in svg  # shared code is not drawn on the landscape
+    assert 'stroke-dasharray="7 4"' in style_b.render(
+        fixture_view("application", "claims-online"))["svg"]
 
 
 def _rects(root, pred):
@@ -185,7 +191,8 @@ def test_every_real_kind_is_labelled_by_what_it_is():
 def test_fixture_views_keep_real_kind():
     texts = " ".join(_texts(style_b.render(fixture_view("application", "claims-online"))["svg"]))
     assert "[API: z/OS Connect]" in texts and "[MQ process]" in texts
-    assert "[COBOL copybook · neighbor]" in texts
+    # an outside neighbor is drawn as what it is, with its owner under it
+    assert "[Copybook: COBOL] shared-copybooks" in texts and "· neighbor]" not in texts
     assert "[Neighbor]" not in texts
 
 

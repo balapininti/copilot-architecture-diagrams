@@ -52,6 +52,9 @@ class VNode:
     # a "… N more" box made by the size cap: the boxes it stands for, kept whole so the
     # links report can still list each one (a folded group with all its files)
     folded: List["VNode"] = field(default_factory=list)
+    # application: the box's place in the reading order (RANK_ENTRY .. RANK_OUTSIDE). The
+    # view orders its nodes by it; the layout does not read it yet
+    rank: Optional[int] = None
 
 
 @dataclass
@@ -237,6 +240,28 @@ def _counts_line(kinds: Sequence[str]) -> str:
         if c:
             parts.append("%d %s" % (c, k if c == 1 else _plural(k)))
     return " · ".join(parts[:3])
+
+
+def _count(n: int, one: str, many: str = "") -> str:
+    """``1 loose end``, ``3 loose ends``."""
+    return "%d %s" % (n, one if n == 1 else (many or one + "s"))
+
+
+# VNode.rank: an application read from what comes in to what goes out
+RANK_ENTRY, RANK_LOGIC, RANK_GATEWAY, RANK_RESOURCE, RANK_OUTSIDE = range(5)
+
+
+def links_on_boxes(v: "ViewGraph") -> List[Edge]:
+    """The resolver edges a box stands for that no line of the view draws: loose ends counted
+    on a box, shared code left out of a landscape (a job step's own ``runs`` edge too)."""
+    drawn = {id(u) for e in v.edges for u in e.underlying}
+    out: List[Edge] = []
+    for n in v.nodes:
+        for u in n.underlying:
+            if id(u) not in drawn:
+                drawn.add(id(u))
+                out.append(u)
+    return out
 
 
 def _kind_of(es: List[Edge]) -> str:

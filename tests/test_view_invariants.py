@@ -89,8 +89,8 @@ def test_no_line_is_more_certain_than_its_targets_fixture():
     assert not _violations(views)
     # the C3 trap: PaymentArchiveRepository's OLDS.PAYMENT (partial) beside the solid POLICY
     sql = [e for e in views[0].edges if e.src == "app:claims-api" and e.dst == "app:claims-db"]
-    assert {e.status: e.label for e in sql} == {CONFIRMED: "SQL · POLICY",
-                                                 PARTIAL: "SQL · PAYMENT"}
+    assert {e.status: e.label for e in sql} == {CONFIRMED: "SQL POLICY",
+                                                 PARTIAL: "SQL PAYMENT"}
 
 
 def test_no_line_is_more_certain_than_its_targets_with_partial_sql(estate_with_partial_sql):
@@ -100,7 +100,7 @@ def test_no_line_is_more_certain_than_its_targets_with_partial_sql(estate_with_p
     land = views[0]
     sql = [e for e in land.edges if e.src == "app:claims-api" and e.dst == "app:claims-db"]
     by_status = {e.status: e.label for e in sql}
-    assert by_status == {CONFIRMED: "SQL · POLICY", PARTIAL: "SQL · PAYMENT"}
+    assert by_status == {CONFIRMED: "SQL POLICY", PARTIAL: "SQL PAYMENT"}
 
 
 def _ev(repo, line):

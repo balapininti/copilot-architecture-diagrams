@@ -49,10 +49,21 @@ def test_landscape_shape():
     v = build_view(r, g, "landscape", None)
     well_formed(v)
     ids = {n.id for n in v.nodes}
-    assert {"app:%s" % a.name for a in g.apps} <= ids
-    assert len([n for n in v.nodes if n.id.startswith("app:")]) == 6
-    assert "dataset:CLM.MASTER.KSDS" in ids and "queue:CLM.REQ.LQ" in ids
-    assert edges(v, "app:claims-api", "queue:CLM.REQ.LQ")
+    # one box per running system; the copybook repo is shared code, off the picture
+    assert {n.id for n in v.nodes if n.id.startswith("app:")} == {
+        "app:%s" % a.name for a in g.apps if a.name != "shared-copybooks"}
+    assert all(n.group is None for n in v.nodes) and v.groups == []  # no box in a box
+    assert "dataset:CLM.MASTER.KSDS" in ids
+    # a queue an application defines is part of that application: the line goes to its
+    # owner and names the queue; the reply runs the other way
+    assert not [i for i in ids if i.startswith("queue:CLM.R")]
+    assert [e.label for e in edges(v, "app:claims-api", "app:claims-online")] == [
+        "REST GET /zos/claims/{}/status", "MQ CLM.REQ.LQ, CLM.RSP"]
+    assert [e.label for e in edges(v, "app:claims-portal", "app:claims-api")] == [
+        "REST GET /api/claims/{}, POST /api/claims"]
+    # a dataset one system writes feeds the one that reads it
+    assert edges(v, "app:claims-batch", "dataset:CLAIMS.DAILY")[0].label == "reads and writes"
+    assert edges(v, "dataset:CLAIMS.DAILY", "app:claims-online")[0].label == "reads"
     assert node(v, "app:claims-db").kind == "datastore"
     # 9 classes and one partly known link inside: the final-fix traps PaymentArchiveRepository,
     # ClaimHistoryRepository and PartnerClient (its path-only REST match to our own endpoint
@@ -63,7 +74,7 @@ def test_landscape_shape():
     # (a table no DDL defines belongs to no app: shared by two apps, it is its own box, I5)
     assert [i for i in ids if i.startswith("table:")] == ["table:CLMS.CLMHIST"]
     sql = edges(v, "app:claims-online", "app:claims-db")
-    assert [e.label for e in sql] == ["SQL · CLAIM"]
+    assert [e.label for e in sql] == ["SQL CLAIM"]
     assert sql[0].status == CONFIRMED and len(sql[0].underlying) == 2
 
 
@@ -71,8 +82,10 @@ def test_flow_job_rows():
     r, g = fixture()
     v = build_view(r, g, "flow_job", "CLMD100")
     well_formed(v)
-    lane = [n.label for n in v.nodes if n.row == "lane"]
-    assert lane == ["SORT", "CLMB200", "CLMB300", "IEBGENER", "DMBATCH"]
+    # captions are numbered in JCL order and say what each step runs
+    lane = ["%s %s" % (n.label, n.sublabel) for n in v.nodes if n.row == "lane"]
+    assert lane == ["1 STEP010 SORT", "2 STEP020 CLMB200", "3 STEP030 IKJEFT01 → CLMB300",
+                    "4 STEP040 IEBGENER", "5 STEP050 DMBATCH"]
     assert "Also exists as: claims-batch/jcl/test/CLMD100.jcl" in v.notes
 
 
@@ -121,8 +134,8 @@ def test_status_combination():
     ca, = edges(v, "app:c", "app:a")
     assert sorted(ab) == [CONFIRMED, PARTIAL] and sorted(cd) == [LOOSE, PARTIAL]
     assert ca.status == LOOSE
-    assert ab[CONFIRMED].label == "CALL · Pb1, Pb4" and ab[PARTIAL].label == "CALL · Pb2"
-    assert (cd[PARTIAL].label, cd[LOOSE].label) == ("CALL · Pd1", "CALL · Pd2")
+    assert ab[CONFIRMED].label == "CALL Pb1, Pb4" and ab[PARTIAL].label == "CALL Pb2"
+    assert (cd[PARTIAL].label, cd[LOOSE].label) == ("CALL Pd1", "CALL Pd2")
     solid = ab[CONFIRMED]
     assert len(solid.underlying) == 2 and len(solid.evidence) == 1  # same evidence kept once
 
@@ -204,20 +217,29 @@ def test_every_level_lays_out():
 def test_landscape_keeps_every_loose_end():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    ids = {n.id for n in v.nodes}
-    drawn = {u.dst for e in v.edges for u in e.underlying}
-    for nid in r.nodes:
+    from archdiag.render.report import links_report
+    from archdiag.views.common import links_on_boxes
+    # no loose end has a box or a line of its own: each is counted on the box it hangs off,
+    # which keeps the edge, so the links report still lists it
+    assert not [n.id for n in v.nodes if n.kind == "missing"]
+    held = {u.dst for u in links_on_boxes(v) if u.dst.startswith("missing:")}
+    report = links_report(v, r)
+    for nid, n in r.nodes.items():
         if nid.startswith("missing:"):
-            assert nid in ids or nid in drawn, nid
-    for n in v.nodes:
-        if n.kind == "missing":
-            assert n.status in (PARTIAL, LOOSE)
-            assert all(e.status != CONFIRMED for e in v.edges if n.id in (e.src, e.dst))
-    # the far side of an exchange keeps its own box
-    for nid in ("missing:writer:CLM.MASTER.KSDS", "missing:reader:CLAIMS.AUDIT",
-                "missing:endpoint:DELETE /api/claims/{}", "missing:queue-consumer:CLM.AUDIT"):
-        assert node(v, nid).group is None
-    assert edges(v, "dataset:CLM.MASTER.KSDS", "missing:writer:CLM.MASTER.KSDS")[0].status == LOOSE
+            assert nid in held, nid
+            if not n.name.startswith("?"):
+                assert n.name in report, nid
+    counted = sum(int(line.split()[0]) for n in v.nodes for line in n.detail_lines
+                  if "loose end" in line)
+    marked = sum(n.highlight for n in v.nodes if not n.id.startswith("app:"))
+    assert counted + marked == len(held) == 12
+    assert "12 loose ends are counted on the box each hangs off, not drawn; the links " \
+           "report lists each one." in v.notes
+    assert node(v, "app:claims-portal").detail_lines == ["1 page", "1 loose end, see links report"]
+    # a resource box says what is missing on it
+    ksds = node(v, "dataset:CLM.MASTER.KSDS")
+    assert ksds.detail_lines == ["no writer found"] and ksds.underlying[0].status == LOOSE
+    assert node(v, "queue:CLM.AUDIT").detail_lines == ["no consumer found"]
     # NDM transfer stays dotted
     ndm, = edges(v, "app:claims-batch", "external:NDM:FINANCE")
     assert ndm.status == PARTIAL
@@ -228,17 +250,16 @@ def test_landscape_folds_each_apps_loose_ends():
     v = build_view(r, g, "landscape", None)
     # 20: the final-fix traps make CLAIMS.DAILY (CLMEXT, duplicate PROC), CLM.AUDIT
     # (CLMO140, MQ handles) and the DDL-less table CLMS.CLMHIST (CLMB510) shared between apps
-    assert len(v.nodes) == 20
-    box = node(v, "missing:app:claims-online")
-    assert (box.kind, box.label, box.status) == ("missing", "7 loose ends", LOOSE)
-    assert box.detail_lines == ["ERRMSG · which program? · CLMO120 … +4"]
-    e, = edges(v, "app:claims-online", "missing:app:claims-online")
+    # 11: five systems, the two outside systems, and the four resources no application owns
+    assert len(v.nodes) == 11
+    box = node(v, "app:claims-online")
+    assert box.detail_lines[-1] == "7 loose ends, see links report"
     want = {"missing:copybook:ERRMSG", "missing:program:?CLMO100:26", "missing:program:CLMO120",
             "missing:table:?POLICY", "missing:transaction:CLMB", "missing:transaction:CLMX",
             "missing:queue:?CLMO140:27"}
-    assert {u.dst for u in e.underlying} == want and len(e.underlying) == 8
-    assert e.status == LOOSE  # the least certain: a red end never looks merely dotted
-    assert not want & {n.id for n in v.nodes}
+    ends = [u for u in box.underlying if u.dst.startswith("missing:")]
+    assert {u.dst for u in ends} == want and len(ends) == 8
+    assert not edges(v, "app:claims-online", "missing:app:claims-online")
     # partly known links inside one application are counted on its box
     assert "1 partly known link inside" in node(v, "app:claims-online").detail_lines
     # 2 + the uncalled claims-batch copy of CLMEXT (scanned with its defaults: partial)
@@ -248,11 +269,20 @@ def test_landscape_folds_each_apps_loose_ends():
 def test_landscape_shared_code():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    cb, = edges(v, "app:shared-copybooks", "app:claims-batch")
-    # ×5: CLMB200, CLMB300 and the I3 trap CLMB500 (CLMREC, ADDRREC.cbl, CLMPROC)
-    assert cb.kind == "shared_code" and cb.label == "COPY ×5"
-    co, = edges(v, "app:shared-copybooks", "app:claims-online")
-    assert co.label == "COPY ×1"
+    from archdiag.render.report import links_report
+    # shared code is off the main picture: no copybook repo box, no COPY line
+    assert "app:shared-copybooks" not in {n.id for n in v.nodes}
+    assert not [e for e in v.edges if e.kind == "shared_code" or "COPY" in e.label]
+    # ... but counted in a note (5 from claims-batch: CLMB200, CLMB300 and the I3 trap
+    # CLMB500; 1 from claims-online) and still listed in the links report
+    assert ("Shared code is not drawn: 6 COPY links to 4 copybooks (shared-copybooks) left "
+            "out; the repo link map (level repomap) shows them and the links report lists "
+            "each one.") in v.notes
+    copies = lambda nid: [u for u in node(v, nid).underlying  # noqa: E731
+                          if u.op == "copy" and not u.dst.startswith("missing:")]
+    assert (len(copies("app:claims-batch")), len(copies("app:claims-online"))) == (5, 1)
+    report = links_report(v, r)
+    assert report.count("| copy | copybook ") >= 4 and "copybook CLMREC" in report
 
 
 def test_suggested_links_are_partial(tmp_path):
@@ -272,13 +302,25 @@ def test_flow_job_details():
     r, g = fixture()
     v = build_view(r, g, "flow_job", "CLMD100")
     lane = [n for n in v.nodes if n.row == "lane"]
-    assert [n.sublabel.split()[0] for n in lane] == ["STEP010", "STEP020", "STEP030", "STEP040", "STEP050"]
+    assert [n.label for n in lane] == ["1 STEP010", "2 STEP020", "3 STEP030", "4 STEP040",
+                                       "5 STEP050"]
     assert lane[0].kind == "utility" and lane[1].kind == "program"
     rows = {n.id: n.row for n in v.nodes}
     assert rows["dataset:CLM.MASTER.KSDS"] == "above"
     assert rows["dataset:CLAIMS.DAILY"] == "below"  # written, then read by later steps
     assert rows["table:CLMS.CLAIM"] == "above"
-    assert rows["missing:reader:CLAIMS.AUDIT"] == "below"
+    # a table the job inserts into is an output, like a dataset it writes
+    assert rows["table:CLMS.PAYMENT"] == "below"
+    assert rows["dataset:CLAIMS.EXTRACT"] == rows["dataset:CLAIMS.AUDIT"] == "below"
+    by = {n.id: n for n in v.nodes}
+    assert by["dataset:CLAIMS.DAILY"].sublabel == "GDG · written · read"
+    assert by["dataset:CLM.MASTER.KSDS"].sublabel == "VSAM dataset · read"
+    # "no reader found" is a marker on the dataset, not a box; the dataset keeps the edge
+    assert "missing:reader:CLAIMS.AUDIT" not in rows
+    audit = by["dataset:CLAIMS.AUDIT"]
+    assert audit.detail_lines == ["no reader found"] and audit.highlight == 1
+    assert [(u.dst, u.status) for u in audit.underlying] == [("missing:reader:CLAIMS.AUDIT", LOOSE)]
+    assert by["dataset:CLM.MASTER.KSDS"].detail_lines == ["no writer found"]
     s1, s2 = lane[0].id, lane[1].id
     step_edge, = edges(v, s1, s2)
     assert step_edge.label.startswith("if RC = 0") and "&&SORTED" in step_edge.label
@@ -291,8 +333,7 @@ def test_flow_job_details():
     call, = edges(v, s2, "program:CLMB210")
     assert call.status == PARTIAL
     ndm, = edges(v, lane[4].id, "external:NDM:FINANCE")
-    assert ndm.status == PARTIAL
-    assert edges(v, "dataset:CLAIMS.AUDIT", "missing:reader:CLAIMS.AUDIT")[0].status == LOOSE
+    assert ndm.status == PARTIAL and ndm.label == "file transfer to FIN.IN.CLAIMS"
     # the drawn copy is the first by path; the test copy appears only in the note
     assert all("/test/" not in n.id for n in v.nodes)
 
@@ -304,8 +345,11 @@ def test_flow_job_gdg_vsam_sysout():
     assert by["dataset:CLAIMS.DAILY"].kind == "gdg"
     assert by["dataset:CLM.MASTER.KSDS"].kind == "vsam"
     s2, s3 = "step:claims-batch/jcl/CLMD100.jcl#STEP020", "step:claims-batch/jcl/CLMD100.jcl#STEP030"
-    assert [e.label for e in edges(v, s2, "dataset:CLAIMS.DAILY")] == ["write (+1)"]
-    assert [e.label for e in edges(v, "dataset:CLAIMS.DAILY", s3)] == ["read (0)"]
+    # data lines carry the DD name and DISP of the JCL
+    assert [e.label for e in edges(v, s2, "dataset:CLAIMS.DAILY")] == [
+        "CLMOUT write (+1) · NEW,CATLG"]
+    assert [e.label for e in edges(v, "dataset:CLAIMS.DAILY", s3)] == [
+        "DAILYIN read (0) · SHR"]
     so = [n for n in v.nodes if n.id.startswith("sysout:")]
     assert [(n.label, n.sublabel, n.row) for n in so] == [("REPORT", "SYSOUT=A", "below")]
     assert edges(v, s3, so[0].id)
@@ -367,9 +411,13 @@ def test_application_view():
     well_formed(v)
     by = {n.id: n for n in v.nodes}
     assert by["program:CLMO100"].group == "group:claims-online"
-    assert by["table:CLMS.CLAIM"].kind == "neighbor"
+    # an outside neighbor keeps what it is and names its owner; only the group says "outside"
+    t = by["table:CLMS.CLAIM"]
+    assert (t.kind, t.group, t.sublabel) == ("table", None, "DB2 table · claims-db")
     assert by["queue:CLM.REQ.LQ"].group == "group:claims-online"  # defined in this repo
-    assert by["class:claims-api/MqClaimGateway"].kind == "neighbor"
+    gw = by["class:claims-api/MqClaimGateway"]
+    assert (gw.kind, gw.group, gw.sublabel) == ("class", None, "Java class · claims-api")
+    assert not [n for n in v.nodes if n.kind == "neighbor"]
     assert [x.id for x in v.groups] == ["group:claims-online"]
     with pytest.raises(ScopeError) as e:
         build_view(r, g, "application", "claims-onlin")
@@ -428,8 +476,10 @@ def test_large_landscape_capped():
     v = build_view(r, default_groups(r), "landscape", None)
     well_formed(v)
     # folding never turns a loose link solid
+    from archdiag.views.common import links_on_boxes
     loose = [e for e in r.edges if e.status == LOOSE]
     drawn = [u for e in v.edges if e.status == LOOSE for u in e.underlying]
+    drawn += [u for u in links_on_boxes(v) if u.status == LOOSE]  # counted on a box
     assert len(drawn) == len(loose)
     assert all(u.status != LOOSE for e in v.edges if e.status != LOOSE for u in e.underlying)
     assert not any(n.id.startswith("more:None:") for n in v.nodes)
@@ -455,7 +505,7 @@ def test_application_keeps_look_alikes_and_utilities():
     by = {n.id: n for n in v.nodes}
     assert by["dataset:A.X"].group == "group:a"
     assert by["utility:SORT"].group == "group:a" and by["utility:SORT"].kind == "utility"
-    assert by["dataset:B.X"].kind == "neighbor"
+    assert (by["dataset:B.X"].kind, by["dataset:B.X"].group) == ("dataset", None)
     same, = edges(v, "dataset:A.X", "dataset:B.X")
     assert same.status == PARTIAL
 
@@ -483,7 +533,8 @@ def test_undrawable_suggestions_are_noted(tmp_path):
     assert msg in build_view(r, g, "application", "claims-batch").notes
     assert msg in build_view(r, g, "flow_job", "CLMD100").notes
     r2, g2 = _with_suggestion(tmp_path, "claims-portal", "shared-copybooks")
-    assert not build_view(r2, g2, "flow_job", "CLMD100").notes[1:]  # not about this job
+    assert not [n for n in build_view(r2, g2, "flow_job", "CLMD100").notes
+                if "Copilot" in n]  # not about this job
     r, g = _with_suggestion(tmp_path, "program:CLMO100", "program:CLMB200", "")
     v = build_view(r, g, "flow_tx", "CLMI")
     assert "Copilot suggests a link program:CLMO100 → program:CLMB200; shown on the landscape" \
@@ -591,8 +642,9 @@ def test_b9_repomap_card_counts_partly_known_links_inside():
 def test_b9_folded_loose_ends_line_is_labelled():
     r, g = fixture()
     v = build_view(r, g, "landscape", None)
-    e, = edges(v, "app:claims-online", "missing:app:claims-online")
-    assert e.label == "7 loose ends"
+    # the loose ends are a count line on the system's own box, never a line
+    assert "7 loose ends, see links report" in node(v, "app:claims-online").detail_lines
+    assert not [e for e in v.edges if "loose end" in e.label]
 
 
 def test_b9_depth_cut_counts_on_past_a_forward_get():
@@ -615,3 +667,92 @@ def test_b9_depth_cut_counts_on_past_a_forward_get():
     r = Resolved(inv, nodes, es)
     v = build_view(r, default_groups(r), "flow_tx", "T1")
     assert "Stopped after 8 hops; 3 more links not drawn" in v.notes, v.notes
+
+
+# ------------------------------------------------------------------ what the pictures show
+
+def test_application_reads_from_what_comes_in_to_what_goes_out():
+    from archdiag.views.common import (RANK_ENTRY, RANK_GATEWAY, RANK_LOGIC, RANK_OUTSIDE,
+                                       RANK_RESOURCE)
+    r, g = fixture()
+    v = build_view(r, g, "application", "claims-api")
+    ranks = [n.rank for n in v.nodes]
+    assert None not in ranks and ranks == sorted(ranks)  # the node order is the reading order
+    by = {n.id: n for n in v.nodes}
+    # entry points first, then the handler, then the classes that reach out, then outside
+    assert [n.id for n in v.nodes[:3]] == ["endpoint:GET /api/claims/{}",
+                                           "endpoint:POST /api/claims",
+                                           "class:claims-api/ClaimController"]
+    assert by["endpoint:POST /api/claims"].rank == RANK_ENTRY
+    assert by["class:claims-api/ClaimController"].rank == RANK_LOGIC
+    for name in ("MqClaimGateway", "ClaimStatusClient", "ClaimRepository", "AuditPublisher",
+                 "RatesClient"):
+        assert by["class:claims-api/%s" % name].rank == RANK_GATEWAY, name
+    outside = [n for n in v.nodes if n.rank == RANK_OUTSIDE]
+    assert outside and all(n.group is None for n in outside)
+    assert all(n.group == "group:claims-api" for n in v.nodes if n.rank < RANK_OUTSIDE)
+    # an outside neighbor is drawn as what it is, with its owner under its name
+    q = by["queue:CLM.REQ.LQ"]
+    assert (q.kind, q.sublabel) == ("queue", "IBM MQ queue · claims-online")
+    z = by["zosapi:GET /zos/claims/{}/status"]
+    assert (z.kind, z.real_kind, z.sublabel) == ("endpoint", "zosapi",
+                                                 "z/OS Connect API · claims-online")
+    assert by["external:rates.example.com"].kind == "external"
+    # labels say verb and object; a link between two pieces of code keeps the verb
+    labels = {(e.src.split("/")[-1], e.label) for e in v.edges}
+    assert {("MqClaimGateway", "MQ PUT CLM.REQ.LQ"), ("MqClaimGateway", "MQ GET CLM.RSP"),
+            ("ClaimRepository", "SELECT CLMS.POLICY"),
+            ("ClaimStatusClient", "REST GET /zos/claims/{}/status"),
+            ("RatesClient", "REST rates.example.com"), ("ClaimController", "uses")} <= labels
+    # in a CICS application the queue that triggers a transaction is an entry point, the
+    # other queues and the maps are resources
+    v = build_view(r, g, "application", "claims-online")
+    by = {n.id: n for n in v.nodes}
+    assert by["queue:CLM.REQ.LQ"].rank == by["transaction:CLMI"].rank == RANK_ENTRY
+    assert by["program:CLMO100"].rank == RANK_LOGIC  # run by CLMI, though it reads data too
+    assert by["queue:CLM.RSP"].rank == by["map:CLMM01"].rank == RANK_RESOURCE
+    assert [n.rank for n in v.nodes] == sorted(n.rank for n in v.nodes)
+
+
+def test_flow_job_places_data_by_what_the_job_does_first():
+    job = "job:a/j.jcl"
+    nodes = {job: Node(job, "job", "J", "a", [Evidence("a", "j.jcl", 1, "")])}
+    for i in (1, 2):
+        sid = "step:a/j.jcl#S%d" % i
+        nodes[sid] = Node(sid, "step", "S%d" % i, "a", [Evidence("a", "j.jcl", i + 1, "")],
+                          {"job": job, "order": i, "pgm": "IEFBR14"})
+    for name in ("IN.OUT", "OUT.IN", "UPD"):
+        nodes["dataset:" + name] = Node("dataset:" + name, "dataset", name, None, [],
+                                        {"names": [name]})
+    nodes["table:T.NEW"] = Node("table:T.NEW", "table", "T.NEW", None, [])
+    s1, s2 = "step:a/j.jcl#S1", "step:a/j.jcl#S2"
+    es = [Edge(s1, "read", "dataset:IN.OUT", CONFIRMED, None, []),
+          Edge(s2, "write", "dataset:IN.OUT", CONFIRMED, None, []),
+          Edge(s1, "write", "dataset:OUT.IN", CONFIRMED, None, []),
+          Edge(s2, "read", "dataset:OUT.IN", CONFIRMED, None, []),
+          Edge(s2, "write", "dataset:UPD", CONFIRMED, None, []),  # one step: read comes first
+          Edge(s2, "read", "dataset:UPD", CONFIRMED, None, []),
+          Edge(s1, "insert", "table:T.NEW", CONFIRMED, None, []),
+          Edge(s2, "select", "table:T.NEW", CONFIRMED, None, [])]
+    inv = Inventory("ws", [Repo("a", "a")], dict(nodes), [], "fp", {})
+    r = Resolved(inv, nodes, es)
+    v = build_view(r, default_groups(r), "flow_job", "J")
+    by = {n.id: n for n in v.nodes}
+    assert [by[s].label for s in (s1, s2)] == ["1 S1", "2 S2"]
+    assert by["dataset:IN.OUT"].row == "above" and by["dataset:IN.OUT"].sublabel == "read · written"
+    assert by["dataset:OUT.IN"].row == "below" and by["dataset:OUT.IN"].sublabel == "written · read"
+    assert by["dataset:UPD"].row == "above"
+    assert by["table:T.NEW"].row == "below"  # inserted first: an output that S2 then reads
+    assert edges(v, "dataset:OUT.IN", s2) and edges(v, "table:T.NEW", s2)
+    assert not v.notes
+
+
+def test_flow_job_note_counts_the_loose_ends_marked_on_datasets():
+    from archdiag.views.common import links_on_boxes
+    r, g = fixture()
+    v = build_view(r, g, "flow_job", "CLMD100")
+    assert ("2 loose ends are marked on their datasets (no reader found, no writer found), "
+            "not drawn as boxes; the links report lists each one.") in v.notes
+    assert not [n for n in v.nodes if n.kind == "missing"]
+    assert sorted(u.dst for u in links_on_boxes(v) if u.status == LOOSE) == [
+        "missing:reader:CLAIMS.AUDIT", "missing:writer:CLM.MASTER.KSDS"]

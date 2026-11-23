@@ -93,9 +93,15 @@ def test_legend_lists_only_present_statuses():
     text = svg_text(style_a.render(fixture_view("flow_job", "CLMD100"))["svg"])
     assert "confirmed (both ends found in code)" in text
     assert "partly known / suggested" in text
-    assert "loose end (only one side found)" in text
+    # the job's two loose ends are markers on their datasets, not lines
+    assert "loose end (only one side found)" not in text
+    assert "no reader found" in text and "no writer found" in text
     assert "shared code" not in text
     text = svg_text(style_a.render(fixture_view("landscape"))["svg"])
+    assert "loose end (only one side found)" in text  # the call to rates.example.com
+    assert "shared code (copybook, package)" not in text  # left off the landscape, in a note
+    assert "Shared code is not drawn: 6 COPY links" in text
+    text = svg_text(style_a.render(fixture_view("application", "claims-online"))["svg"])
     assert "shared code (copybook, package)" in text
 
 
