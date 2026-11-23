@@ -37,7 +37,8 @@ def test_draw_all_styles_on_fixture(tmp_path, capsys):
     assert rc == 0
     d = w / "architecture-diagrams"
     for style, ext in (("a", "svg"), ("a", "drawio"), ("b", "svg"), ("b", "md"), ("c", "svg"),
-                       ("c", "html"), ("d", "svg"), ("d", "excalidraw")):
+                       ("c", "html"), ("d", "svg"), ("d", "excalidraw"), ("b", "drawio"),
+                       ("c", "drawio"), ("d", "drawio")):
         assert (d / ("flow-clmd100-%s.%s" % (style, ext))).is_file(), (style, ext)
     assert (d / "flow-clmd100-links.md").is_file()
     assert "Traceback" not in out

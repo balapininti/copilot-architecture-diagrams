@@ -27,6 +27,7 @@ from archdiag.render.common import (OVERVIEW_LINE, OVERVIEW_SIZE, FONT, LEGEND_S
                                     esc, gd_details, group_colors, legend, legend_width, line_style,
                                     link_wrap, loose_dot, node_href, note_lines, num, overview_block, path_d,
                                     step_text, svg_doc, text, text_width, tint, wrap)
+from archdiag.render import drawio
 from archdiag.render.pills import KEY_LINE, KEY_R, Pill, key_entries, key_svg, marker_svg, place_pills
 from archdiag.views import VNode, ViewGraph
 
@@ -683,6 +684,33 @@ def _excalidraw(S: _Scene, seed: int) -> str:
     return json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+# ------------------------------------------------------------------ draw.io
+
+def _look(S: _Scene):
+    """A box's draw.io colours: the whiteboard's pastels and ink."""
+    index = {n.id: i for i, n in enumerate(S.view.nodes)}
+
+    def look(n: VNode) -> drawio.Look:
+        if n.role == "ungrouped":
+            return drawio.Look("#f8f9fa", "#868e96", "#495057", "#868e96", True)
+        if n.role == "shared":
+            return drawio.Look("#f1f3f5", INK, INK, "#495057")
+        if n.kind in GREY_KINDS or n.kind == "external":
+            return drawio.Look("#f1f3f5", "#868e96", "#495057", "#868e96")
+        if n.kind == "map":
+            return drawio.Look("#2b8a3e", INK, "#ebfbee", "#ebfbee")
+        color = S.colors.get(n.id, "")
+        if color:  # a gitdiagram group: a pastel of its own colour
+            return drawio.Look(tint(color, 0.3), INK, INK, color)
+        idx = S.gidx.get(n.group) if n.group else None
+        k = idx if idx is not None else index[n.id]
+        if idx is not None and n.group in S.L.groups:  # white on its group's pastel
+            return drawio.Look("#ffffff", INK, INK, PASTEL_INK[k % len(PASTEL_INK)])
+        return drawio.Look(tint(PASTELS[k % len(PASTELS)], 0.5), INK, INK,
+                           PASTEL_INK[k % len(PASTEL_INK)])
+    return look
+
+
 # ------------------------------------------------------------------ entry point
 
 def marker_text(p: Pill) -> str:
@@ -691,7 +719,12 @@ def marker_text(p: Pill) -> str:
     return "(%d)" % p.key if p.number is not None else "[%d]" % p.key
 
 
-def render(view: ViewGraph, seed: int = 7) -> Dict[str, str]:
-    """The whiteboard SVG and its Excalidraw file, from one layout of ``view``."""
+def render(view: ViewGraph, seed: int = 7,
+           nodes: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+    """The whiteboard SVG, its draw.io file (draw.io's own sketch look) and its Excalidraw
+    file, from one layout of ``view``. ``nodes`` (the resolver's nodes by id) adds where
+    each thing was found to the draw.io file."""
     S = _Scene(view)
-    return {"svg": _svg(S, seed), "excalidraw": _excalidraw(S, seed)}
+    return {"svg": _svg(S, seed),
+            "drawio": drawio.render(view, S.L, look=_look(S), nodes=nodes, sketch=True),
+            "excalidraw": _excalidraw(S, seed)}

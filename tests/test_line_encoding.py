@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 
-from conftest import (drawio_edge_encodings, excalidraw_edge_encodings, expected_line,
+from conftest import (drawio_cells, drawio_edge_encodings, excalidraw_edge_encodings, expected_line,
                       fixture_view, svg_edge_encodings)
 from archdiag.render import style_a, style_b, style_c, style_d
 from archdiag.render.common import LEGEND_SIZE
@@ -46,12 +46,13 @@ def test_svg_styles_match_legend():
 
 def test_drawio_matches_legend_and_has_one():
     for v in _views():
-        out = style_a.render(v)["drawio"]
-        _check(drawio_edge_encodings(out), v, "drawio")
-        ids = {c.get("id") for c in ET.fromstring(out).iter("mxCell")}
-        present = {expected_line(e.status, e.kind)[0] for e in v.edges}
-        assert len([i for i in ids if i.startswith("lg-text-")]) == len(
-            {("loose" if c == "#dc2626" else c) for c in present})
+        for mod in (style_a, style_b, style_c, style_d):
+            out = mod.render(v)["drawio"]
+            _check(drawio_edge_encodings(out), v, "drawio " + mod.__name__)
+            ids = {c["id"] for c in drawio_cells(out)}
+            present = {expected_line(e.status, e.kind)[0] for e in v.edges}
+            assert len([i for i in ids if i.startswith("lg-text-")]) == len(
+                {("loose" if c == "#dc2626" else c) for c in present})
 
 
 def test_excalidraw_matches_legend_and_has_one():
@@ -69,30 +70,41 @@ def test_excalidraw_matches_legend_and_has_one():
 # ------------------------------------------------------------------ Batch C (C10)
 
 def test_drawio_legend_lines_match_legend_and_fit_the_page():
+    from archdiag.render.common import line_style
     for v in _views():
-        out = style_a.render(v)["drawio"]
-        root = ET.fromstring(out)
+        cells = drawio_cells(style_a.render(v)["drawio"])
+        by_id = {c["id"]: c for c in cells}
+
+        def origin(c):  # the absolute top-left of a cell's parent
+            x = y = 0.0
+            p = by_id.get(c["cell"].get("parent"))
+            while p is not None:
+                g = p["cell"].find("mxGeometry")
+                if g is not None and g.get("relative") != "1":
+                    x, y = x + float(g.get("x", 0)), y + float(g.get("y", 0))
+                p = by_id.get(p["cell"].get("parent"))
+            return x, y
+
         found = {}
         bottom = right = 0.0
-        for c in root.iter("mxCell"):
-            cid = c.get("id", "")
-            if cid.startswith("lg-line-"):
-                st = dict(kv.split("=", 1) for kv in c.get("style").split(";") if "=" in kv)
+        for c in cells:
+            cid = c["id"]
+            if cid.startswith("lg-line-"):  # the legend's sample of a line type
+                st = c["style"]
+                assert c["cell"].get("parent") == "legend"
                 found[cid[8:]] = (st["strokeColor"],
                                   st.get("dashPattern", "") if st.get("dashed") == "1" else "")
-                for p in c.iter("mxPoint"):
-                    bottom = max(bottom, float(p.get("y")))
-                    right = max(right, float(p.get("x")))
-            g = c.find("mxGeometry")
+            g = c["cell"].find("mxGeometry")
             if g is not None and g.get("height") is not None and g.get("relative") != "1":
-                bottom = max(bottom, float(g.get("y", 0)) + float(g.get("height")))
-                right = max(right, float(g.get("x", 0)) + float(g.get("width")))
+                ox, oy = origin(c)
+                bottom = max(bottom, oy + float(g.get("y", 0)) + float(g.get("height")))
+                right = max(right, ox + float(g.get("x", 0)) + float(g.get("width")))
         want = {}
-        from archdiag.render.common import line_style
         for e in v.edges:
             want[line_style(e.status, e.kind)] = expected_line(e.status, e.kind)
         assert found == want, v.title
-        model = root.find("diagram/mxGraphModel")
+        assert by_id["legend"]["cell"].get("parent") == "layer-legend"
+        model = ET.fromstring(style_a.render(v)["drawio"]).find("diagram/mxGraphModel")
         assert float(model.get("pageHeight")) >= bottom, (v.title, model.get("pageHeight"), bottom)
         assert float(model.get("pageWidth")) >= right, (v.title, model.get("pageWidth"), right)
 
@@ -128,5 +140,6 @@ def test_structural_lines_are_thin_plain_grey_everywhere():
     assert expected_line("structural", "sequence") == ("#94a3b8", "")
     for mod in (style_a, style_b, style_c, style_d):
         assert svg_edge_encodings(mod.render(v)["svg"])[k] == ("#94a3b8", ""), mod.__name__
-    assert drawio_edge_encodings(style_a.render(v)["drawio"])[k] == ("#94a3b8", "")
+    for mod in (style_a, style_b, style_c, style_d):
+        assert drawio_edge_encodings(mod.render(v)["drawio"])[k] == ("#94a3b8", ""), mod.__name__
     assert excalidraw_edge_encodings(style_d.render(v)["excalidraw"])[k] == ("#94a3b8", "")

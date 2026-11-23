@@ -20,6 +20,7 @@ from archdiag.render.common import (LOOSE_COLOR, PARTIAL_COLOR, STARTS_LEGEND, e
                                     legend_width, line_style, link_wrap, node_href, notes_block,
                                     notes_height, num, overview_block, step_text, svg_doc, text,
                                     text_width, wrap)
+from archdiag.render import drawio
 from archdiag.render.pills import edge_svg, key_svg, place_pills
 from archdiag.render.report import md
 from archdiag.views import VEdge, VNode, ViewGraph
@@ -332,6 +333,38 @@ def _svg(view: ViewGraph, L: Layout) -> str:
     return svg_doc(width, height, "".join(body), title=view.title)
 
 
+# ------------------------------------------------------------------ draw.io
+
+_LIGHT = ("#1e293b", "#475569")  # name and kind on a light box
+
+
+def _look(view: ViewGraph):
+    """A box's draw.io colours: the solid C4 fills of the SVG, white text on them."""
+    colors = group_colors(view)
+
+    def look(n: VNode) -> drawio.Look:
+        if n.kind in ("notanalyzed", "neighbor", "outside"):
+            return drawio.Look(NOTANALYZED, "#94a3b8", _LIGHT[0], _LIGHT[1], True)
+        if n.role == "ungrouped":
+            return drawio.Look("#f8fafc", "#64748b", _LIGHT[0], _LIGHT[1], True)
+        if n.role == "shared":
+            return drawio.Look(SHARED_FILL, "#94a3b8", _LIGHT[0], _LIGHT[1])
+        if drawio.is_actor(n):  # the label hangs below the figure, on the page
+            return drawio.Look(PERSON, PERSON, "#0f172a", "#475569")
+        if n.kind in ("person", "actor"):
+            return drawio.Look(PERSON, PERSON, "#ffffff", SUB_TEXT)
+        fill = colors.get(n.id) if n.kind == "group" else None
+        fill = fill or _fill(n)
+        return drawio.Look(fill, fill, "#ffffff", SUB_TEXT)
+    return look
+
+
+def _lines(n: VNode) -> Tuple[str, str, List[str]]:
+    """(name, ``[Kind: tech]``, description), as the SVG's card has them."""
+    name, kind_line, desc = _card(n)
+    return name, kind_line, desc
+
+
 # ------------------------------------------------------------------ Mermaid
 
 _LINE_STYLE = {
@@ -475,8 +508,11 @@ def _markdown(view: ViewGraph, azure: bool = False) -> str:
 
 # ------------------------------------------------------------------ entry point
 
-def render(view: ViewGraph) -> Dict[str, str]:
-    """The C4-style SVG and its Mermaid Markdown (GitHub ``.md`` and Azure DevOps wiki
-    ``.azure.md``), from one layout of ``view``."""
+def render(view: ViewGraph, nodes: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+    """The C4 SVG, its draw.io file and its Mermaid Markdown twins, from one layout of
+    ``view``. ``nodes`` (the resolver's nodes by id) adds where each thing was found to
+    the draw.io file."""
     L = layout_for(view, node_size)
-    return {"svg": _svg(view, L), "md": _markdown(view), "azure.md": _markdown(view, True)}
+    return {"svg": _svg(view, L),
+            "drawio": drawio.render(view, L, look=_look(view), lines=_lines, nodes=nodes),
+            "md": _markdown(view), "azure.md": _markdown(view, True)}

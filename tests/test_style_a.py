@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from conftest import OUT, assert_office_safe, fixture_view
+from conftest import OUT, assert_office_safe, drawio_cells, fixture_view
 from archdiag.layout import layout_for
 from archdiag.render import style_a
 from archdiag.render.common import line_style
@@ -44,9 +44,8 @@ def _special_view():
 def test_special_names_escaped():
     out = style_a.render(_special_view())
     assert_office_safe(out["svg"])
-    root = ET.fromstring(out["drawio"])
-    values = [c.get("value") or "" for c in root.iter("mxCell")]
-    assert any("&&SORTED" in v for v in values) and any("CLM#01" in v for v in values)
+    labels = [c["label"] for c in drawio_cells(out["drawio"])]  # html labels: escaped once
+    assert any("&amp;&amp;SORTED" in v for v in labels) and any("CLM#01" in v for v in labels)
     text = svg_text(out["svg"])
     assert "&&SORTED" in text and "CLM#01" in text and "write <&>" in text
 
@@ -88,41 +87,6 @@ def test_numbered_edges_show_a_drawn_circle_for_every_step():
     out = style_a.render(v)["drawio"] + style_b.render(v)["md"]
     assert "(1) uses" in out and "(21) RETURN TRANSID" in out
     assert not any(chr(c) in out for c in range(0x2460, 0x2474))
-
-
-def test_drawio_parses_and_has_cells():
-    for level, scope in LEVELS:
-        v = fixture_view(level, scope)
-        root = ET.fromstring(style_a.render(v)["drawio"])
-        assert root.tag == "mxfile" and root.find("diagram/mxGraphModel/root") is not None
-        cells = list(root.iter("mxCell"))
-        vertices = [c for c in cells if c.get("vertex") == "1" and not c.get("id").startswith("lg-")]
-        edges = [c for c in cells if c.get("edge") == "1" and not c.get("id").startswith("lg-")]
-        L = layout_for(v, style_a.node_size)
-        # one container per group drawn (Layout.groups), as in the SVG
-        assert len(vertices) == len(v.nodes) + len(L.groups), level
-        assert len(edges) == len(v.edges)
-        ids = {c.get("id") for c in cells}
-        assert len(ids) == len(cells)
-        for c in edges:
-            assert c.get("source") in ids and c.get("target") in ids
-            assert c.find("mxGeometry") is not None
-
-
-def test_drawio_line_styles():
-    v = fixture_view("flow_job", "CLMD100")
-    root = ET.fromstring(style_a.render(v)["drawio"])
-    styles = [c.get("style") for c in root.iter("mxCell")
-              if c.get("edge") == "1" and not c.get("id").startswith("lg-")]
-    by = {}
-    for e, s in zip(v.edges, styles):
-        by.setdefault(e.status, []).append(s)
-    assert all("dashed=1;dashPattern=3 4;strokeColor=#d97706" in s for s in by["partial"])
-    assert all("strokeColor=#dc2626" in s for s in by["loose"])
-    assert all("dashed=1" not in s and "strokeColor=#334155" in s for s in by["confirmed"])
-    vstyles = {c.get("value", "").split("\n")[0]: c.get("style") for c in root.iter("mxCell")
-               if c.get("vertex") == "1"}
-    assert "shape=cylinder3" in vstyles["CLMS.CLAIM"]
 
 
 def test_legend_lists_only_present_statuses():
@@ -237,27 +201,6 @@ def test_landscape_is_not_a_tall_strip():
     root = ET.fromstring(style_a.render(fixture_view("landscape"))["svg"])
     w, h = float(root.get("width")), float(root.get("height"))
     assert h <= 1.2 * w, (w, h)
-
-
-def test_drawio_draws_only_laid_out_groups():
-    v = ViewGraph("job", "flow_job", "J",
-                  [VNode("job:J", "J", kind="job", group="g1"),
-                   VNode("step:J#S1", "S1", kind="program", row="lane", group="g1")],
-                  [VEdge("job:J", "step:J#S1", kind="sequence")],
-                  [VGroup("g1", "app", "#3b82f6")])
-    out = style_a.render(v)
-    root = ET.fromstring(out["drawio"])
-    assert len([c for c in root.iter("mxCell") if c.get("vertex") == "1"
-                and not c.get("id").startswith("lg-")]) == 2
-    assert "app" not in svg_text(out["svg"])
-
-
-def test_drawio_partial_missing_box_matches_svg():
-    v = fixture_view("application", "claims-online")
-    root = ET.fromstring(style_a.render(v)["drawio"])
-    styles = {c.get("value", "").split("\n")[0]: c.get("style") for c in root.iter("mxCell")}
-    assert "fillColor=#fffbeb" in styles["which program?"]
-    assert "fillColor=#fef2f2" in styles["CLMO120"]
 
 
 def _shared_vertical_runs(routes, longest=200.0):

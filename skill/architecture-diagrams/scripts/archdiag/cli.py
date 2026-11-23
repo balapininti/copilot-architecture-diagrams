@@ -364,7 +364,7 @@ def _cmd_draw(args, workspace: Path, out_dir: Path, notice: Callable[[str], None
     base = level + ("-" + _slug(scope) if scope else "")
     written: List[Path] = []
     for s in styles:
-        for ext, text in renderers[s](view).items():
+        for ext, text in renderers[s](view, nodes=r.nodes).items():
             path = out_dir / ("%s-%s.%s" % (base, s, ext))
             _write(path, text)
             written.append(path)

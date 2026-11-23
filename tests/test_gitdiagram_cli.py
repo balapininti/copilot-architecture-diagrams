@@ -25,7 +25,8 @@ def test_draw_gitdiagram_all_styles_writes_files(tmp_path, capsys):
     assert rc == 0, out
     d = w / "architecture-diagrams"
     for style, ext in (("a", "svg"), ("a", "drawio"), ("b", "svg"), ("b", "md"), ("c", "svg"),
-                       ("c", "html"), ("d", "svg"), ("d", "excalidraw")):
+                       ("c", "html"), ("d", "svg"), ("d", "excalidraw"), ("b", "drawio"),
+                       ("c", "drawio"), ("d", "drawio")):
         assert (d / ("gitdiagram-claims-batch-%s.%s" % (style, ext))).is_file(), (style, ext)
     assert (d / "gitdiagram-claims-batch-links.md").is_file()
     assert "Traceback" not in out
