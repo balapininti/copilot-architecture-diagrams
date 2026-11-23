@@ -78,6 +78,13 @@ class Inventory:
     # every classified file: {"repo", "path" (repo-relative), "kind"}, sorted; archive
     # members and SYSIN-only members are left out
     files: List[Dict[str, str]] = field(default_factory=list)
+    # names a service is called by, per repo (lower case): the repo folder name and its
+    # spring.application.name. A name two repos claim is left out. A REST call whose host's
+    # first label is one of these is tied to that repo (service discovery, Kubernetes DNS)
+    service_names: Dict[str, List[str]] = field(default_factory=dict)
+    # config projects: repo holding other services' settings (Spring Cloud Config layout:
+    # <app>.yml, <app>-<profile>.yml, <app>/application*.yml) -> the repos it configures
+    config_projects: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass

@@ -159,13 +159,120 @@ def _load_props(repo: str, rel: str, text: str, ftype: str, ctx: ScanContext) ->
                 continue  # base value wins over profiles
             else:
                 prof = ctx.props_prof.setdefault(repo, {})
-                if k in prof and prof[k][1] != v:
+                if k in prof and prof[k][1] != v and not _same_but_host(prof[k][1], v):
                     conflicts[k] = "property %s has different values in %s, %s" % (
                         k, prof[k][0], rel)
                     props.pop(k, None)
-                else:
+                elif k not in prof:
                     prof[k] = (rel, v)
                     props[k] = v
+
+
+_URL_PARTS = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#\s]*([^\s]*)$")
+
+
+def _same_but_host(a: str, b: str) -> bool:
+    """Two URLs that differ only in scheme, host or port: the same address in two
+    environments (dev / test / prod profiles), so the first one read is kept and its path
+    still links. Anything else that differs is a real conflict."""
+    ma, mb = _URL_PARTS.match(str(a).strip()), _URL_PARTS.match(str(b).strip())
+    return bool(ma and mb and ma.group(1).rstrip("/") == mb.group(1).rstrip("/"))
+
+
+_PROD_PROFILES = frozenset(["prod", "production", "prd", "live"])
+_SERVICE_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
+
+
+def _service_names(ctx: ScanContext, repo_names: List[str]) -> Dict[str, List[str]]:
+    """Per repo, the names a service is called by: its folder name and every
+    spring.application.name its own config gives. A name two repos claim names neither."""
+    claimed: Dict[str, Set[str]] = {}
+    for repo in repo_names:
+        if _SERVICE_NAME.match(repo.lower()) and repo not in (".", ""):
+            claimed.setdefault(repo.lower(), set()).add(repo)
+        for table in (ctx.props_src, ctx.props_prof):
+            for k, (_rel, v) in table.get(repo, {}).items():
+                name = str(v).strip().lower()
+                if re.sub(r"[-_]", "", str(k).lower()) == "spring.application.name" \
+                        and _SERVICE_NAME.match(name):
+                    claimed.setdefault(name, set()).add(repo)
+    out: Dict[str, Set[str]] = {}
+    for name, repos in claimed.items():
+        if len(repos) == 1:
+            out.setdefault(next(iter(repos)), set()).add(name)
+    return {repo: sorted(names) for repo, names in out.items()}
+
+
+def _config_target(stem: str, dirs: List[str], owner: Dict[str, str], crepo: str
+                   ) -> Tuple[Optional[str], Optional[str]]:
+    """(repo, profile or None) a config-project file belongs to, else (None, None):
+    ``<app>.yml``, ``<app>-<profile>.yml``, or ``application[-<profile>].yml`` in a folder
+    named after the app. The longest app name wins (claims-api-v2 before claims-api)."""
+    best: Optional[str] = None
+    for name in owner:
+        if (stem == name or stem.startswith(name + "-")) and (best is None or len(name) > len(best)):
+            best = name
+    if best is not None and owner[best] != crepo:
+        return owner[best], (stem[len(best) + 1:] or None)
+    if stem == "application" or stem.startswith("application-"):
+        for d in reversed(dirs):
+            if d in owner and owner[d] != crepo:
+                return owner[d], (stem[len("application-"):] or None)
+    return None, None
+
+
+def _apply_config_projects(files: List[Tuple[str, str, str, str]], ctx: ScanContext,
+                           service_names: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """Settings another repo holds for a service (a config project) become that service's
+    properties, so its ``${partner.url}`` placeholders resolve. The service's own files win.
+    Among config-project files the default file beats a prod profile, which beats other
+    profiles; files of the same rank that disagree drop the key and remember why, unless
+    they are the same URL on different hosts. Returns config repo -> repos it configures."""
+    from .lexutil import parse_properties, parse_yaml_docs
+    owner = {name: repo for repo, names in service_names.items() for name in names}
+    if not owner:
+        return {}
+    out: Dict[str, Set[str]] = {}
+    ranks: Dict[str, Dict[str, int]] = {}
+    srcs: Dict[str, Dict[str, Tuple[str, str]]] = {}
+    for crepo, rel, text, ftype in files:
+        if ftype not in ("yaml", "properties") or ARCHIVE_SEP in rel:
+            continue
+        parts = rel.lower().split("/")
+        if "test" in parts[:-1] or "tests" in parts[:-1]:
+            continue
+        stem = parts[-1].rsplit(".", 1)[0]
+        target, profile = _config_target(stem, parts[:-1], owner, crepo)
+        if target is None:
+            continue
+        try:
+            docs = parse_yaml_docs(text) if ftype == "yaml" else [parse_properties(text)]
+        except Exception:  # one odd file must not stop the scan
+            continue
+        base_rank = 2 if profile is None else 1 if profile in _PROD_PROFILES else 0
+        props = ctx.props.setdefault(target, {})
+        conflicts = ctx.props_conflicts.setdefault(target, {})
+        own = set(ctx.props_src.get(target, {})) | set(ctx.props_prof.get(target, {}))
+        rk, sr = ranks.setdefault(target, {}), srcs.setdefault(target, {})
+        where = "%s/%s" % (crepo, rel)
+        used = False
+        for i, doc in enumerate(docs):
+            rank = base_rank if i == 0 else min(base_rank, 0)
+            for k, v in doc.items():
+                if k in own or (k in conflicts and k not in sr):
+                    continue  # the service's own files decide
+                used = True
+                if rank > rk.get(k, -1):
+                    rk[k], sr[k] = rank, (where, v)
+                    props[k] = v
+                    conflicts.pop(k, None)
+                elif rank == rk[k] and sr[k][1] != v and not _same_but_host(sr[k][1], v):
+                    conflicts[k] = "property %s has different values in %s, %s" % (
+                        k, sr[k][0], where)
+                    props.pop(k, None)
+        if used:
+            out.setdefault(crepo, set()).add(target)
+    return {c: sorted(t) for c, t in out.items()}
 
 
 def _load_ts_env(repo: str, rel: str, text: str, ctx: ScanContext) -> None:
@@ -569,6 +676,9 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
                     "reason": "folder skipped by default (build output) but holds %d source "
                               "file(s), e.g. %s" % (len(found), ", ".join(
                                   p.relative_to(root).as_posix() for p in found[:3]))})
+    # config projects: another repo's settings for a service become its properties
+    service_names = _service_names(ctx, [r.name for r in repos])
+    config_projects = _apply_config_projects(files, ctx, service_names)
     # pass 2: scan with the whole estate's procs known
     for repo_name, rel, text, ftype in files:
         if ftype in NOT_ANALYZED:
@@ -603,7 +713,8 @@ def scan_workspace(workspace: Path, config: Config) -> Inventory:
     return Inventory(str(workspace), repos, nodes, refs,
                      fingerprint(workspace, repos, config), not_analyzed, skipped,
                      _config_hosts(ctx, nodes), not_scanned, __version__, SCHEMA_VERSION,
-                     [{"repo": r, "path": p, "kind": k} for r, p, k in listed])
+                     [{"repo": r, "path": p, "kind": k} for r, p, k in listed],
+                     service_names, config_projects)
 
 
 _register_builtin_scanners()

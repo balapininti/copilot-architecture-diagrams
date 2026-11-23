@@ -64,6 +64,10 @@ class _Data:
                  edges: List[Edge]) -> None:
         self.inv = inv
         self.quals = {q.strip().upper() for q in config.environment_qualifiers if q.strip()}
+        # host -> repo the user confirmed serves it (archdiag.config.json service_hosts)
+        repo_names = {r.name for r in inv.repos}
+        self.service_hosts = {h: r for h, r in (config.service_hosts or {}).items()
+                              if r in repo_names}
         self.nodes = nodes
         self.edges = edges
         # dataset id -> evidence of the uses that count as reads / writes for loose ends
@@ -524,12 +528,35 @@ class _Data:
                  if p == path and (method == "ANY" or m == "ANY" or m == method)]
         if len(cands) == 1:
             node = self.nodes[cands[0]]
-            status, reason = _status(ref.reason, _defs_reason(node), self.host_reason(host, node))
+            served_by = {ev.repo for ev in node.evidence} | {node.repo}
+            tied = [r for r in self.host_repos(host) if r in served_by]
+            if len(tied) == 1:
+                # the host names the one repo that serves it, even if several define the path
+                status, reason = _status(ref.reason)
+                defs = [ev for ev in node.evidence if ev.repo == tied[0]] or list(node.evidence)
+                self.add(ref, ref.op, node.id, status, reason, defs)
+                return
+            why = self.host_reason(host, node)
+            status, reason = _status(ref.reason, _defs_reason(node), why)
+            self.add(ref, ref.op, node.id, status, reason, list(node.evidence))
+        elif cands and len(self.host_repos(host, cands)) == 1:
+            # several repos serve this path, and the host names exactly one of them
+            repo = self.host_repos(host, cands)[0]
+            node = self.nodes[[c for c in cands if self.nodes[c].repo == repo][0]]
+            status, reason = _status(ref.reason, _defs_reason(node))
             self.add(ref, ref.op, node.id, status, reason, list(node.evidence))
         elif cands:
             reason = join(ref.reason, "ambiguous: " + ", ".join(cands))
             nid = missing(self.nodes, "endpoint", "?%s %s" % (method, path), reason, cands)
             self.add(ref, ref.op, nid, PARTIAL, reason)
+        elif host and self.host_repos(host):
+            # the service is in the workspace, but no endpoint of it has this path
+            repos = self.host_repos(host)
+            reason = join("host %s is %s, which has no endpoint %s %s" % (
+                host, " or ".join(repos), method, path), ref.reason)
+            self.add(ref, ref.op,
+                     missing(self.nodes, "endpoint", "%s %s" % (method, path), reason), LOOSE,
+                     reason)
         elif host:
             nid = "external:" + host
             if nid not in self.nodes:
@@ -545,9 +572,30 @@ class _Data:
         OpenAPI servers; never a client base URL) or the local machine."""
         if host is None or host in LOCAL_HOSTS:
             return None
-        if host in (self.inv.config_hosts or {}).get(node.repo or "", []):
+        if node.repo and node.repo in self.host_repos(host):
             return None
         return "matched on path only; host %s isn't tied to a scanned repo" % host
+
+    def host_repos(self, host: Optional[str], among: Optional[List[str]] = None) -> List[str]:
+        """Repos a host name is tied to: by the user's ``service_hosts``, by the repo's own
+        config (Ruling 38), or because the host's first label is the repo's service name
+        (folder name or spring.application.name: service discovery, Kubernetes DNS).
+        ``among`` limits the answer to the repos of those node ids."""
+        if not host or host in LOCAL_HOSTS:
+            return []
+        label = host.split(".", 1)[0]
+        found: Set[str] = set()
+        if host in self.service_hosts:
+            found.add(self.service_hosts[host])
+        for repo, hosts in (self.inv.config_hosts or {}).items():
+            if host in hosts:
+                found.add(repo)
+        for repo, names in (self.inv.service_names or {}).items():
+            if host in names or label in names:
+                found.add(repo)
+        if among is not None:
+            found &= {self.nodes[c].repo or "" for c in among}
+        return sorted(found)
 
     # -- uses ----------------------------------------------------------------------------
     def uses(self, ref: Ref) -> None:

@@ -4,7 +4,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 CONFIG_NAME = "archdiag.config.json"
 
@@ -13,10 +13,20 @@ CONFIG_NAME = "archdiag.config.json"
 class Config:
     environment_qualifiers: List[str] = field(default_factory=list)
     exclude_dirs: List[str] = field(default_factory=list)
+    # host name -> repo that serves it, confirmed by the user (never guessed): a REST call
+    # to that host is tied to that repo
+    service_hosts: Dict[str, str] = field(default_factory=dict)
 
 
 def _names(value: object) -> List[str]:
     return [str(x) for x in value] if isinstance(value, list) else []
+
+
+def _hosts(value: object) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k).strip().lower(): str(v).strip() for k, v in value.items()
+            if str(k).strip() and isinstance(v, str) and v.strip()}
 
 
 def load_config(out_dir: Path, notice: Optional[Callable[[str], None]] = None) -> Config:
@@ -36,4 +46,5 @@ def load_config(out_dir: Path, notice: Optional[Callable[[str], None]] = None) -
     return Config(
         environment_qualifiers=_names(data.get("environment_qualifiers", [])),
         exclude_dirs=_names(data.get("exclude_dirs", [])),
+        service_hosts=_hosts(data.get("service_hosts", {})),
     )
