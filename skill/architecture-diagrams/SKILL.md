@@ -1,6 +1,6 @@
 ---
 name: architecture-diagrams
-description: Draws architecture diagrams (SVG, plus draw.io, Mermaid, HTML or Excalidraw and a links report) of mainframe COBOL, JCL, CICS, DB2, MQ, Java and Angular repos, from a scan of the code with file-and-line evidence for every link. Use when the user asks for an architecture diagram, to draw the landscape, to show a batch job or online transaction end to end, for an application diagram, a repo link map, what depends on this repo or what breaks if it changes, a whiteboard or C4 picture of their repos, or a gitdiagram (a diagram of one repo, how a repo is put together, its structure).
+description: Draws architecture diagrams (an SVG picture and an editable draw.io file every time, plus Mermaid, HTML or Excalidraw and a links report) of mainframe COBOL, JCL, CICS, DB2, MQ, Java and Angular repos, from a scan of the code with file-and-line evidence for every link. Use when the user asks for an architecture diagram, to draw the landscape, to show a batch job or online transaction end to end, for an application diagram, a repo link map, what depends on this repo or what breaks if it changes, a whiteboard or C4 picture of their repos, or a gitdiagram (a diagram of one repo, how a repo is put together, its structure).
 ---
 
 # Architecture diagrams
@@ -181,17 +181,24 @@ Wrote:
   ...\architecture-diagrams\flow-clmd100-a.svg
   ...\architecture-diagrams\flow-clmd100-a.drawio
   ...\architecture-diagrams\flow-clmd100-links.md
-Summary: 18 nodes, 20 links: 16 confirmed, 2 partly known, 2 loose ends
+Summary: 16 nodes, 18 links: 16 confirmed, 2 partly known, 0 loose ends
+Counted on boxes, not drawn as lines: 2 loose ends (see ...\architecture-diagrams\flow-clmd100-links.md)
 Top issues:
-  - PROD.CLAIMS.AUDIT -> no reader found [loose]: written but never read in these repos
-  - CLMB200 -> CLMB210 (CALL) [partial]: CALL through variable WS-PGM
+  - CLAIMS.AUDIT -> no reader found [loose]: written but never read in these repos
+  - 2 STEP020 -> CLMB210 (CALL) [partial]: CALL through variable WS-PGM
 ```
 
 Reply plainly with:
 
 1. The file paths from `Wrote:`. The `.svg` is the picture, and it opens in Edge, VS Code,
-   Word and PowerPoint. The other file is the editable copy.
-2. The `Summary:` line, in one or two sentences.
+   Word and PowerPoint. The `.drawio` is the editable copy, written for every style: it
+   opens in draw.io (diagrams.net) or the VS Code draw.io extension. Lines stay attached
+   and re-route when a box is moved, a group moves with its members, hovering a box or
+   line shows its evidence (file and line), and the layers "Loose ends and gaps", "Shared
+   code" and "Legend" can be hidden. Style `b` also writes Mermaid, `c` HTML and `d`
+   Excalidraw.
+2. The `Summary:` line, in one or two sentences, and the `Counted on boxes, not drawn as
+   lines:` line if there is one.
 3. The `Top issues:`, as printed. Don't explain them away or claim they are fine.
 4. Every `WARNING:` and `Note:` line.
 5. An offer to open or walk through the links report (`*-links.md`). It lists every line
@@ -203,6 +210,20 @@ suggestion). **Red ending in a dot** = loose end (only one side found, so a repo
 missing or the link leaves the estate). **Dashed brown** = shared copybook.
 
 Don't describe anything as connected unless the diagram or the links report shows it.
+
+**Reading a flow.** Step numbers follow the order of the statements in the source, one
+request at a time. A line with no number is not a step: it is a loose end, a "which ...?"
+gap, or something the scan could not put in order. An endpoint's flow follows only what
+its handler method calls, and the endpoint box names that method. If a page flow prints
+the note `... makes N different calls and the scan cannot tell which of them this page
+makes`, pass the note on and offer to draw each endpoint it names as its own flow. In a
+batch flow, steps are numbered in JCL order, with inputs above the steps and outputs below.
+
+**Reading the landscape.** One box per system. A queue, table or dataset a system owns is
+part of its box and is named on the line. Loose ends are a count on the box, and shared
+copybooks are left out with a note. `draw` prints `Counted on boxes, not drawn as lines:
+...`; say it, and that the links report lists each one and the repo link map
+(`--level repomap`) shows the shared code.
 
 ### 6. Too big
 

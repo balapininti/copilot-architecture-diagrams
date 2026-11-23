@@ -84,17 +84,38 @@ Everything the skill writes goes into `C:\work\claims\architecture-diagrams\`: t
 ## What you get
 
 For each diagram, an `.svg` picture, which opens in Edge, VS Code, Word and PowerPoint,
-plus an editable copy and a links report (`*-links.md`):
+plus an editable **draw.io** file (`.drawio`, every style) and a links report (`*-links.md`):
 
-| Style | Look | Editable copy |
+| Style | Look | Also written |
 |---|---|---|
-| a | Pictorial icons | `.drawio` (draw.io) |
+| a | Pictorial icons | (the `.drawio` only) |
 | b | C4 boxes | `.md` with Mermaid (GitHub, VS Code), and `.azure.md`, the same diagram for an Azure DevOps wiki |
 | c | Repo link map | `.html`: click a line to see its evidence (works offline) |
 | d | Whiteboard sketch | `.excalidraw` |
 
 The five zoom levels (landscape, one application, one flow, repo link map, one repo's gitdiagram) are described
 in `reference/levels-and-styles.md`.
+
+Open the `.drawio` file in draw.io (diagrams.net) or the VS Code draw.io extension. Boxes
+are real shapes, a group moves with its members, and lines re-route when you move a box.
+Hover a box or line to see its evidence (file and line). The layers "Loose ends and gaps",
+"Shared code" and "Legend" can be switched off.
+
+## REST calls between services
+
+A REST call is drawn to the repo that serves it when the scan can tie the two together:
+
+- **Config project.** If one repo in the folder holds settings for the others (files named
+  `<service>.yml`, `<service>-<profile>.yml`, or `<service>/application*.yml`), the scan
+  uses them to work out the URLs each service calls. Clone the config project into the
+  same folder as the services.
+- **Service name.** A URL whose host starts with a repo's folder name or its
+  `spring.application.name` (`http://billing-service:8080/...`) is that repo.
+- **Confirmed by you.** For any other host, the summary lists it as "not tied to a scanned
+  repo" and Copilot asks you which repo serves it. Your answer is saved as `service_hosts`
+  in `archdiag.config.json`.
+
+A call to a service whose repo isn't in the folder stays a red loose end.
 
 ## What the lines mean
 

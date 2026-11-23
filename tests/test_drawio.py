@@ -263,14 +263,19 @@ def test_an_edge_inside_one_group_belongs_to_it():
 
 
 def test_step_numbers_stay_in_the_label():
-    v = fixture_view("flow_tx", "claims/:id")
+    v = fixture_view("flow_tx", "POST /api/claims")
     for _name, mod in STYLES:
         edges = _edges(drawio_cells(mod.render(v)["drawio"]))
+        numbered = 0
         for e, c in zip(v.edges, edges):
-            assert e.number is not None
+            if e.number is None:  # loose ends and gaps carry no step number
+                assert not c["label"].startswith("(")
+                continue
+            numbered += 1
             assert c["label"].startswith("(%d)" % e.number), c["label"]
             assert c["data"]["step"] == str(e.number)
-        assert any(c["label"] == "(1) uses" for c in edges)
+        assert numbered >= 10
+        assert any(c["label"].startswith("(1) ") for c in edges)
 
 
 # ------------------------------------------------------------------ boxes and groups

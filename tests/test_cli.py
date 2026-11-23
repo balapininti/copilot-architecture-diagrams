@@ -420,14 +420,14 @@ def test_cache_from_another_archdiag_version_is_rescanned(tmp_path, capsys):
     assert d["inventory"]["archdiag_version"] == archdiag.__version__
 
 
-def test_version_is_0_1_4_cli():
+def test_version_is_0_2_0_cli():
     import archdiag
     from archdiag.store import SCHEMA_VERSION
-    assert archdiag.__version__ == "0.1.4"
+    assert archdiag.__version__ == "0.2.0"
     assert SCHEMA_VERSION == 7  # config projects and service names changed scan output
     from pathlib import Path
     toml = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.1.4"' in toml
+    assert 'version = "0.2.0"' in toml
 
 
 def test_cache_saved_with_schema_2_is_rescanned(tmp_path, capsys):
